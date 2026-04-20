@@ -1,0 +1,28 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.tasks.stop_req",
+    "description": "AMQP API for tasks.stop_req",
+    "properties": {
+        "Event-Category": {
+            "enum": [
+                "tasks"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "stop_req"
+            ],
+            "type": "string"
+        },
+        "Task-ID": {
+            "type": "string"
+        }
+    },
+    "required": [
+        "Event-Category",
+        "Event-Name",
+        "Task-ID"
+    ],
+    "type": "object"
+}

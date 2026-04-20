@@ -1,0 +1,52 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.metaflow.action",
+    "description": "AMQP API for metaflow.action",
+    "properties": {
+        "Action": {
+            "enum": [
+                "audio_level",
+                "break",
+                "callflow",
+                "hangup",
+                "hold",
+                "intercept",
+                "move",
+                "park",
+                "play",
+                "record_call",
+                "resume",
+                "say",
+                "transfer",
+                "tts",
+                "unpark"
+            ],
+            "type": "string"
+        },
+        "Call-ID": {
+            "type": "string"
+        },
+        "Data": {
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "metaflow"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "action"
+            ],
+            "type": "string"
+        }
+    },
+    "required": [
+        "Action",
+        "Call-ID",
+        "Event-Category",
+        "Event-Name"
+    ],
+    "type": "object"
+}

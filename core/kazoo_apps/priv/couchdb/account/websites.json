@@ -1,0 +1,55 @@
+{
+    "_id": "_design/websites",
+    "kazoo": {
+        "view_map": [
+            {
+                "classification": "account"
+            }
+        ]
+    },
+    "language": "javascript",
+    "views": {
+        "crossbar_listing": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'website' || doc.pvt_deleted) return;",
+                "  emit(doc._id, {",
+                "    id: doc._id,",
+                "    name: doc.name,",
+                "    web_url: doc.web_url,",
+                "    account_wide: doc.account_wide,",
+                "    users: doc.users,",
+                "    open_in_browser: doc.open_in_browser,",
+                "  });",
+                "}"
+            ]
+        },
+        "listing_by_user": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'website' || doc.pvt_deleted) return;",
+                "  var users = doc.users || [];",
+                "  if (doc.account_wide) {",
+                "    emit(doc.account_wide, {",
+                "      id: doc._id,",
+                "      name: doc.name,",
+                "      web_url: doc.web_url,",
+                "      account_wide: doc.account_wide,",
+                "      users: doc.users,",
+                "      open_in_browser: doc.open_in_browser,",
+                "    })",
+                "  } else {",
+                "    for (var i in users) emit(users[i], {",
+                "      id: doc._id,",
+                "      name: doc.name,",
+                "      web_url: doc.web_url,",
+                "      account_wide: doc.account_wide,",
+                "      users: doc.users,",
+                "      open_in_browser: doc.open_in_browser,",
+                "    })",
+                "  };",
+                "}"
+            ]
+        }
+    }
+}

@@ -1,0 +1,42 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.registration.search_req",
+    "description": "AMQP API for registration.search_req",
+    "properties": {
+        "Event-Category": {
+            "enum": [
+                "registration"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "search_req"
+            ],
+            "type": "string"
+        },
+        "Realm": {
+            "type": "string"
+        },
+        "Search-Type": {
+            "enum": [
+                "detail",
+                "summary"
+            ],
+            "type": "string"
+        },
+        "Token-ID": {
+            "type": "string"
+        },
+        "Username": {
+            "type": "string"
+        }
+    },
+    "required": [
+        "Event-Category",
+        "Event-Name",
+        "Realm",
+        "Search-Type"
+    ],
+    "type": "object"
+}

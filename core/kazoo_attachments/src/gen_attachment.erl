@@ -1,0 +1,69 @@
+%%%-----------------------------------------------------------------------------
+%%% @copyright (C) 2018-2025, 2600Hz
+%%% @doc Storage attachment behaviour.
+%%% @author Harenson Henao
+%%%
+%%% This Source Code Form is subject to the terms of the Mozilla Public
+%%% License, v. 2.0. If a copy of the MPL was not distributed with this
+%%% file, You can obtain one at https://mozilla.org/MPL/2.0/.
+%%%
+%%% @end
+%%%-----------------------------------------------------------------------------
+-module(gen_attachment).
+
+-include("kz_att.hrl").
+
+-type settings()         :: map(). % map of the "settings" object from handler's config
+-type db_name()          :: kz_term:ne_binary().
+-type doc_id()           :: kz_term:ne_binary().
+-type att_name()         :: kz_term:ne_binary().
+-type contents()         :: binary().
+-type options()          :: kz_data:options().
+-type handler_props()    :: kz_data:connection().
+
+-type put_response()     :: {'ok', [{atom(), [{binary(), binary() | kz_json:object()}]}]} |
+                            kz_att_error:error().
+
+-type fetch_response()   :: {'ok', iodata()} |
+                            kz_att_error:error().
+
+-type update_metadata_response() :: 'ok' | kz_att_error:error().
+
+-export_type([settings/0
+             ,db_name/0
+             ,doc_id/0
+             ,att_name/0
+             ,contents/0
+             ,options/0
+             ,handler_props/0
+             ,put_response/0
+             ,fetch_response/0
+             ,update_metadata_response/0
+             ]).
+
+%%%=============================================================================
+%%% Callbacks
+%%%=============================================================================
+
+-optional_callbacks([update_metadata/5]).
+
+-callback put_attachment(settings()
+                        ,db_name()
+                        ,doc_id()
+                        ,att_name()
+                        ,contents()
+                        ,options()
+                        ) -> put_response().
+
+-callback fetch_attachment(handler_props()
+                          ,db_name()
+                          ,doc_id()
+                          ,att_name()
+                          ) -> fetch_response().
+
+-callback update_metadata(handler_props()
+                         ,db_name()
+                         ,doc_id()
+                         ,att_name()
+                         ,kz_doc:doc()
+                         ) -> update_metadata_response().

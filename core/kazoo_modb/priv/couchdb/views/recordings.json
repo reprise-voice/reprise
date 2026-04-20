@@ -1,0 +1,41 @@
+{
+    "_id": "_design/recordings",
+    "kazoo": {
+        "view_map": [
+            {
+                "classification": "modb"
+            }
+        ]
+    },
+    "language": "javascript",
+    "views": {
+        "crossbar_listing": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'call_recording' || doc.pvt_deleted) return;",
+                "  emit([doc.pvt_created, doc._id], null);",
+                "}"
+            ]
+        },
+        "list_by_attachment": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'call_recording' || doc.pvt_deleted || !doc._attachments || doc.pvt_attachments) return;",
+                "  emit([doc._id], {",
+                "    'id': doc._id,",
+                "    'name': doc.name,",
+                "    'content_type': doc.content_type",
+                "  });",
+                "}"
+            ]
+        },
+        "listing_by_user": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'call_recording' || doc.pvt_deleted || !doc.owner_id) return;",
+                "  emit([doc.owner_id, doc.pvt_created, doc._id], null);",
+                "}"
+            ]
+        }
+    }
+}

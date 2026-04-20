@@ -1,0 +1,130 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.call.channel_status_resp",
+    "description": "AMQP API for call.channel_status_resp",
+    "properties": {
+        "Answered": {
+            "type": "string"
+        },
+        "Call-Direction": {
+            "type": "string"
+        },
+        "Call-ID": {
+            "type": "string"
+        },
+        "Callee-ID-Name": {
+            "type": "string"
+        },
+        "Callee-ID-Number": {
+            "type": "string"
+        },
+        "Caller-ID-Name": {
+            "type": "string"
+        },
+        "Caller-ID-Number": {
+            "type": "string"
+        },
+        "Channel-Record": {
+            "type": "object"
+        },
+        "Correlation-ID": {
+            "type": "string"
+        },
+        "Custom-Application-Vars": {
+            "type": "object"
+        },
+        "Custom-Channel-Vars": {
+            "type": "object"
+        },
+        "Custom-SIP-Headers": {
+            "type": "object"
+        },
+        "Destination": {
+            "type": "string"
+        },
+        "Elapsed-Seconds": {
+            "type": "string"
+        },
+        "Error-Msg": {
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "call_event"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "channel_status_resp"
+            ],
+            "type": "string"
+        },
+        "Fetch-ID": {
+            "type": "string"
+        },
+        "From": {
+            "type": "string"
+        },
+        "From-Tag": {
+            "type": "string"
+        },
+        "Is-Loopback": {
+            "type": "string"
+        },
+        "Is-On-Hold": {
+            "type": "string"
+        },
+        "Loopback-Leg-Name": {
+            "type": "string"
+        },
+        "Loopback-Other-Leg": {
+            "type": "string"
+        },
+        "Other-Leg-Call-ID": {
+            "type": "string"
+        },
+        "Presence-ID": {
+            "type": "string"
+        },
+        "Realm": {
+            "type": "string"
+        },
+        "Request": {
+            "type": "string"
+        },
+        "Status": {
+            "enum": [
+                "active",
+                "terminated",
+                "tmpdown"
+            ],
+            "type": "string"
+        },
+        "Switch-Hostname": {
+            "type": "string"
+        },
+        "Switch-Nodename": {
+            "type": "string"
+        },
+        "Switch-URL": {
+            "type": "string"
+        },
+        "To": {
+            "type": "string"
+        },
+        "To-Tag": {
+            "type": "string"
+        },
+        "Username": {
+            "type": "string"
+        }
+    },
+    "required": [
+        "Call-ID",
+        "Event-Category",
+        "Event-Name",
+        "Status"
+    ],
+    "type": "object"
+}

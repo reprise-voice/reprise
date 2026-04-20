@@ -1,0 +1,4 @@
+view_name, view_options, view_file_name
+callflows/listing_by_number, [{key,<<"+19377038881">>}], callflows+listing_by_number-bb27188c773d6367e8f75cd708c9d0b7.json
+maintenance/listing_by_type, [{key,<<"user">>},include_docs], maintenance+listing_by_type-b25f1b5370c70b48d3166d7c8512715e.json
+trunkstore/lookup_did, [{key,<<"+19377038881">>}], trunkstore+lookup_did-bb27188c773d6367e8f75cd708c9d0b7.json

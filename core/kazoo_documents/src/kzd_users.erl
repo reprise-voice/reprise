@@ -1,0 +1,1833 @@
+%%%-----------------------------------------------------------------------------
+%%% @copyright (C) 2010-2025, 2600Hz
+%%% @doc
+%%% This Source Code Form is subject to the terms of the Mozilla Public
+%%% License, v. 2.0. If a copy of the MPL was not distributed with this
+%%% file, You can obtain one at https://mozilla.org/MPL/2.0/.
+%%%
+%%% @end
+%%%-----------------------------------------------------------------------------
+-module(kzd_users).
+
+-export([new/0]).
+-export([addresses/1, addresses/2, set_addresses/2]).
+-export([addresses_emergency/1, addresses_emergency/2, set_addresses_emergency/2]).
+-export([addresses_emergency_additional_information/1, addresses_emergency_additional_information/2, set_addresses_emergency_additional_information/2]).
+-export([addresses_emergency_callback_cid_number/1, addresses_emergency_callback_cid_number/2, set_addresses_emergency_callback_cid_number/2]).
+-export([addresses_emergency_country/1, addresses_emergency_country/2, set_addresses_emergency_country/2]).
+-export([addresses_emergency_county/1, addresses_emergency_county/2, set_addresses_emergency_county/2]).
+-export([addresses_emergency_delivery_method/1, addresses_emergency_delivery_method/2, set_addresses_emergency_delivery_method/2]).
+-export([addresses_emergency_floor/1, addresses_emergency_floor/2, set_addresses_emergency_floor/2]).
+-export([addresses_emergency_house_number/1, addresses_emergency_house_number/2, set_addresses_emergency_house_number/2]).
+-export([addresses_emergency_house_number_suffix/1, addresses_emergency_house_number_suffix/2, set_addresses_emergency_house_number_suffix/2]).
+-export([addresses_emergency_latitude/1, addresses_emergency_latitude/2, set_addresses_emergency_latitude/2]).
+-export([addresses_emergency_locality/1, addresses_emergency_locality/2, set_addresses_emergency_locality/2]).
+-export([addresses_emergency_location_identifier/1, addresses_emergency_location_identifier/2, set_addresses_emergency_location_identifier/2]).
+-export([addresses_emergency_longitude/1, addresses_emergency_longitude/2, set_addresses_emergency_longitude/2]).
+-export([addresses_emergency_name/1, addresses_emergency_name/2, set_addresses_emergency_name/2]).
+-export([addresses_emergency_postal_code/1, addresses_emergency_postal_code/2, set_addresses_emergency_postal_code/2]).
+-export([addresses_emergency_region/1, addresses_emergency_region/2, set_addresses_emergency_region/2]).
+-export([addresses_emergency_street/1, addresses_emergency_street/2, set_addresses_emergency_street/2]).
+-export([addresses_emergency_street_direction/1, addresses_emergency_street_direction/2, set_addresses_emergency_street_direction/2]).
+-export([addresses_emergency_street_suffix/1, addresses_emergency_street_suffix/2, set_addresses_emergency_street_suffix/2]).
+-export([addresses_emergency_street_type/1, addresses_emergency_street_type/2, set_addresses_emergency_street_type/2]).
+-export([addresses_vcard/1, addresses_vcard/2, set_addresses_vcard/2]).
+-export([call_failover/1, call_failover/2, set_call_failover/2]).
+-export([call_forward/1, call_forward/2, set_call_forward/2]).
+-export([call_limits/1, call_limits/2, set_call_limits/2]).
+-export([call_recording/1, call_recording/2, set_call_recording/2]).
+-export([call_restriction/1, call_restriction/2, set_call_restriction/2]).
+-export([call_waiting/1, call_waiting/2, set_call_waiting/2]).
+-export([caller_id/1, caller_id/2, set_caller_id/2]).
+-export([contact_list/1, contact_list/2, set_contact_list/2]).
+-export([contact_list_exclude/1, contact_list_exclude/2, set_contact_list_exclude/2]).
+-export([dial_plan/1, dial_plan/2, set_dial_plan/2]).
+-export([directories/1, directories/2, set_directories/2]).
+-export([do_not_disturb/1, do_not_disturb/2, set_do_not_disturb/2]).
+-export([do_not_disturb_enabled/1, do_not_disturb_enabled/2, set_do_not_disturb_enabled/2]).
+-export([email/1, email/2, set_email/2]).
+-export([enabled/1, enabled/2, set_enabled/2]).
+-export([feature_level/1, feature_level/2, set_feature_level/2]).
+-export([first_name/1, first_name/2, set_first_name/2]).
+-export([flags/1, flags/2, set_flags/2]).
+-export([formatters/1, formatters/2, set_formatters/2]).
+-export([hotdesk/1, hotdesk/2, set_hotdesk/2]).
+-export([hotdesk_enabled/1, hotdesk_enabled/2, set_hotdesk_enabled/2]).
+-export([hotdesk_id/1, hotdesk_id/2, set_hotdesk_id/2]).
+-export([hotdesk_keep_logged_in_elsewhere/1, hotdesk_keep_logged_in_elsewhere/2, set_hotdesk_keep_logged_in_elsewhere/2]).
+-export([hotdesk_pin/1, hotdesk_pin/2, set_hotdesk_pin/2]).
+-export([hotdesk_require_pin/1, hotdesk_require_pin/2, set_hotdesk_require_pin/2]).
+-export([language/1, language/2, set_language/2]).
+-export([last_name/1, last_name/2, set_last_name/2]).
+-export([maybe_migrate_user_addresses/1]).
+-export([media/1, media/2, set_media/2]).
+-export([metaflows/1, metaflows/2, set_metaflows/2]).
+-export([music_on_hold/1, music_on_hold/2, set_music_on_hold/2]).
+-export([music_on_hold_media_id/1, music_on_hold_media_id/2, set_music_on_hold_media_id/2]).
+-export([password/1, password/2, set_password/2]).
+-export([presence_id/1, presence_id/2, set_presence_id/2]).
+-export([presence_aliases/1, presence_aliases/2, set_presence_aliases/2]).
+-export([priv_level/1, priv_level/2, set_priv_level/2]).
+-export([profile/1, profile/2, set_profile/2]).
+-export([pronounced_name/1, pronounced_name/2, set_pronounced_name/2]).
+-export([pronounced_name_media_id/1, pronounced_name_media_id/2, set_pronounced_name_media_id/2]).
+-export([allowed_proxy_ips/1, allowed_proxy_ips/2, set_allowed_proxy_ips/2]).
+-export([require_password_update/1, require_password_update/2, set_require_password_update/2]).
+-export([ringtones/1, ringtones/2, set_ringtones/2]).
+-export([ringtones_external/1, ringtones_external/2, set_ringtones_external/2]).
+-export([ringtones_internal/1, ringtones_internal/2, set_ringtones_internal/2]).
+-export([scope_restrictions/1, scope_restrictions/2, set_scope_restrictions/2]).
+-export([timezone/1, timezone/2, set_timezone/2]).
+-export([username/1, username/2, set_username/2]).
+-export([verified/1, verified/2, set_verified/2]).
+-export([vm_to_email_enabled/1, vm_to_email_enabled/2, set_vm_to_email_enabled/2]).
+-export([voicemail/1, voicemail/2, set_voicemail/2]).
+-export([voicemail_notify/1, voicemail_notify/2, set_voicemail_notify/2]).
+-export([voicemail_notify_callback/1, voicemail_notify_callback/2, set_voicemail_notify_callback/2]).
+-export([md5_auth/1, sha1_auth/1, signature_secret/1]).
+-export([has_avatar/1, set_has_avatar/2]).
+
+-export([fetch/2
+        ,to_vcard/1
+        ,enable/1, disable/1
+        ,type/0, schema/0
+        ,fax_settings/1
+        ,name/1
+        ,is_account_admin/1, is_account_admin/2
+        ,classifier_restriction/2, classifier_restriction/3, set_classifier_restriction/3
+        ,full_name/1, full_name/2, full_name/3
+        ,validate/3
+        ,get_setters/0
+
+        ,is_password_expired/1, password_expiration_timestamp/1, password_expiry_s/0
+        ]).
+
+-elvis([{elvis_style, god_modules, disable}]).
+
+-include("kz_documents.hrl").
+
+-type doc() :: kz_json:object().
+-type docs() :: [doc()].
+-export_type([doc/0, docs/0]).
+
+-define(SCHEMA, <<"users">>).
+-define(PVT_TYPE, <<"user">>).
+
+-define(PHOTO, <<"photo">>).
+
+-define(KEY_PASS_TIMESTAMP, <<"pvt_password_created">>).
+
+-define(LIST_BY_USERNAME, <<"users/list_by_username">>).
+-define(LIST_BY_HOTDESK_ID, <<"users/list_by_hotdesk_id">>).
+
+-define(SYSCONFIG_CB_USERS, <<"crossbar.users">>).
+-define(SHOULD_GENERATE_USER_PASSWORD_IF_EMPTY
+       ,kapps_config:get_is_true(?SYSCONFIG_CB_USERS, <<"generate_password_if_empty">>, 'false')
+       ).
+-define(SHOULD_GENERATE_USER_USERNAME_IF_EMPTY
+       ,kapps_config:get_is_true(?SYSCONFIG_CB_USERS, <<"generate_username_if_empty">>, 'true')
+       ).
+-define(SHOULD_RESET_IDENTITY_SECRET_ON_REHASH
+       ,kapps_config:get_is_true(?SYSCONFIG_CB_USERS, <<"reset_identity_secret_on_rehash">>, 'true')
+       ).
+
+-spec new() -> doc().
+new() ->
+    kz_doc:set_type(kz_json_schema:default_object(?SCHEMA), type()).
+
+-spec addresses(doc()) -> kz_term:api_object().
+addresses(Doc) ->
+    addresses(Doc, 'undefined').
+
+-spec addresses(doc(), Default) -> kz_json:object() | Default.
+addresses(Doc, Default) ->
+    kz_json:get_json_value([<<"addresses">>], Doc, Default).
+
+-spec set_addresses(doc(), kz_json:object()) -> doc().
+set_addresses(Doc, Addresses) ->
+    kz_json:set_value([<<"addresses">>], Addresses, Doc).
+
+-spec addresses_emergency(doc()) -> kz_term:api_object().
+addresses_emergency(Doc) ->
+    addresses_emergency(Doc, 'undefined').
+
+-spec addresses_emergency(doc(), Default) -> kz_json:object() | Default.
+addresses_emergency(Doc, Default) ->
+    kz_json:get_json_value([<<"addresses">>, <<"emergency">>], Doc, Default).
+
+-spec set_addresses_emergency(doc(), kz_json:object()) -> doc().
+set_addresses_emergency(Doc, AddressesEmergency) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>], AddressesEmergency, Doc).
+
+-spec addresses_emergency_additional_information(doc()) -> kz_term:api_binary().
+addresses_emergency_additional_information(Doc) ->
+    addresses_emergency_additional_information(Doc, 'undefined').
+
+-spec addresses_emergency_additional_information(doc(), Default) -> binary() | Default.
+addresses_emergency_additional_information(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"additional_information">>], Doc, Default).
+
+-spec set_addresses_emergency_additional_information(doc(), binary()) -> doc().
+set_addresses_emergency_additional_information(Doc, AddressesEmergencyAdditionalInformation) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"additional_information">>], AddressesEmergencyAdditionalInformation, Doc).
+
+-spec addresses_emergency_callback_cid_number(doc()) -> kz_term:api_ne_binary().
+addresses_emergency_callback_cid_number(Doc) ->
+    addresses_emergency_callback_cid_number(Doc, 'undefined').
+
+-spec addresses_emergency_callback_cid_number(doc(), Default) -> kz_term:ne_binary() | Default.
+addresses_emergency_callback_cid_number(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"addresses">>, <<"emergency">>, <<"callback_cid_number">>], Doc, Default).
+
+-spec set_addresses_emergency_callback_cid_number(doc(), kz_term:ne_binary()) -> doc().
+set_addresses_emergency_callback_cid_number(Doc, AddressesEmergencyCallbackCidNumber) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"callback_cid_number">>], AddressesEmergencyCallbackCidNumber, Doc).
+
+-spec addresses_emergency_country(doc()) -> kz_term:api_binary().
+addresses_emergency_country(Doc) ->
+    addresses_emergency_country(Doc, 'undefined').
+
+-spec addresses_emergency_country(doc(), Default) -> binary() | Default.
+addresses_emergency_country(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"country">>], Doc, Default).
+
+-spec set_addresses_emergency_country(doc(), binary()) -> doc().
+set_addresses_emergency_country(Doc, AddressesEmergencyCountry) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"country">>], AddressesEmergencyCountry, Doc).
+
+-spec addresses_emergency_county(doc()) -> kz_term:api_binary().
+addresses_emergency_county(Doc) ->
+    addresses_emergency_county(Doc, 'undefined').
+
+-spec addresses_emergency_county(doc(), Default) -> binary() | Default.
+addresses_emergency_county(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"county">>], Doc, Default).
+
+-spec set_addresses_emergency_county(doc(), binary()) -> doc().
+set_addresses_emergency_county(Doc, AddressesEmergencyCounty) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"county">>], AddressesEmergencyCounty, Doc).
+
+-spec addresses_emergency_delivery_method(doc()) -> kz_term:api_binary().
+addresses_emergency_delivery_method(Doc) ->
+    addresses_emergency_delivery_method(Doc, 'undefined').
+
+-spec addresses_emergency_delivery_method(doc(), Default) -> binary() | Default.
+addresses_emergency_delivery_method(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"delivery_method">>], Doc, Default).
+
+-spec set_addresses_emergency_delivery_method(doc(), binary()) -> doc().
+set_addresses_emergency_delivery_method(Doc, AddressesEmergencyDeliveryMethod) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"delivery_method">>], AddressesEmergencyDeliveryMethod, Doc).
+
+-spec addresses_emergency_floor(doc()) -> kz_term:api_integer().
+addresses_emergency_floor(Doc) ->
+    addresses_emergency_floor(Doc, 'undefined').
+
+-spec addresses_emergency_floor(doc(), Default) -> integer() | Default.
+addresses_emergency_floor(Doc, Default) ->
+    kz_json:get_integer_value([<<"addresses">>, <<"emergency">>, <<"floor">>], Doc, Default).
+
+-spec set_addresses_emergency_floor(doc(), integer()) -> doc().
+set_addresses_emergency_floor(Doc, AddressesEmergencyFloor) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"floor">>], AddressesEmergencyFloor, Doc).
+
+-spec addresses_emergency_house_number(doc()) -> kz_term:api_integer().
+addresses_emergency_house_number(Doc) ->
+    addresses_emergency_house_number(Doc, 'undefined').
+
+-spec addresses_emergency_house_number(doc(), Default) -> integer() | Default.
+addresses_emergency_house_number(Doc, Default) ->
+    kz_json:get_integer_value([<<"addresses">>, <<"emergency">>, <<"house_number">>], Doc, Default).
+
+-spec set_addresses_emergency_house_number(doc(), integer()) -> doc().
+set_addresses_emergency_house_number(Doc, AddressesEmergencyHouseNumber) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"house_number">>], AddressesEmergencyHouseNumber, Doc).
+
+-spec addresses_emergency_house_number_suffix(doc()) -> kz_term:api_binary().
+addresses_emergency_house_number_suffix(Doc) ->
+    addresses_emergency_house_number_suffix(Doc, 'undefined').
+
+-spec addresses_emergency_house_number_suffix(doc(), Default) -> binary() | Default.
+addresses_emergency_house_number_suffix(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"house_number_suffix">>], Doc, Default).
+
+-spec set_addresses_emergency_house_number_suffix(doc(), binary()) -> doc().
+set_addresses_emergency_house_number_suffix(Doc, AddressesEmergencyHouseNumberSuffix) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"house_number_suffix">>], AddressesEmergencyHouseNumberSuffix, Doc).
+
+-spec addresses_emergency_latitude(doc()) -> kz_term:api_binary().
+addresses_emergency_latitude(Doc) ->
+    addresses_emergency_latitude(Doc, 'undefined').
+
+-spec addresses_emergency_latitude(doc(), Default) -> binary() | Default.
+addresses_emergency_latitude(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"latitude">>], Doc, Default).
+
+-spec set_addresses_emergency_latitude(doc(), binary()) -> doc().
+set_addresses_emergency_latitude(Doc, AddressesEmergencyLatitude) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"latitude">>], AddressesEmergencyLatitude, Doc).
+
+-spec addresses_emergency_locality(doc()) -> kz_term:api_binary().
+addresses_emergency_locality(Doc) ->
+    addresses_emergency_locality(Doc, 'undefined').
+
+-spec addresses_emergency_locality(doc(), Default) -> binary() | Default.
+addresses_emergency_locality(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"locality">>], Doc, Default).
+
+-spec set_addresses_emergency_locality(doc(), binary()) -> doc().
+set_addresses_emergency_locality(Doc, AddressesEmergencyLocality) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"locality">>], AddressesEmergencyLocality, Doc).
+
+-spec addresses_emergency_location_identifier(doc()) -> kz_term:api_integer().
+addresses_emergency_location_identifier(Doc) ->
+    addresses_emergency_location_identifier(Doc, 'undefined').
+
+-spec addresses_emergency_location_identifier(doc(), Default) -> integer() | Default.
+addresses_emergency_location_identifier(Doc, Default) ->
+    kz_json:get_integer_value([<<"addresses">>, <<"emergency">>, <<"location_identifier">>], Doc, Default).
+
+-spec set_addresses_emergency_location_identifier(doc(), integer()) -> doc().
+set_addresses_emergency_location_identifier(Doc, AddressesEmergencyLocationIdentifier) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"location_identifier">>], AddressesEmergencyLocationIdentifier, Doc).
+
+-spec addresses_emergency_longitude(doc()) -> kz_term:api_binary().
+addresses_emergency_longitude(Doc) ->
+    addresses_emergency_longitude(Doc, 'undefined').
+
+-spec addresses_emergency_longitude(doc(), Default) -> binary() | Default.
+addresses_emergency_longitude(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"longitude">>], Doc, Default).
+
+-spec set_addresses_emergency_longitude(doc(), binary()) -> doc().
+set_addresses_emergency_longitude(Doc, AddressesEmergencyLongitude) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"longitude">>], AddressesEmergencyLongitude, Doc).
+
+-spec addresses_emergency_name(doc()) -> kz_term:api_binary().
+addresses_emergency_name(Doc) ->
+    addresses_emergency_name(Doc, 'undefined').
+
+-spec addresses_emergency_name(doc(), Default) -> binary() | Default.
+addresses_emergency_name(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"name">>], Doc, Default).
+
+-spec set_addresses_emergency_name(doc(), binary()) -> doc().
+set_addresses_emergency_name(Doc, AddressesEmergencyName) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"name">>], AddressesEmergencyName, Doc).
+
+-spec addresses_emergency_postal_code(doc()) -> kz_term:api_binary().
+addresses_emergency_postal_code(Doc) ->
+    addresses_emergency_postal_code(Doc, 'undefined').
+
+-spec addresses_emergency_postal_code(doc(), Default) -> binary() | Default.
+addresses_emergency_postal_code(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"postal_code">>], Doc, Default).
+
+-spec set_addresses_emergency_postal_code(doc(), binary()) -> doc().
+set_addresses_emergency_postal_code(Doc, AddressesEmergencyPostalCode) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"postal_code">>], AddressesEmergencyPostalCode, Doc).
+
+-spec addresses_emergency_region(doc()) -> kz_term:api_binary().
+addresses_emergency_region(Doc) ->
+    addresses_emergency_region(Doc, 'undefined').
+
+-spec addresses_emergency_region(doc(), Default) -> binary() | Default.
+addresses_emergency_region(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"region">>], Doc, Default).
+
+-spec set_addresses_emergency_region(doc(), binary()) -> doc().
+set_addresses_emergency_region(Doc, AddressesEmergencyRegion) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"region">>], AddressesEmergencyRegion, Doc).
+
+-spec addresses_emergency_street(doc()) -> kz_term:api_binary().
+addresses_emergency_street(Doc) ->
+    addresses_emergency_street(Doc, 'undefined').
+
+-spec addresses_emergency_street(doc(), Default) -> binary() | Default.
+addresses_emergency_street(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"street">>], Doc, Default).
+
+-spec set_addresses_emergency_street(doc(), binary()) -> doc().
+set_addresses_emergency_street(Doc, AddressesEmergencyStreet) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"street">>], AddressesEmergencyStreet, Doc).
+
+-spec addresses_emergency_street_direction(doc()) -> kz_term:api_binary().
+addresses_emergency_street_direction(Doc) ->
+    addresses_emergency_street_direction(Doc, 'undefined').
+
+-spec addresses_emergency_street_direction(doc(), Default) -> binary() | Default.
+addresses_emergency_street_direction(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"street_direction">>], Doc, Default).
+
+-spec set_addresses_emergency_street_direction(doc(), binary()) -> doc().
+set_addresses_emergency_street_direction(Doc, AddressesEmergencyStreetDirection) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"street_direction">>], AddressesEmergencyStreetDirection, Doc).
+
+-spec addresses_emergency_street_suffix(doc()) -> kz_term:api_binary().
+addresses_emergency_street_suffix(Doc) ->
+    addresses_emergency_street_suffix(Doc, 'undefined').
+
+-spec addresses_emergency_street_suffix(doc(), Default) -> binary() | Default.
+addresses_emergency_street_suffix(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"street_suffix">>], Doc, Default).
+
+-spec set_addresses_emergency_street_suffix(doc(), binary()) -> doc().
+set_addresses_emergency_street_suffix(Doc, AddressesEmergencyStreetSuffix) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"street_suffix">>], AddressesEmergencyStreetSuffix, Doc).
+
+-spec addresses_emergency_street_type(doc()) -> kz_term:api_binary().
+addresses_emergency_street_type(Doc) ->
+    addresses_emergency_street_type(Doc, 'undefined').
+
+-spec addresses_emergency_street_type(doc(), Default) -> binary() | Default.
+addresses_emergency_street_type(Doc, Default) ->
+    kz_json:get_binary_value([<<"addresses">>, <<"emergency">>, <<"street_type">>], Doc, Default).
+
+-spec set_addresses_emergency_street_type(doc(), binary()) -> doc().
+set_addresses_emergency_street_type(Doc, AddressesEmergencyStreetType) ->
+    kz_json:set_value([<<"addresses">>, <<"emergency">>, <<"street_type">>], AddressesEmergencyStreetType, Doc).
+
+-spec addresses_vcard(doc()) -> kz_term:api_objects().
+addresses_vcard(Doc) ->
+    addresses_vcard(Doc, 'undefined').
+
+-spec addresses_vcard(doc(), Default) -> kz_json:objects() | Default.
+addresses_vcard(Doc, Default) ->
+    kz_json:get_list_value([<<"addresses">>, <<"vcard">>], Doc, Default).
+
+-spec set_addresses_vcard(doc(), kz_json:objects()) -> doc().
+set_addresses_vcard(Doc, AddressesVcard) ->
+    kz_json:set_value([<<"addresses">>, <<"vcard">>], AddressesVcard, Doc).
+
+-spec call_failover(doc()) -> kz_term:api_object().
+call_failover(Doc) ->
+    call_failover(Doc, 'undefined').
+
+-spec call_failover(doc(), Default) -> kz_json:object() | Default.
+call_failover(Doc, Default) ->
+    kz_json:get_json_value([<<"call_failover">>], Doc, Default).
+
+-spec set_call_failover(doc(), kz_json:object()) -> doc().
+set_call_failover(Doc, CallFailover) ->
+    kz_json:set_value([<<"call_failover">>], CallFailover, Doc).
+
+-spec call_forward(doc()) -> kz_term:api_object().
+call_forward(Doc) ->
+    call_forward(Doc, 'undefined').
+
+-spec call_forward(doc(), Default) -> kz_json:object() | Default.
+call_forward(Doc, Default) ->
+    kz_json:get_json_value([<<"call_forward">>], Doc, Default).
+
+-spec set_call_forward(doc(), kz_json:object()) -> doc().
+set_call_forward(Doc, CallForward) ->
+    kz_json:set_value([<<"call_forward">>], CallForward, Doc).
+
+-spec call_limits(doc()) -> kz_term:api_object().
+call_limits(Doc) ->
+    call_limits(Doc, 'undefined').
+
+-spec call_limits(doc(), Default) -> kz_json:object() | Default.
+call_limits(Doc, Default) ->
+    kz_json:get_json_value([<<"call_limits">>], Doc, Default).
+
+-spec set_call_limits(doc(), kz_json:object()) -> doc().
+set_call_limits(Doc, CallLimits) ->
+    kz_json:set_value([<<"call_limits">>], CallLimits, Doc).
+
+-spec call_recording(doc()) -> kz_term:api_object().
+call_recording(Doc) ->
+    call_recording(Doc, 'undefined').
+
+-spec call_recording(doc(), Default) -> kz_json:object() | Default.
+call_recording(Doc, Default) ->
+    kz_json:get_json_value([<<"call_recording">>], Doc, Default).
+
+-spec set_call_recording(doc(), kz_json:object()) -> doc().
+set_call_recording(Doc, CallRecording) ->
+    kz_json:set_value([<<"call_recording">>], CallRecording, Doc).
+
+-spec call_restriction(doc()) -> kz_json:object().
+call_restriction(Doc) ->
+    call_restriction(Doc, kz_json:new()).
+
+-spec call_restriction(doc(), Default) -> kz_json:object() | Default.
+call_restriction(Doc, Default) ->
+    kz_json:get_json_value([<<"call_restriction">>], Doc, Default).
+
+-spec set_call_restriction(doc(), kz_json:object()) -> doc().
+set_call_restriction(Doc, CallRestriction) ->
+    kz_json:set_value([<<"call_restriction">>], CallRestriction, Doc).
+
+-spec call_waiting(doc()) -> kz_term:api_object().
+call_waiting(Doc) ->
+    call_waiting(Doc, 'undefined').
+
+-spec call_waiting(doc(), Default) -> kz_json:object() | Default.
+call_waiting(Doc, Default) ->
+    kz_json:get_json_value([<<"call_waiting">>], Doc, Default).
+
+-spec set_call_waiting(doc(), kz_json:object()) -> doc().
+set_call_waiting(Doc, CallWaiting) ->
+    kz_json:set_value([<<"call_waiting">>], CallWaiting, Doc).
+
+-spec caller_id(doc()) -> kz_term:api_object().
+caller_id(Doc) ->
+    caller_id(Doc, 'undefined').
+
+-spec caller_id(doc(), Default) -> kz_json:object() | Default.
+caller_id(Doc, Default) ->
+    kz_json:get_json_value([<<"caller_id">>], Doc, Default).
+
+-spec set_caller_id(doc(), kz_json:object()) -> doc().
+set_caller_id(Doc, CallerId) ->
+    kz_json:set_value([<<"caller_id">>], CallerId, Doc).
+
+-spec contact_list(doc()) -> kz_json:object().
+contact_list(Doc) ->
+    contact_list(Doc, kz_json:new()).
+
+-spec contact_list(doc(), Default) -> kz_json:object() | Default.
+contact_list(Doc, Default) ->
+    kz_json:get_json_value([<<"contact_list">>], Doc, Default).
+
+-spec set_contact_list(doc(), kz_json:object()) -> doc().
+set_contact_list(Doc, ContactList) ->
+    kz_json:set_value([<<"contact_list">>], ContactList, Doc).
+
+-spec contact_list_exclude(doc()) -> kz_term:api_boolean().
+contact_list_exclude(Doc) ->
+    contact_list_exclude(Doc, 'undefined').
+
+-spec contact_list_exclude(doc(), Default) -> boolean() | Default.
+contact_list_exclude(Doc, Default) ->
+    kz_json:get_boolean_value([<<"contact_list">>, <<"exclude">>], Doc, Default).
+
+-spec set_contact_list_exclude(doc(), boolean()) -> doc().
+set_contact_list_exclude(Doc, ContactListExclude) ->
+    kz_json:set_value([<<"contact_list">>, <<"exclude">>], ContactListExclude, Doc).
+
+-spec dial_plan(doc()) -> kz_term:api_object().
+dial_plan(Doc) ->
+    dial_plan(Doc, 'undefined').
+
+-spec dial_plan(doc(), Default) -> kz_json:object() | Default.
+dial_plan(Doc, Default) ->
+    kz_json:get_json_value([<<"dial_plan">>], Doc, Default).
+
+-spec set_dial_plan(doc(), kz_json:object()) -> doc().
+set_dial_plan(Doc, DialPlan) ->
+    kz_json:set_value([<<"dial_plan">>], DialPlan, Doc).
+
+-spec directories(doc()) -> kz_term:api_object().
+directories(Doc) ->
+    directories(Doc, 'undefined').
+
+-spec directories(doc(), Default) -> kz_json:object() | Default.
+directories(Doc, Default) ->
+    kz_json:get_json_value([<<"directories">>], Doc, Default).
+
+-spec set_directories(doc(), kz_json:object()) -> doc().
+set_directories(Doc, Directories) ->
+    kz_json:set_value([<<"directories">>], Directories, Doc).
+
+-spec do_not_disturb(doc()) -> kz_term:api_object().
+do_not_disturb(Doc) ->
+    do_not_disturb(Doc, 'undefined').
+
+-spec do_not_disturb(doc(), Default) -> kz_json:object() | Default.
+do_not_disturb(Doc, Default) ->
+    kz_json:get_json_value([<<"do_not_disturb">>], Doc, Default).
+
+-spec set_do_not_disturb(doc(), kz_json:object()) -> doc().
+set_do_not_disturb(Doc, DoNotDisturb) ->
+    kz_json:set_value([<<"do_not_disturb">>], DoNotDisturb, Doc).
+
+-spec do_not_disturb_enabled(doc()) -> kz_term:api_boolean().
+do_not_disturb_enabled(Doc) ->
+    do_not_disturb_enabled(Doc, 'undefined').
+
+-spec do_not_disturb_enabled(doc(), Default) -> boolean() | Default.
+do_not_disturb_enabled(Doc, Default) ->
+    kz_json:get_boolean_value([<<"do_not_disturb">>, <<"enabled">>], Doc, Default).
+
+-spec set_do_not_disturb_enabled(doc(), boolean()) -> doc().
+set_do_not_disturb_enabled(Doc, DoNotDisturbEnabled) ->
+    kz_json:set_value([<<"do_not_disturb">>, <<"enabled">>], DoNotDisturbEnabled, Doc).
+
+-spec email(doc()) -> kz_term:api_ne_binary().
+email(Doc) ->
+    email(Doc, 'undefined').
+
+-spec email(doc(), Default) -> kz_term:ne_binary() | Default.
+email(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"email">>], Doc, Default).
+
+-spec set_email(doc(), kz_term:ne_binary()) -> doc().
+set_email(Doc, Email) ->
+    kz_json:set_value([<<"email">>], Email, Doc).
+
+-spec enabled(doc()) -> boolean().
+enabled(Doc) ->
+    enabled(Doc, 'true').
+
+-spec enabled(doc(), Default) -> boolean() | Default.
+enabled(Doc, Default) ->
+    kz_json:get_boolean_value([<<"enabled">>], Doc, Default).
+
+-spec set_enabled(doc(), boolean()) -> doc().
+set_enabled(Doc, Enabled) ->
+    kz_json:set_value([<<"enabled">>], Enabled, Doc).
+
+-spec feature_level(doc()) -> kz_term:api_binary().
+feature_level(Doc) ->
+    feature_level(Doc, 'undefined').
+
+-spec feature_level(doc(), Default) -> binary() | Default.
+feature_level(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"feature_level">>], Doc, Default).
+
+-spec set_feature_level(doc(), binary()) -> doc().
+set_feature_level(Doc, FeatureLevel) ->
+    kz_json:set_value([<<"feature_level">>], FeatureLevel, Doc).
+
+-spec first_name(doc()) -> kz_term:api_ne_binary().
+first_name(Doc) ->
+    first_name(Doc, 'undefined').
+
+-spec first_name(doc(), Default) -> kz_term:ne_binary() | Default.
+first_name(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"first_name">>], Doc, Default).
+
+-spec set_first_name(doc(), kz_term:ne_binary()) -> doc().
+set_first_name(Doc, FirstName) ->
+    kz_json:set_value([<<"first_name">>], FirstName, Doc).
+
+-spec flags(doc()) -> kz_term:api_ne_binaries().
+flags(Doc) ->
+    flags(Doc, 'undefined').
+
+-spec flags(doc(), Default) -> kz_term:ne_binaries() | Default.
+flags(Doc, Default) ->
+    kz_json:get_list_value([<<"flags">>], Doc, Default).
+
+-spec set_flags(doc(), kz_term:ne_binaries()) -> doc().
+set_flags(Doc, Flags) ->
+    kz_json:set_value([<<"flags">>], Flags, Doc).
+
+-spec formatters(doc()) -> kz_term:api_object().
+formatters(Doc) ->
+    formatters(Doc, 'undefined').
+
+-spec formatters(doc(), Default) -> kz_json:object() | Default.
+formatters(Doc, Default) ->
+    kz_json:get_json_value([<<"formatters">>], Doc, Default).
+
+-spec set_formatters(doc(), kz_json:object()) -> doc().
+set_formatters(Doc, Formatters) ->
+    kz_json:set_value([<<"formatters">>], Formatters, Doc).
+
+-spec hotdesk(doc()) -> kz_json:object().
+hotdesk(Doc) ->
+    hotdesk(Doc, kz_json:new()).
+
+-spec hotdesk(doc(), Default) -> kz_json:object() | Default.
+hotdesk(Doc, Default) ->
+    kz_json:get_json_value([<<"hotdesk">>], Doc, Default).
+
+-spec set_hotdesk(doc(), kz_json:object()) -> doc().
+set_hotdesk(Doc, Hotdesk) ->
+    kz_json:set_value([<<"hotdesk">>], Hotdesk, Doc).
+
+-spec hotdesk_enabled(doc()) -> boolean().
+hotdesk_enabled(Doc) ->
+    hotdesk_enabled(Doc, 'false').
+
+-spec hotdesk_enabled(doc(), Default) -> boolean() | Default.
+hotdesk_enabled(Doc, Default) ->
+    kz_json:get_boolean_value([<<"hotdesk">>, <<"enabled">>], Doc, Default).
+
+-spec set_hotdesk_enabled(doc(), boolean()) -> doc().
+set_hotdesk_enabled(Doc, HotdeskEnabled) ->
+    kz_json:set_value([<<"hotdesk">>, <<"enabled">>], HotdeskEnabled, Doc).
+
+-spec hotdesk_id(doc()) -> kz_term:api_binary().
+hotdesk_id(Doc) ->
+    hotdesk_id(Doc, 'undefined').
+
+-spec hotdesk_id(doc(), Default) -> binary() | Default.
+hotdesk_id(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"hotdesk">>, <<"id">>], Doc, Default).
+
+-spec set_hotdesk_id(doc(), binary()) -> doc().
+set_hotdesk_id(Doc, HotdeskId) ->
+    kz_json:set_value([<<"hotdesk">>, <<"id">>], HotdeskId, Doc).
+
+-spec hotdesk_keep_logged_in_elsewhere(doc()) -> boolean().
+hotdesk_keep_logged_in_elsewhere(Doc) ->
+    hotdesk_keep_logged_in_elsewhere(Doc, 'false').
+
+-spec hotdesk_keep_logged_in_elsewhere(doc(), Default) -> boolean() | Default.
+hotdesk_keep_logged_in_elsewhere(Doc, Default) ->
+    kz_json:get_boolean_value([<<"hotdesk">>, <<"keep_logged_in_elsewhere">>], Doc, Default).
+
+-spec set_hotdesk_keep_logged_in_elsewhere(doc(), boolean()) -> doc().
+set_hotdesk_keep_logged_in_elsewhere(Doc, HotdeskKeepLoggedInElsewhere) ->
+    kz_json:set_value([<<"hotdesk">>, <<"keep_logged_in_elsewhere">>], HotdeskKeepLoggedInElsewhere, Doc).
+
+-spec hotdesk_pin(doc()) -> kz_term:api_ne_binary().
+hotdesk_pin(Doc) ->
+    hotdesk_pin(Doc, 'undefined').
+
+-spec hotdesk_pin(doc(), Default) -> kz_term:ne_binary() | Default.
+hotdesk_pin(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"hotdesk">>, <<"pin">>], Doc, Default).
+
+-spec set_hotdesk_pin(doc(), kz_term:ne_binary()) -> doc().
+set_hotdesk_pin(Doc, HotdeskPin) ->
+    kz_json:set_value([<<"hotdesk">>, <<"pin">>], HotdeskPin, Doc).
+
+-spec hotdesk_require_pin(doc()) -> boolean().
+hotdesk_require_pin(Doc) ->
+    hotdesk_require_pin(Doc, 'false').
+
+-spec hotdesk_require_pin(doc(), Default) -> boolean() | Default.
+hotdesk_require_pin(Doc, Default) ->
+    kz_json:get_boolean_value([<<"hotdesk">>, <<"require_pin">>], Doc, Default).
+
+-spec set_hotdesk_require_pin(doc(), boolean()) -> doc().
+set_hotdesk_require_pin(Doc, HotdeskRequirePin) ->
+    kz_json:set_value([<<"hotdesk">>, <<"require_pin">>], HotdeskRequirePin, Doc).
+
+-spec language(doc()) -> kz_term:api_binary().
+language(Doc) ->
+    language(Doc, 'undefined').
+
+-spec language(doc(), Default) -> binary() | Default.
+language(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"language">>], Doc, Default).
+
+-spec set_language(doc(), binary()) -> doc().
+set_language(Doc, Language) ->
+    kz_json:set_value([<<"language">>], Language, Doc).
+
+-spec last_name(doc()) -> kz_term:api_ne_binary().
+last_name(Doc) ->
+    last_name(Doc, 'undefined').
+
+-spec last_name(doc(), Default) -> kz_term:ne_binary() | Default.
+last_name(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"last_name">>], Doc, Default).
+
+-spec set_last_name(doc(), kz_term:ne_binary()) -> doc().
+set_last_name(Doc, LastName) ->
+    kz_json:set_value([<<"last_name">>], LastName, Doc).
+
+-spec has_avatar(doc()) -> boolean().
+has_avatar(Doc) ->
+    has_avatar(kz_doc:attachment(Doc, ?PHOTO), 'false').
+
+-spec has_avatar(kz_json:object() | 'undefined', boolean()) -> boolean().
+has_avatar('undefined', Default) ->
+    Default;
+has_avatar(_Photo, _Default) ->
+    'true'.
+
+-spec set_has_avatar(doc(), boolean()) -> doc().
+set_has_avatar(Doc, Avatar) ->
+    kz_json:set_value(<<"has_avatar">>, Avatar, Doc).
+
+-spec media(doc()) -> kz_term:api_object().
+media(Doc) ->
+    media(Doc, 'undefined').
+
+-spec media(doc(), Default) -> kz_json:object() | Default.
+media(Doc, Default) ->
+    kz_json:get_json_value([<<"media">>], Doc, Default).
+
+-spec set_media(doc(), kz_json:object()) -> doc().
+set_media(Doc, Media) ->
+    kz_json:set_value([<<"media">>], Media, Doc).
+
+-spec metaflows(doc()) -> kz_term:api_object().
+metaflows(Doc) ->
+    metaflows(Doc, 'undefined').
+
+-spec metaflows(doc(), Default) -> kz_json:object() | Default.
+metaflows(Doc, Default) ->
+    kz_json:get_json_value([<<"metaflows">>], Doc, Default).
+
+-spec set_metaflows(doc(), kz_json:object()) -> doc().
+set_metaflows(Doc, Metaflows) ->
+    kz_json:set_value([<<"metaflows">>], Metaflows, Doc).
+
+-spec music_on_hold(doc()) -> kz_json:object().
+music_on_hold(Doc) ->
+    music_on_hold(Doc, kz_json:new()).
+
+-spec music_on_hold(doc(), Default) -> kz_json:object() | Default.
+music_on_hold(Doc, Default) ->
+    kz_json:get_json_value([<<"music_on_hold">>], Doc, Default).
+
+-spec set_music_on_hold(doc(), kz_json:object()) -> doc().
+set_music_on_hold(Doc, MusicOnHold) ->
+    kz_json:set_value([<<"music_on_hold">>], MusicOnHold, Doc).
+
+-spec music_on_hold_media_id(doc()) -> kz_term:api_binary().
+music_on_hold_media_id(Doc) ->
+    music_on_hold_media_id(Doc, 'undefined').
+
+-spec music_on_hold_media_id(doc(), Default) -> binary() | Default.
+music_on_hold_media_id(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"music_on_hold">>, <<"media_id">>], Doc, Default).
+
+-spec set_music_on_hold_media_id(doc(), binary()) -> doc().
+set_music_on_hold_media_id(Doc, MusicOnHoldMediaId) ->
+    kz_json:set_value([<<"music_on_hold">>, <<"media_id">>], MusicOnHoldMediaId, Doc).
+
+-spec password(doc()) -> kz_term:api_ne_binary().
+password(Doc) ->
+    password(Doc, 'undefined').
+
+-spec password(doc(), Default) -> kz_term:ne_binary() | Default.
+password(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"password">>], Doc, Default).
+
+-spec set_password(doc(), kz_term:ne_binary() | 'null') -> doc().
+set_password(Doc, Password) ->
+    kz_json:set_value([<<"password">>], Password, Doc).
+
+-spec presence_id(doc()) -> kz_term:api_binary().
+presence_id(Doc) ->
+    presence_id(Doc, 'undefined').
+
+-spec presence_id(doc(), Default) -> binary() | Default.
+presence_id(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"presence_id">>], Doc, Default).
+
+-spec set_presence_id(doc(), binary()) -> doc().
+set_presence_id(Doc, PresenceId) ->
+    kz_json:set_value([<<"presence_id">>], PresenceId, Doc).
+
+-spec presence_aliases(doc()) -> kzd_endpoint_aliases:presence_aliases() | 'undefined'.
+presence_aliases(Doc) ->
+    presence_aliases(Doc, 'undefined').
+
+-spec presence_aliases(doc(), Default) -> kzd_endpoint_aliases:presence_aliases() | Default.
+presence_aliases(Doc, Default) ->
+    kzd_endpoint_aliases:aliases(Doc, Default).
+
+-spec set_presence_aliases(doc(), kzd_endpoint_aliases:presence_aliases()) -> doc().
+set_presence_aliases(Doc, Aliases) ->
+    kzd_endpoint_aliases:set_aliases(Doc, Aliases).
+
+-spec priv_level(doc()) -> binary().
+priv_level(Doc) ->
+    priv_level(Doc, <<"user">>).
+
+-spec priv_level(doc(), Default) -> binary() | Default.
+priv_level(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"priv_level">>], Doc, Default).
+
+-spec set_priv_level(doc(), binary()) -> doc().
+set_priv_level(Doc, PrivLevel) ->
+    kz_json:set_value([<<"priv_level">>], PrivLevel, Doc).
+
+-spec profile(doc()) -> kz_term:api_object().
+profile(Doc) ->
+    profile(Doc, 'undefined').
+
+-spec profile(doc(), Default) -> kz_json:object() | Default.
+profile(Doc, Default) ->
+    kz_json:get_json_value([<<"profile">>], Doc, Default).
+
+-spec set_profile(doc(), kz_json:object()) -> doc().
+set_profile(Doc, Profile) ->
+    kz_json:set_value([<<"profile">>], Profile, Doc).
+
+-spec pronounced_name(doc()) -> kz_term:api_object().
+pronounced_name(Doc) ->
+    pronounced_name(Doc, 'undefined').
+
+-spec pronounced_name(doc(), Default) -> kz_json:object() | Default.
+pronounced_name(Doc, Default) ->
+    kz_json:get_json_value([<<"pronounced_name">>], Doc, Default).
+
+-spec set_pronounced_name(doc(), kz_json:object()) -> doc().
+set_pronounced_name(Doc, PronouncedName) ->
+    kz_json:set_value([<<"pronounced_name">>], PronouncedName, Doc).
+
+-spec pronounced_name_media_id(doc()) -> kz_term:api_binary().
+pronounced_name_media_id(Doc) ->
+    pronounced_name_media_id(Doc, 'undefined').
+
+-spec pronounced_name_media_id(doc(), Default) -> binary() | Default.
+pronounced_name_media_id(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"pronounced_name">>, <<"media_id">>], Doc, Default).
+
+-spec set_pronounced_name_media_id(doc(), binary()) -> doc().
+set_pronounced_name_media_id(Doc, PronouncedNameMediaId) ->
+    kz_json:set_value([<<"pronounced_name">>, <<"media_id">>], PronouncedNameMediaId, Doc).
+
+-spec allowed_proxy_ips(doc()) -> kz_term:ne_binaries().
+allowed_proxy_ips('undefined') -> [];
+allowed_proxy_ips(JObj) ->
+    kz_json:get_ne_binaries(<<"allowed_proxy_ips">>, JObj, []).
+
+-spec allowed_proxy_ips(kz_term:api_ne_binary(), kz_term:api_ne_binary()) -> kz_term:ne_binaries().
+allowed_proxy_ips('undefined', _) -> [];
+allowed_proxy_ips(_, 'undefined') -> [];
+allowed_proxy_ips(AccountId, UserId) ->
+    case fetch(AccountId, UserId) of
+        {'ok', JObj} -> allowed_proxy_ips(JObj);
+        {'error', _R} ->
+            lager:debug("failed to open account's ~s user ~s definition, returning empty proxy list", [AccountId, UserId]),
+            []
+    end.
+
+-spec set_allowed_proxy_ips(doc(), kz_term:ne_binaries()) -> doc().
+set_allowed_proxy_ips(Doc, ProxyList) ->
+    kz_json:set_value(<<"allowed_proxy_ips">>, ProxyList, Doc).
+
+-spec require_password_update(doc()) -> boolean().
+require_password_update(Doc) ->
+    require_password_update(Doc, 'false').
+
+-spec require_password_update(doc(), Default) -> boolean() | Default.
+require_password_update(Doc, Default) ->
+    kz_json:get_boolean_value([<<"require_password_update">>], Doc, Default).
+
+-spec set_require_password_update(doc(), boolean()) -> doc().
+set_require_password_update(Doc, RequirePasswordUpdate) ->
+    kz_json:set_value([<<"require_password_update">>], RequirePasswordUpdate, Doc).
+
+-spec ringtones(doc()) -> kz_json:object().
+ringtones(Doc) ->
+    ringtones(Doc, kz_json:new()).
+
+-spec ringtones(doc(), Default) -> kz_json:object() | Default.
+ringtones(Doc, Default) ->
+    kz_json:get_json_value([<<"ringtones">>], Doc, Default).
+
+-spec set_ringtones(doc(), kz_json:object()) -> doc().
+set_ringtones(Doc, Ringtones) ->
+    kz_json:set_value([<<"ringtones">>], Ringtones, Doc).
+
+-spec ringtones_external(doc()) -> kz_term:api_binary().
+ringtones_external(Doc) ->
+    ringtones_external(Doc, 'undefined').
+
+-spec ringtones_external(doc(), Default) -> binary() | Default.
+ringtones_external(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"ringtones">>, <<"external">>], Doc, Default).
+
+-spec set_ringtones_external(doc(), binary()) -> doc().
+set_ringtones_external(Doc, RingtonesExternal) ->
+    kz_json:set_value([<<"ringtones">>, <<"external">>], RingtonesExternal, Doc).
+
+-spec ringtones_internal(doc()) -> kz_term:api_binary().
+ringtones_internal(Doc) ->
+    ringtones_internal(Doc, 'undefined').
+
+-spec ringtones_internal(doc(), Default) -> binary() | Default.
+ringtones_internal(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"ringtones">>, <<"internal">>], Doc, Default).
+
+-spec set_ringtones_internal(doc(), binary()) -> doc().
+set_ringtones_internal(Doc, RingtonesInternal) ->
+    kz_json:set_value([<<"ringtones">>, <<"internal">>], RingtonesInternal, Doc).
+
+-spec scope_restrictions(doc()) -> kz_term:api_ne_binaries().
+scope_restrictions(Doc) ->
+    scope_restrictions(Doc, 'undefined').
+
+-spec scope_restrictions(doc(), Default) -> kz_term:ne_binaries() | Default.
+scope_restrictions(Doc, Default) ->
+    kz_json:get_list_value([<<"scope_restrictions">>], Doc, Default).
+
+-spec set_scope_restrictions(doc(), kz_term:ne_binaries()) -> doc().
+set_scope_restrictions(Doc, ScopeRestrictions) ->
+    kz_json:set_value([<<"scope_restrictions">>], ScopeRestrictions, Doc).
+
+-spec timezone(doc()) -> kz_term:api_binary().
+timezone(Doc) ->
+    timezone(Doc, 'undefined').
+
+-spec timezone(doc(), Default) -> binary() | Default.
+-ifndef(TEST).
+timezone(Doc, Default) ->
+    case kz_json:get_ne_binary_value([<<"timezone">>], Doc, Default) of
+        'undefined' -> kzd_accounts:timezone(kz_doc:account_id(Doc));
+        <<"inherit">> -> kzd_accounts:timezone(kz_doc:account_id(Doc)); %% UI-1808
+        TZ -> TZ
+    end.
+-else.
+timezone(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"timezone">>], Doc, Default).
+-endif.
+
+-spec set_timezone(doc(), binary()) -> doc().
+set_timezone(Doc, Timezone) ->
+    kz_json:set_value([<<"timezone">>], Timezone, Doc).
+
+-spec username(doc()) -> kz_term:api_ne_binary().
+username(Doc) ->
+    username(Doc, 'undefined').
+
+-spec username(doc(), Default) -> kz_term:ne_binary() | Default.
+username(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"username">>], Doc, Default).
+
+-spec set_username(doc(), kz_term:ne_binary()) -> doc().
+set_username(Doc, Username) ->
+    kz_json:set_value([<<"username">>], Username, Doc).
+
+-spec verified(doc()) -> boolean().
+verified(Doc) ->
+    verified(Doc, 'false').
+
+-spec verified(doc(), Default) -> boolean() | Default.
+verified(Doc, Default) ->
+    kz_json:get_boolean_value([<<"verified">>], Doc, Default).
+
+-spec set_verified(doc(), boolean()) -> doc().
+set_verified(Doc, Verified) ->
+    kz_json:set_value([<<"verified">>], Verified, Doc).
+
+-spec vm_to_email_enabled(doc()) -> boolean().
+vm_to_email_enabled(Doc) ->
+    vm_to_email_enabled(Doc, 'true').
+
+-spec vm_to_email_enabled(doc(), Default) -> boolean() | Default.
+vm_to_email_enabled(Doc, Default) ->
+    kz_json:get_boolean_value([<<"vm_to_email_enabled">>], Doc, Default).
+
+-spec set_vm_to_email_enabled(doc(), boolean()) -> doc().
+set_vm_to_email_enabled(Doc, VmToEmailEnabled) ->
+    kz_json:set_value([<<"vm_to_email_enabled">>], VmToEmailEnabled, Doc).
+
+-spec voicemail(doc()) -> kz_term:api_object().
+voicemail(Doc) ->
+    voicemail(Doc, 'undefined').
+
+-spec voicemail(doc(), Default) -> kz_json:object() | Default.
+voicemail(Doc, Default) ->
+    kz_json:get_json_value([<<"voicemail">>], Doc, Default).
+
+-spec set_voicemail(doc(), kz_json:object()) -> doc().
+set_voicemail(Doc, Voicemail) ->
+    kz_json:set_value([<<"voicemail">>], Voicemail, Doc).
+
+-spec voicemail_notify(doc()) -> kz_term:api_object().
+voicemail_notify(Doc) ->
+    voicemail_notify(Doc, 'undefined').
+
+-spec voicemail_notify(doc(), Default) -> kz_json:object() | Default.
+voicemail_notify(Doc, Default) ->
+    kz_json:get_json_value([<<"voicemail">>, <<"notify">>], Doc, Default).
+
+-spec set_voicemail_notify(doc(), kz_json:object()) -> doc().
+set_voicemail_notify(Doc, VoicemailNotify) ->
+    kz_json:set_value([<<"voicemail">>, <<"notify">>], VoicemailNotify, Doc).
+
+-spec voicemail_notify_callback(doc()) -> kz_term:api_object().
+voicemail_notify_callback(Doc) ->
+    voicemail_notify_callback(Doc, 'undefined').
+
+-spec voicemail_notify_callback(doc(), Default) -> kz_json:object() | Default.
+voicemail_notify_callback(Doc, Default) ->
+    kz_json:get_json_value([<<"voicemail">>, <<"notify">>, <<"callback">>], Doc, Default).
+
+-spec set_voicemail_notify_callback(doc(), kz_json:object()) -> doc().
+set_voicemail_notify_callback(Doc, VoicemailNotifyCallback) ->
+    kz_json:set_value([<<"voicemail">>, <<"notify">>, <<"callback">>], VoicemailNotifyCallback, Doc).
+
+-spec fetch(kz_term:api_ne_binary(), kz_term:api_ne_binary()) ->
+          {'ok', doc()} |
+          kz_datamgr:data_error().
+fetch('undefined', _UserId) ->
+    {'error', 'invalid_db_name'};
+fetch(_Account, 'undefined') ->
+    {'error', 'not_found'};
+fetch(Account, UserId=?NE_BINARY) ->
+    AccountDb = kzs_util:format_account_db(Account),
+    case kz_datamgr:open_cache_doc(AccountDb, UserId) of
+        {'error', _}=Error ->
+            Error;
+        {'ok', UserJObj} ->
+            case is_password_expired(UserJObj) of
+                'true' ->
+                    lager:info("password is expired, requiring update"),
+                    {'ok', set_require_password_update(UserJObj, 'true')};
+                'false' -> {'ok', UserJObj}
+            end
+    end.
+
+-spec to_vcard(doc()) -> binary().
+to_vcard(UserDoc) ->
+    %% Handle scenario when trying to build vcard for existing user with old addresses schema.
+    User = maybe_migrate_user_addresses(UserDoc),
+    %% TODO add SOUND, AGENT (X-ASSISTANT), X-MANAGER
+    Fields = [<<"BEGIN">>
+             ,<<"VERSION">>
+             ,<<"FN">>
+             ,<<"N">>
+             ,<<"ORG">>
+             ,<<"PHOTO">>
+             ,<<"EMAIL">>
+             ,<<"BDAY">>
+             ,<<"NOTE">>
+             ,<<"TITLE">>
+             ,<<"ROLE">>
+             ,<<"TZ">>
+             ,<<"NICKNAME">>
+             ,<<"TEL">>
+             ,<<"ADR">>
+             ,<<"END">>
+             ],
+    NotEmptyFields = lists:foldl(fun vcard_fields_acc/2
+                                ,[]
+                                ,[card_field(Key, User) || Key <- Fields]
+                                ),
+    PackedFields = lists:reverse(
+                     [kz_binary:join([X, Y], <<":">>) ||
+                         {X, Y} <- NotEmptyFields
+                     ]
+                    ),
+    DividedFields = lists:reverse(
+                      lists:foldl(fun vcard_field_divide_by_length/2, [], PackedFields)
+                     ),
+    kz_binary:join(DividedFields, <<"\n">>).
+
+-spec vcard_escape_chars(binary()) -> binary().
+vcard_escape_chars(Val) ->
+    Opts = ['global', {'return', 'binary'}],
+    Val1 = re:replace(Val, "(:|;|,)", "\\\\&", Opts),
+    re:replace(Val1, "\n", "\\\\n", Opts).
+
+-spec vcard_fields_acc(vcard_field(), [{kz_term:ne_binary(), binary()}]) -> [{kz_term:ne_binary(), binary()}].
+vcard_fields_acc({_, Val}, Acc)
+  when Val =:= 'undefined'; Val =:= []; Val =:= <<>> ->
+    Acc;
+vcard_fields_acc({Type, Val}, Acc) ->
+    case vcard_normalize_val(Val) of
+        <<>> -> Acc;
+        ValN ->
+            TypeN = vcard_normalize_type(Type),
+            [{TypeN, ValN} | Acc]
+    end;
+vcard_fields_acc([X | Rest], Acc) ->
+    vcard_fields_acc(Rest, vcard_fields_acc(X, Acc));
+vcard_fields_acc([], Acc) ->
+    Acc.
+
+-spec vcard_normalize_val(binary() | {char(), kz_term:binaries()}) -> binary().
+vcard_normalize_val({Separator, Vals}) when is_list(Vals) ->
+    kz_binary:join([vcard_escape_chars(X) || X <- Vals, not kz_term:is_empty(X)], Separator);
+vcard_normalize_val(Val) when is_binary(Val) ->
+    vcard_escape_chars(Val).
+
+-spec vcard_normalize_type(list() | {kz_term:ne_binary(), kz_term:ne_binary()} | kz_term:ne_binary()) -> kz_term:ne_binary().
+vcard_normalize_type(T) when is_list(T) -> kz_binary:join([vcard_normalize_type(X) || X <- T], <<";">>);
+vcard_normalize_type({T, V}) -> kz_binary:join([T, V], <<"=">>);
+vcard_normalize_type(T) -> T.
+
+-type vcard_val() :: binary() | {char(), kz_term:binaries()} | 'undefined'.
+-type vcard_type_token() :: kz_term:ne_binary() | {kz_term:ne_binary(), kz_term:ne_binary()}.
+-type vcard_type() :: [vcard_type_token()] | vcard_type_token().
+-type vcard_field_token() :: {vcard_type(), vcard_val()}.
+-type vcard_field() :: vcard_field_token() | [vcard_field_token()].
+
+-spec card_field(kz_term:ne_binary(), doc()) -> vcard_field().
+card_field(Key = <<"BEGIN">>, _User) ->
+    {Key, <<"VCARD">>};
+card_field(Key = <<"VERSION">>, _User) ->
+    {Key, <<"3.0">>};
+card_field(Key = <<"END">>, _User) ->
+    {Key, <<"VCARD">>};
+card_field(Key = <<"FN">>, User) ->
+    FirstName = first_name(User),
+    LastName = last_name(User),
+    MiddleName = kz_json:get_ne_binary_value(<<"middle_name">>, User),
+    {Key
+    ,kz_binary:join([X || X <- [FirstName, MiddleName, LastName],
+                          not kz_term:is_empty(X)
+                    ]
+                   ,<<" ">>
+                   )
+    };
+card_field(Key = <<"N">>, User) ->
+    FirstName = first_name(User),
+    LastName = last_name(User),
+    MiddleName = kz_json:get_ne_binary_value(<<"middle_name">>, User),
+    {Key, {$;, [LastName, FirstName, MiddleName]}};
+card_field(Key = <<"ORG">>, User) ->
+    {Key, kz_json:get_value(<<"org">>, User)};
+card_field(Key = <<"PHOTO">>, User) ->
+    case kz_json:get_json_value(<<"photo">>, User) of
+        'undefined' -> {Key, 'undefined'};
+        PhotoJObj ->
+            [{CT, PhotoBin}] = kz_json:to_proplist(PhotoJObj),
+            TypeType = content_type_to_type(CT),
+            Data = base64:encode(PhotoBin),
+            {[Key, {<<"ENCODING">>, <<"B">>}, {<<"TYPE">>, TypeType}], Data}
+    end;
+card_field(Key = <<"ADR">>, User) ->
+    Addresses = [normalize_address(A) || A <- kz_json:get_list_value([<<"addresses">>, <<"vcard">>], User, [])],
+    [{[Key, {<<"TYPE">>, Type}], Address} || {Type, Address} <- Addresses];
+card_field(Key = <<"TEL">>, User) ->
+    CallerId = caller_id(User, kz_json:new()),
+    Internal = kz_json:get_ne_binary_value(<<"internal">>, CallerId),
+    External = kz_json:get_ne_binary_value(<<"external">>, CallerId),
+
+    [{Key, Internal}
+    ,{Key, External}
+    ];
+card_field(Key = <<"EMAIL">>, User) ->
+    {Key, email(User)};
+card_field(Key = <<"BDAY">>, User) ->
+    {Key, kz_json:get_value(<<"birthday">>, User)};
+card_field(Key = <<"NOTE">>, User) ->
+    {Key, kz_json:get_value(<<"note">>, User)};
+card_field(Key = <<"TITLE">>, User) ->
+    {Key, kz_json:get_value(<<"title">>, User)};
+card_field(Key = <<"ROLE">>, User) ->
+    {Key, kz_json:get_value(<<"role">>, User)};
+card_field(Key = <<"TZ">>, User) ->
+    {Key, timezone(User)};
+card_field(Key = <<"NICKNAME">>, User) ->
+    {Key, {$,, kz_json:get_list_value(<<"nicknames">>, User, [])}}.
+
+-spec content_type_to_type(kz_term:ne_binary()) -> kz_term:ne_binary().
+content_type_to_type(<<"image/jpeg">>) -> <<"JPEG">>.
+
+-spec vcard_field_divide_by_length(binary(), kz_term:binaries()) -> kz_term:binaries().
+vcard_field_divide_by_length(<<Row:75/binary>>, Acc) ->
+    [Row | Acc];
+vcard_field_divide_by_length(<<Row:75/binary, Rest/binary>>, Acc) ->
+    vcard_field_divide_by_length(Rest, [Row | Acc]);
+vcard_field_divide_by_length(Row, Acc) ->
+    [Row | Acc].
+
+-spec normalize_address(kz_json:object()) -> {kz_term:ne_binary(), binary()}.
+normalize_address(AddressJObj) ->
+    Types = case kz_json:get_list_value(<<"types">>, AddressJObj) of
+                'undefined' -> [<<"intl">>, <<"postal">>, <<"parcel">>, <<"work">>];
+                T -> T
+            end,
+    Address = kz_json:get_ne_binary_value(<<"address">>, AddressJObj),
+    {kz_binary:join(Types, <<",">>), Address}.
+
+-spec enable(doc()) -> doc().
+enable(JObj) ->
+    kz_json:set_value([<<"enabled">>], 'true', JObj).
+
+-spec disable(doc()) -> doc().
+disable(JObj) ->
+    kz_json:set_value([<<"enabled">>], 'false', JObj).
+
+-spec type() -> kz_term:ne_binary().
+type() -> ?PVT_TYPE.
+
+-spec schema() -> kz_term:ne_binary().
+schema() -> ?SCHEMA.
+
+-spec fax_settings(doc()) -> doc().
+fax_settings(Doc) ->
+    FaxSettings = kz_json:get_json_value(?FAX_SETTINGS_KEY, Doc, kz_json:new()),
+    UserFaxSettings =
+        case kz_json:get_ne_binary_value(?FAX_TIMEZONE_KEY, FaxSettings) of
+            'undefined' -> kz_json:set_value(?FAX_TIMEZONE_KEY, timezone(Doc), FaxSettings);
+            _TZ -> FaxSettings
+        end,
+    AccountFaxSettings = kzd_accounts:fax_settings(kz_doc:account_id(Doc)),
+    kz_json:merge_jobjs(UserFaxSettings, AccountFaxSettings).
+
+-spec name(doc()) -> kz_term:ne_binary().
+name(Doc) ->
+    list_to_binary([first_name(Doc, <<>>), " ", last_name(Doc, <<>>)]).
+
+-spec is_account_admin(kz_term:api_object()) -> boolean().
+is_account_admin('undefined') -> 'false';
+is_account_admin(Doc) ->
+    priv_level(Doc) =:= <<"admin">>.
+
+-spec is_account_admin(kz_term:api_binary(), kz_term:api_binary()) -> boolean().
+is_account_admin('undefined', _) -> 'false';
+is_account_admin(_, 'undefined') -> 'false';
+is_account_admin(Account, UserId) ->
+    case fetch(Account, UserId) of
+        {'ok', JObj} -> is_account_admin(JObj);
+        {'error', _R} ->
+            lager:debug("unable to open user ~s definition in account ~s: ~p", [UserId, Account, _R]),
+            'false'
+    end.
+
+-spec classifier_restriction(doc(), kz_term:ne_binary()) -> kz_term:api_ne_binary().
+classifier_restriction(Doc, Classifier) ->
+    classifier_restriction(Doc, Classifier, 'undefined').
+
+-spec classifier_restriction(doc(), kz_term:ne_binary(), Default) -> kz_term:ne_binary() | Default.
+classifier_restriction(Doc, Classifier, Default) ->
+    Restrictions = call_restriction(Doc),
+    kz_json:get_ne_binary_value([Classifier, <<"action">>], Restrictions, Default).
+
+-spec set_classifier_restriction(doc(), kz_term:ne_binary(), kz_term:ne_binary()) -> doc().
+set_classifier_restriction(Doc, Classifier, Action) ->
+    Restrictions = call_restriction(Doc),
+    set_call_restriction(Doc
+                        ,kz_json:set_value([Classifier, <<"action">>], Action, Restrictions)
+                        ).
+
+-spec full_name(kz_json:object()) -> kz_term:api_ne_binary().
+full_name(Doc) ->
+    full_name(Doc, 'undefined').
+
+-spec full_name(kz_json:object(), Default) -> kz_term:api_ne_binary() | Default.
+full_name(Doc, Default) ->
+    full_name(first_name(Doc), last_name(Doc), Default).
+
+-spec full_name(kz_term:api_binary(), kz_term:api_binary(), Default) -> kz_term:ne_binary() | Default.
+full_name(?NE_BINARY = First, ?NE_BINARY = Last, _) ->
+    <<First/binary, " ", Last/binary>>;
+full_name(_, ?NE_BINARY = Last, _) ->
+    <<Last/binary>>;
+full_name(?NE_BINARY = First, _, _) ->
+    <<First/binary>>;
+full_name(_, _, Default) ->
+    Default.
+
+-spec md5_auth(doc()) -> kz_term:api_ne_binary().
+md5_auth(Doc) ->
+    kz_json:get_ne_binary_value(<<"pvt_md5_auth">>, Doc).
+
+-spec sha1_auth(doc()) -> kz_term:api_ne_binary().
+sha1_auth(Doc) ->
+    kz_json:get_ne_binary_value(<<"pvt_sha1_auth">>, Doc).
+
+-spec signature_secret(doc()) -> kz_term:api_object().
+signature_secret(Doc) ->
+    kz_json:get_ne_binary_value(<<"pvt_signature_secret">>, Doc).
+
+%%------------------------------------------------------------------------------
+%% @doc Validate a requested user can be created
+%%
+%% Returns the updated user doc (with relevant defaults)
+%% or returns the validation error {Path, ErrorType, ErrorMessage}
+%% @end
+%%------------------------------------------------------------------------------
+-spec validate(kz_term:api_ne_binary(), kz_term:api_ne_binary(), doc()) -> kazoo_documents:doc_validation_return().
+validate(AccountId, UserId, ReqJObj) ->
+    ValidateFuns = [fun maybe_validate_username_is_unique/3
+                   ,fun maybe_normalize_emergency_caller_id_number/3
+                   ,fun maybe_validate_hotdesk_id_is_unique/3
+
+                    %% validate_user_schema will load and merge the current docs pvt fields
+                   ,fun validate_user_schema/3
+
+                   ,fun maybe_set_identity_secret/3
+                   ,fun maybe_rehash_creds/3
+                   ,fun validate_call_failover/3
+                   ,fun validate_call_forward/3
+                   ],
+    try do_validation(AccountId, UserId, ReqJObj, ValidateFuns) of
+        {UserDoc, []} -> {'true', UserDoc};
+        {_UserDoc, ValidationErrors} -> {'validation_errors', ValidationErrors}
+    catch
+        'throw':SystemError -> SystemError
+    end.
+
+-spec do_validation(kz_term:api_ne_binary(), kz_term:api_ne_binary(), doc(), [kazoo_documents:doc_validation_fun()]) ->
+          {'true', doc()} |
+          {'validation_errors', kazoo_documents:doc_validation_errors()}.
+do_validation(AccountId, UserId, ReqJObj, ValidateFuns) ->
+    lists:foldl(fun(F, Acc) -> F(AccountId, UserId, Acc) end
+               ,{ReqJObj, []}
+               ,ValidateFuns
+               ).
+
+%%------------------------------------------------------------------------------
+%% @doc If set, Validate the user's username is unique within the account.
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_validate_username_is_unique(kz_term:api_ne_binary(), kz_term:api_ne_binary(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+maybe_validate_username_is_unique(AccountId, UserId, {Doc, Errors}) ->
+    Username = username(Doc),
+    CurrentUsername = case fetch(AccountId, UserId) of
+                          {'ok', CurrentDoc} -> username(CurrentDoc);
+                          {'error', _R} -> 'undefined'
+                      end,
+
+    case kz_term:is_empty(Username)
+        orelse Username =:= CurrentUsername
+        orelse is_username_unique(AccountId, UserId, Username)
+    of
+        'true' ->
+            lager:debug("username '~s' (currently '~s') is unique within account", [Username, CurrentUsername]),
+            {Doc, Errors};
+        'false' ->
+            lager:error("username '~s' (currently '~s') is not unique within account", [Username, CurrentUsername]),
+            Msg = kz_json:from_list(
+                    [{<<"message">>, <<"Username must be unique within account">>}
+                    ,{<<"cause">>, Username}
+                    ]),
+            {Doc, [{[<<"username">>], <<"unique">>, Msg} | Errors]}
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Get a mapping of all setter functions (start with set_) with arity 2 for
+%% a users document.
+%% Returns map where the key (Function name without set_) is a binary and the
+%% value (Function name) is an atom.
+%% @end
+%%------------------------------------------------------------------------------
+-spec get_setters() -> #{kz_term:ne_binary() => atom()}.
+get_setters() ->
+    kzd_module_utils:get_setters(?MODULE).
+
+%%------------------------------------------------------------------------------
+%% @doc Return 'true' if a user's username is unique within an account, else
+%% return 'false'.
+%% @end
+%%------------------------------------------------------------------------------
+-spec is_username_unique(kz_term:api_ne_binary(), kz_term:api_ne_binary(), kz_term:api_ne_binary()) -> boolean().
+is_username_unique(AccountId, UserId, Username) ->
+    AccountDb = kzs_util:format_account_db(AccountId),
+    ViewOptions = [{'key', Username}],
+    case kz_datamgr:get_results(AccountDb, ?LIST_BY_USERNAME, ViewOptions) of
+        {'ok', []} -> 'true';
+        {'ok', [JObj]} -> kz_doc:id(JObj) =:= UserId;
+        _Else -> 'false'
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc If set, Normalize emergency caller id number.
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_normalize_emergency_caller_id_number(kz_term:api_ne_binary(), kz_term:api_ne_binary()
+                                                ,kazoo_documents:doc_validation_acc()) -> kazoo_documents:doc_validation_acc().
+maybe_normalize_emergency_caller_id_number(_AccountId, _UserId, {Doc, Errors}) ->
+    {kzd_module_utils:maybe_normalize_emergency_caller_id_number(Doc), Errors}.
+
+%%------------------------------------------------------------------------------
+%% @doc Import user credentials if `<<"credentials">>' key is set.
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_import_credentials(kz_term:api_ne_binary(), kz_term:api_ne_binary(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+maybe_import_credentials(_AccountId, _UserId, {Doc, Errors}) ->
+    case kz_json:get_ne_value(<<"credentials">>, Doc) of
+        'undefined' -> {Doc, Errors};
+        Creds ->
+            lager:debug("importing user credentials"),
+            RemoveKeys = [<<"credentials">>, <<"pvt_sha1_auth">>],
+            kz_json:set_value(<<"pvt_md5_auth">>
+                             ,Creds
+                             ,kz_json:delete_keys(RemoveKeys, Doc)
+                             )
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Verify the user doc against the user doc schema.
+%% On Success merge the private fields from the current user doc into Doc.
+%% @end
+%%------------------------------------------------------------------------------
+-spec validate_user_schema(kz_term:api_ne_binary(), kz_term:api_ne_binary(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+validate_user_schema(AccountId, UserId, {Doc, Errors}) ->
+    OnSuccess = fun(ValidateAcc) -> on_successful_schema_validation(AccountId, UserId, ValidateAcc) end,
+    kzd_module_utils:validate_schema(?SCHEMA, {Doc, Errors}, OnSuccess).
+
+%%------------------------------------------------------------------------------
+%% @doc Executed after `validate_user_schema/3' if it passes schema validation.
+%% If the UserId is defined then merge the current user doc's private fields
+%% into Doc.
+%% @end
+%%------------------------------------------------------------------------------
+-spec on_successful_schema_validation(kz_term:api_ne_binary(), kz_term:api_ne_binary(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+on_successful_schema_validation(AccountId, 'undefined', {Doc, Errors}) ->
+    lager:debug("new user doc passed schema validation"),
+    Props = [{<<"pvt_type">>, type()}],
+    JObj = kz_json:set_values(Props, Doc),
+    maybe_import_credentials(AccountId, 'undefined', {JObj, Errors});
+on_successful_schema_validation(AccountId, UserId, {Doc, Errors}) ->
+    lager:debug("updated user doc passed schema validation"),
+    UpdatedDoc = maybe_merge_current_private_fields(AccountId, UserId, Doc),
+    maybe_import_credentials(AccountId, UserId, {UpdatedDoc, Errors}).
+
+%%------------------------------------------------------------------------------
+%% @doc Merge the current (cached) doc's private fields into Doc. If the current
+%% doc can not be found by Account Id and User Id, then return the unaltered
+%% Doc.
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_merge_current_private_fields(kz_term:ne_binary(), kz_term:ne_binary(), doc()) -> doc().
+maybe_merge_current_private_fields(AccountId, UserId, Doc) ->
+    case fetch(AccountId, UserId) of
+        {'ok', CurrentDoc} ->
+            kz_json:merge_jobjs(kz_doc:private_fields(CurrentDoc), Doc);
+        {'error', _R} -> Doc
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Check if user has a non-empty `pvt_signature_secret'
+%% If set then update `pvt_signature_secret'.
+%% If there are any errors in the doc validation accumulator then do nothing.
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_set_identity_secret(kz_term:api_ne_binary(), kz_term:api_ne_binary(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+maybe_set_identity_secret(_AccountId, _UserId, {Doc, []=Errors}) ->
+    case kz_auth_identity:has_doc_secret(Doc) of
+        'true' -> {Doc, Errors};
+        'false' ->
+            lager:debug("initializing identity secret"),
+            {kz_auth_identity:reset_doc_secret(Doc), Errors}
+    end;
+maybe_set_identity_secret(_AccountId, _UserId, ValidateAcc) -> ValidateAcc.
+
+%%------------------------------------------------------------------------------
+%% @doc If set, Validate the user's hotdesk id is unique within the account.
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_validate_hotdesk_id_is_unique(kz_term:api_ne_binary(), kz_term:api_ne_binary(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+maybe_validate_hotdesk_id_is_unique(AccountId, UserId, {Doc, Errors}) ->
+    HotdeskId = hotdesk_id(Doc),
+    CurrentHotdeskId = case fetch(AccountId, UserId) of
+                           {'ok', CurrentDoc} -> hotdesk_id(CurrentDoc);
+                           {'error', _R} -> 'undefined'
+                       end,
+
+    case kz_term:is_empty(HotdeskId)
+        orelse HotdeskId =:= CurrentHotdeskId
+        orelse is_hotdesk_id_unique(AccountId, UserId, HotdeskId)
+    of
+        'true' ->
+            lager:debug("hotdesk id '~s' (currently '~s') is unique within account", [HotdeskId, CurrentHotdeskId]),
+            {Doc, Errors};
+        'false' ->
+            lager:error("hotdesk id '~s' (currently '~s') is not unique within account", [HotdeskId, CurrentHotdeskId]),
+            Msg = kz_json:from_list(
+                    [{<<"message">>, <<"Hotdesk ID must be unique within account">>}
+                    ,{<<"cause">>, HotdeskId}
+                    ]),
+            {Doc, [{[<<"hotdesk">>, <<"id">>], <<"unique">>, Msg} | Errors]}
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Return 'true' if a user's hotdesk id is unique within an account, else
+%% return 'false'.
+%% @end
+%%------------------------------------------------------------------------------
+-spec is_hotdesk_id_unique(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binary()) -> boolean().
+is_hotdesk_id_unique(AccountId, UserId, HotdeskId) ->
+    AccountDb = kzs_util:format_account_db(AccountId),
+    ViewOptions = [{'key', HotdeskId}],
+    case kz_datamgr:get_results(AccountDb, ?LIST_BY_HOTDESK_ID, ViewOptions) of
+        {'ok', []} -> 'true';
+        {'ok', [JObj]} -> kz_doc:id(JObj) =:= UserId;
+        _Else -> 'false'
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Maybe rehash the users creds if needed.
+%% If there are any errors in the doc validation accumulator then do nothing.
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_rehash_creds(kz_term:api_ne_binary(), kz_term:api_ne_binary(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+maybe_rehash_creds(AccountId, UserId, {Doc, []}=ValidateAcc) ->
+    Username = username(Doc),
+    Password = password(Doc),
+    CurrentDoc = case fetch(AccountId, UserId) of
+                     {'ok', JObj} -> JObj;
+                     {'error', _R} -> kz_json:new()
+                 end,
+    CurrentUsername = username(CurrentDoc),
+    GeneratePassword = ?SHOULD_GENERATE_USER_PASSWORD_IF_EMPTY,
+    GenerateUsername = ?SHOULD_GENERATE_USER_USERNAME_IF_EMPTY,
+    GenerateCreds =
+        GenerateUsername
+        andalso GeneratePassword,
+    case
+        {Username =:= CurrentUsername
+        ,kz_term:is_empty(Username)
+        ,kz_term:is_empty(Password)
+        }
+    of
+        {'false', 'false', 'false'} ->
+            lager:debug("requested different username (new: ~s current: ~s) with a password"
+                       ,[Username, CurrentUsername]
+                       ),
+            rehash_creds(AccountId, Username, Password, ValidateAcc);
+        {'false', 'false', 'true'} ->
+            lager:debug("requested different username (new: ~s current: ~s) without a password"
+                       ,[Username, CurrentUsername]
+                       ),
+            maybe_generate_password_hash(AccountId, GeneratePassword, Username, ValidateAcc);
+        {'false', 'true', 'false'} ->
+            lager:debug("requested no username but provided a password"),
+            maybe_generated_username_hash(AccountId, GenerateUsername, Password, ValidateAcc);
+        {'false', 'true', 'true'} ->
+            lager:debug("requested no username or password"),
+            maybe_generate_creds_hash(AccountId, GenerateCreds, ValidateAcc);
+        {'true', 'false', 'false'} ->
+            lager:debug("username is unchanged with a password"),
+            rehash_creds(AccountId, Username, Password, ValidateAcc);
+        {'true', 'false', 'true'} ->
+            lager:debug("requested same username (new: ~s current: ~s) without a password"
+                       ,[Username, CurrentUsername]
+                       ),
+            ValidateAcc;
+        {'true', 'true', 'false'} ->
+            lager:debug("requested no username (new: ~s current: ~s) with a password"
+                       ,[Username, CurrentUsername]
+                       ),
+            maybe_generated_username_hash(AccountId, GenerateUsername, Password, ValidateAcc);
+        {'true', 'true', 'true'} ->
+            lager:debug("requested no username, no current username, and no password"),
+            maybe_generate_creds_hash(AccountId, GenerateCreds, ValidateAcc)
+    end;
+maybe_rehash_creds(_AccountId, _UserId, ValidateAcc) -> ValidateAcc.
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_generate_password_hash(kz_term:api_ne_binary(), boolean(), kz_term:ne_binary(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+maybe_generate_password_hash(_AccountId, 'false', _Username, {Doc, Errors}) ->
+    Msg = kz_json:from_list(
+            [{<<"message">>, <<"The password must be provided when creating / updating the user name">>}
+            ,{<<"cause">>, username(Doc)}
+            ]),
+    {Doc, [{[<<"password">>], <<"required">>, Msg} | Errors]};
+maybe_generate_password_hash(AccountId, 'true', Username, ValidateAcc) ->
+    rehash_creds(AccountId, Username, {'valid', generate_password()}, ValidateAcc).
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_generated_username_hash(kz_term:api_ne_binary(), boolean(), kz_term:ne_binary(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+maybe_generated_username_hash(_AccountId, 'false', _Password, {Doc, Errors}) ->
+    Msg = kz_json:from_list(
+            [{<<"message">>, <<"The username must be provided when updating the password">>}
+            ,{<<"cause">>, username(Doc)}
+            ]),
+    {Doc, [{[<<"username">>], <<"required">>, Msg} | Errors]};
+maybe_generated_username_hash(AccountId, 'true', Password, {Doc, Errors}) ->
+    Username = generate_username(),
+    UpdatedDoc = set_username(Doc, Username),
+    rehash_creds(AccountId, Username, Password, {UpdatedDoc, Errors}).
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_generate_creds_hash(kz_term:api_ne_binary(), boolean(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+maybe_generate_creds_hash(_AccountId, 'false', {Doc, Errors}) ->
+    {remove_creds(Doc), Errors};
+maybe_generate_creds_hash(AccountId, 'true', {Doc, Errors}) ->
+    Username = generate_username(),
+    UpdatedDoc = set_username(Doc, Username),
+    rehash_creds(AccountId, Username, {'valid', generate_password()}, {UpdatedDoc, Errors}).
+
+%%------------------------------------------------------------------------------
+%% @doc Generate a random username beginning with `user_' and followed by 8
+%% random characters.
+%% @end
+%%------------------------------------------------------------------------------
+-spec generate_username() -> kz_term:ne_binary().
+generate_username() ->
+    lager:debug("generating random username"),
+    <<"user_", (kz_binary:rand_hex(8))/binary>>.
+
+%%------------------------------------------------------------------------------
+%% @doc Generate a random 32 char long password.
+%% @end
+%%------------------------------------------------------------------------------
+-spec generate_password() -> kz_term:ne_binary().
+generate_password() ->
+    lager:debug("generating random password"),
+    kz_binary:rand_hex(32).
+
+%%------------------------------------------------------------------------------
+%% @doc Remove `pvt_md5_auth' and `pvt_sha1_auth' from a user's doc.
+%% @end
+%%------------------------------------------------------------------------------
+-spec remove_creds(doc()) -> doc().
+remove_creds(Doc) ->
+    lager:debug("removing user creds"),
+    HashKeys = [<<"pvt_md5_auth">>, <<"pvt_sha1_auth">>, ?KEY_PASS_TIMESTAMP],
+    kz_json:delete_keys(HashKeys, Doc).
+
+%%------------------------------------------------------------------------------
+%% @doc
+%% @end
+%%------------------------------------------------------------------------------
+-spec rehash_creds(kz_term:api_ne_binary(), kz_term:ne_binary(), kz_term:ne_binary() | kz_auth_password:enforce_resp(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+rehash_creds(AccountId, Username, <<Password/binary>>, {Doc, Errors}) ->
+    rehash_creds(AccountId, Username, kz_auth_password:enforce(AccountId, Doc, Password), {Doc, Errors});
+rehash_creds(_AccountId, _Username, {'invalid', PassEnforceErrors}, {Doc, Errors}) ->
+    Msg = kz_json:from_list(
+            [{<<"message">>, <<"The provided password is non-compliant with your account's security level">>}
+            ,{<<"cause">>, <<"password">>}
+            ,{<<"details">>, PassEnforceErrors}
+            ]),
+    {Doc, [{[<<"password">>], <<"insecure">>, Msg} | Errors]};
+rehash_creds(_AccountId, Username0, {'valid', Password}, {Doc, Errors}) ->
+    Username = kz_term:to_lower_binary(Username0),
+
+    lager:debug("updating cred hashes for ~s", [Username]),
+    DocMD5 = kz_json:get_ne_value(<<"pvt_md5_auth">>, Doc),
+    DocSHA1 = kz_json:get_ne_value(<<"pvt_sha1_auth">>, Doc),
+    {MD5, SHA1} = kzd_module_utils:pass_hashes(Username, Password),
+
+    PassTS = maybe_password_timestamp(),
+
+    UpdatedDoc = kz_json:set_values([{<<"pvt_md5_auth">>, MD5}
+                                    ,{<<"pvt_sha1_auth">>, SHA1}
+                                    ]
+                                   ,kz_doc:setters(Doc
+                                                  ,[{fun set_require_password_update/2, is_password_expired(PassTS)}
+                                                   ,{fun set_password_created/2, PassTS}
+                                                   ]
+                                                  )
+                                   ),
+
+    case ?SHOULD_RESET_IDENTITY_SECRET_ON_REHASH
+        andalso (DocMD5 =/= MD5
+                 orelse DocSHA1 =/= SHA1
+                )
+    of
+        'false' ->
+            {kz_json:delete_key(<<"password">>, UpdatedDoc), Errors};
+        'true' ->
+            lager:debug("resetting identity secret"),
+            {kz_auth_identity:reset_doc_secret(kz_json:delete_key(<<"password">>, UpdatedDoc)), Errors}
+    end.
+
+maybe_password_timestamp() ->
+    case password_expiry_s() of
+        'undefined' -> 'null';
+        _-> kz_time:now_s()
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Verify that if call failover is enabled, the call forward failover is non-
+%% empty.
+%% @end
+%%------------------------------------------------------------------------------
+-spec validate_call_failover(kz_term:api_ne_binary(), kz_term:api_ne_binary(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+validate_call_failover(_AccountId, _UserId, {Doc, Errors}) ->
+    CallFailover = call_failover(Doc, kz_json:new()),
+    CallFailoverNumber = kzd_call_failover:number(CallFailover),
+    case kzd_call_failover:enabled(CallFailover)
+        andalso not kz_term:is_ne_binary(CallFailoverNumber)
+    of
+        'true' ->
+            Msg = kz_json:from_list(
+                    [{<<"message">>, <<"Call failover number cannot be empty when call failover is enabled">>}
+                    ,{<<"cause">>, CallFailoverNumber}
+                    ]),
+            {Doc, [{[<<"call_failover.number">>], <<"required">>, Msg} | Errors]};
+        'false' -> {Doc, Errors}
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Verify that if call forward is enabled, the call forward number is non-
+%% empty.
+%% @end
+%%------------------------------------------------------------------------------
+-spec validate_call_forward(kz_term:api_ne_binary(), kz_term:api_ne_binary(), kazoo_documents:doc_validation_acc()) ->
+          kazoo_documents:doc_validation_acc().
+validate_call_forward(_AccountId, _UserId, {Doc, AccErrors} = Acc) ->
+    case validate_call_forward(call_forward(Doc)) of
+        'ok' -> Acc;
+        Errors -> {Doc, Errors ++ AccErrors}
+    end.
+
+-spec validate_call_forward(kz_term:api_object()) -> 'ok' | kazoo_documents:doc_validation_errors().
+validate_call_forward('undefined') -> 'ok';
+validate_call_forward(CallForward) -> kzd_call_forward:validate(CallForward).
+
+%%------------------------------------------------------------------------------
+%% @doc As part of KZOO-309/KCRO-164 changes, a new optional `addresses' field
+%% can be added to users, devices, and accounts. Since users already had an
+%% 'addresses' (optional, non-documented) field being used to build the vcard,
+%% this function takes care of migrating the existing implementation to match
+%% the new one, if necessary.
+%%
+%% Previous implementation was `addresses = [list_of_objects]'. The new
+%% implementation is `addresses = single_object'. Take a look at 'addresses.json'
+%% schema for more details regarding the new implementation.
+%% @end
+%%------------------------------------------------------------------------------
+-spec maybe_migrate_user_addresses(doc()) -> doc().
+maybe_migrate_user_addresses(User) ->
+    Key = <<"addresses">>,
+    case kz_json:get_value(Key, User) of
+        [_|_] = AddressesList ->
+            AddressesJObj = kz_json:from_list([{<<"vcard">>, AddressesList}]),
+            lager:debug("migrating user's addresses from ~p to ~p", [AddressesList, AddressesJObj]),
+            kz_json:set_value(Key, AddressesJObj, User);
+        _ ->
+            %% 'undefined' or already using new implementation. Not need to migrate it.
+            User
+    end.
+
+-spec is_password_expired(doc() | kz_term:api_integer() | 'null') -> boolean().
+is_password_expired(User) ->
+    is_password_expired(User, password_expiry_s()).
+
+-spec password_created(doc()) -> kz_term:api_integer().
+password_created(User) ->
+    kz_json:get_integer_value([?KEY_PASS_TIMESTAMP], User).
+
+set_password_created(User, Timestamp) ->
+    kz_json:set_value(?KEY_PASS_TIMESTAMP, Timestamp, User).
+
+-spec password_expiry_s() -> kz_term:api_integer().
+password_expiry_s() ->
+    kapps_config:get_integer(?CROSSBAR_CONFIG_CAT, <<"password_expiry_s">>).
+
+is_password_expired(_CreatedS, 'undefined') ->
+    'false';
+is_password_expired('undefined', _Expiry) ->
+    lager:debug("no password timestamp, considering expired"),
+    'true';
+is_password_expired('null', _Expiry) ->
+    lager:debug("no password timestamp, considering expired"),
+    'true';
+is_password_expired(CreatedS, Expiry) when is_integer(CreatedS) ->
+    NowS = kz_time:now_s(),
+    case CreatedS + Expiry < NowS of
+        'true' ->
+            lager:info("password has expired (~p + ~p) < ~p", [CreatedS, Expiry, NowS]),
+            'true';
+        'false' ->
+            'false'
+    end;
+is_password_expired(User, Expiry) ->
+    is_password_expired(password_expiration_timestamp(User), Expiry).
+
+-spec password_expiration_timestamp(doc() | 'undefined') -> kz_term:api_integer().
+password_expiration_timestamp('undefined') -> 'undefined';
+password_expiration_timestamp(User) ->
+    password_expiration_timestamp(password_created(User), password_expiry_s()).
+
+%% no expiration
+password_expiration_timestamp(_CreatedS, 'undefined') -> 'undefined';
+%% expired in the past already
+password_expiration_timestamp('undefined', Expiry) ->
+    kz_time:now_s() - Expiry - 1;
+%% return when password expires
+password_expiration_timestamp(CreatedS, Expiry) -> CreatedS + Expiry.

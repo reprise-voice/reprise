@@ -1,0 +1,24 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.trusted.reload",
+    "description": "AMQP API for trusted.reload",
+    "properties": {
+        "Event-Category": {
+            "enum": [
+                "trusted"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "reload"
+            ],
+            "type": "string"
+        }
+    },
+    "required": [
+        "Event-Category",
+        "Event-Name"
+    ],
+    "type": "object"
+}

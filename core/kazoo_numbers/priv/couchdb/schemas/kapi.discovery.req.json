@@ -1,0 +1,42 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.discovery.req",
+    "description": "AMQP API for discovery.req",
+    "properties": {
+        "Account-ID": {
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "discovery"
+            ]
+        },
+        "Event-Name": {
+            "enum": [
+                "request"
+            ]
+        },
+        "Offset": {
+            "type": "integer"
+        },
+        "Prefix": {
+            "type": "string"
+        },
+        "Quantity": {
+            "type": "integer"
+        },
+        "Query-ID": {
+            "type": "string"
+        },
+        "Reseller-ID": {
+            "type": "string"
+        }
+    },
+    "required": [
+        "Offset",
+        "Prefix",
+        "Quantity",
+        "Query-ID"
+    ],
+    "type": "object"
+}

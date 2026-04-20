@@ -1,0 +1,34 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.globals.register",
+    "description": "AMQP API for globals.register",
+    "properties": {
+        "Event-Category": {
+            "enum": [
+                "globals"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "register"
+            ],
+            "type": "string"
+        },
+        "Name": {
+            "type": "string"
+        },
+        "State": {
+            "type": "string"
+        },
+        "Timestamp": {
+            "type": "string"
+        }
+    },
+    "required": [
+        "Event-Category",
+        "Event-Name",
+        "Name"
+    ],
+    "type": "object"
+}

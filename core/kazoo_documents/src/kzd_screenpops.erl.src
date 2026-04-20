@@ -1,0 +1,124 @@
+%%%-----------------------------------------------------------------------------
+%%% @copyright (C) 2010-2026, 2600Hz
+%%% @doc Accessors for `screenpops' document.
+%%% @end
+%%%-----------------------------------------------------------------------------
+-module(kzd_screenpops).
+
+-export([new/0]).
+-export([custom_parameters/1, custom_parameters/2, set_custom_parameters/2]).
+-export([permissions/1, permissions/2, set_permissions/2]).
+-export([permissions_all_users/1, permissions_all_users/2, set_permissions_all_users/2]).
+-export([permissions_allow/1, permissions_allow/2, set_permissions_allow/2]).
+-export([permissions_deny/1, permissions_deny/2, set_permissions_deny/2]).
+-export([post_call_extension_time/1, post_call_extension_time/2, set_post_call_extension_time/2]).
+-export([show_location_call_time/1, show_location_call_time/2, set_show_location_call_time/2]).
+-export([type_screenpops/1, type_screenpops/2, set_type_screenpops/2]).
+
+
+-include("kz_documents.hrl").
+
+-type doc() :: kz_json:object().
+-export_type([doc/0]).
+
+-define(SCHEMA, <<"screenpops">>).
+
+-spec new() -> doc().
+new() ->
+    kz_json_schema:default_object(?SCHEMA).
+
+-spec custom_parameters(doc()) -> kz_term:api_objects().
+custom_parameters(Doc) ->
+    custom_parameters(Doc, 'undefined').
+
+-spec custom_parameters(doc(), Default) -> kz_json:objects() | Default.
+custom_parameters(Doc, Default) ->
+    kz_json:get_list_value([<<"custom_parameters">>], Doc, Default).
+
+-spec set_custom_parameters(doc(), kz_json:objects()) -> doc().
+set_custom_parameters(Doc, CustomParameters) ->
+    kz_json:set_value([<<"custom_parameters">>], CustomParameters, Doc).
+
+-spec permissions(doc()) -> kz_json:object().
+permissions(Doc) ->
+    permissions(Doc, kz_json:new()).
+
+-spec permissions(doc(), Default) -> kz_json:object() | Default.
+permissions(Doc, Default) ->
+    kz_json:get_json_value([<<"permissions">>], Doc, Default).
+
+-spec set_permissions(doc(), kz_json:object()) -> doc().
+set_permissions(Doc, Permissions) ->
+    kz_json:set_value([<<"permissions">>], Permissions, Doc).
+
+-spec permissions_all_users(doc()) -> boolean().
+permissions_all_users(Doc) ->
+    permissions_all_users(Doc, 'true').
+
+-spec permissions_all_users(doc(), Default) -> boolean() | Default.
+permissions_all_users(Doc, Default) ->
+    kz_json:get_boolean_value([<<"permissions">>, <<"all_users">>], Doc, Default).
+
+-spec set_permissions_all_users(doc(), boolean()) -> doc().
+set_permissions_all_users(Doc, PermissionsAllUsers) ->
+    kz_json:set_value([<<"permissions">>, <<"all_users">>], PermissionsAllUsers, Doc).
+
+-spec permissions_allow(doc()) -> kz_term:ne_binaries().
+permissions_allow(Doc) ->
+    permissions_allow(Doc, []).
+
+-spec permissions_allow(doc(), Default) -> kz_term:ne_binaries() | Default.
+permissions_allow(Doc, Default) ->
+    kz_json:get_list_value([<<"permissions">>, <<"allow">>], Doc, Default).
+
+-spec set_permissions_allow(doc(), kz_term:ne_binaries()) -> doc().
+set_permissions_allow(Doc, PermissionsAllow) ->
+    kz_json:set_value([<<"permissions">>, <<"allow">>], PermissionsAllow, Doc).
+
+-spec permissions_deny(doc()) -> kz_term:ne_binaries().
+permissions_deny(Doc) ->
+    permissions_deny(Doc, []).
+
+-spec permissions_deny(doc(), Default) -> kz_term:ne_binaries() | Default.
+permissions_deny(Doc, Default) ->
+    kz_json:get_list_value([<<"permissions">>, <<"deny">>], Doc, Default).
+
+-spec set_permissions_deny(doc(), kz_term:ne_binaries()) -> doc().
+set_permissions_deny(Doc, PermissionsDeny) ->
+    kz_json:set_value([<<"permissions">>, <<"deny">>], PermissionsDeny, Doc).
+
+-spec post_call_extension_time(doc()) -> kz_term:api_number().
+post_call_extension_time(Doc) ->
+    post_call_extension_time(Doc, 'undefined').
+
+-spec post_call_extension_time(doc(), Default) -> number() | Default.
+post_call_extension_time(Doc, Default) ->
+    kz_json:get_float_value([<<"post_call_extension_time">>], Doc, Default).
+
+-spec set_post_call_extension_time(doc(), number()) -> doc().
+set_post_call_extension_time(Doc, PostCallExtensionTime) ->
+    kz_json:set_value([<<"post_call_extension_time">>], PostCallExtensionTime, Doc).
+
+-spec show_location_call_time(doc()) -> boolean().
+show_location_call_time(Doc) ->
+    show_location_call_time(Doc, 'false').
+
+-spec show_location_call_time(doc(), Default) -> boolean() | Default.
+show_location_call_time(Doc, Default) ->
+    kz_json:get_boolean_value([<<"show_location_call_time">>], Doc, Default).
+
+-spec set_show_location_call_time(doc(), boolean()) -> doc().
+set_show_location_call_time(Doc, ShowLocationCallTime) ->
+    kz_json:set_value([<<"show_location_call_time">>], ShowLocationCallTime, Doc).
+
+-spec type_screenpops(doc()) -> binary().
+type_screenpops(Doc) ->
+    type_screenpops(Doc, <<"notification">>).
+
+-spec type_screenpops(doc(), Default) -> binary() | Default.
+type_screenpops(Doc, Default) ->
+    kz_json:get_binary_value([<<"type_screenpops">>], Doc, Default).
+
+-spec set_type_screenpops(doc(), binary()) -> doc().
+set_type_screenpops(Doc, TypeScreenpops) ->
+    kz_json:set_value([<<"type_screenpops">>], TypeScreenpops, Doc).

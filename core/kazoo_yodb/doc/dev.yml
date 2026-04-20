@@ -1,0 +1,3 @@
+  - 'YODb - Utilities for year-only databases':
+    - 'core/kazoo_yodb/doc/README.md'
+    - 'core/kazoo_yodb/doc/maintenance.md'

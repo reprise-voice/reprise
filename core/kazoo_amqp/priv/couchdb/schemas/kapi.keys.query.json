@@ -1,0 +1,34 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.keys.query",
+    "description": "AMQP API for keys.query",
+    "properties": {
+        "Event-Category": {
+            "enum": [
+                "jwt.keys"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "query"
+            ],
+            "type": "string"
+        },
+        "Request-Identity": {
+            "type": "string"
+        },
+        "Request-Issuer": {
+            "type": "string"
+        },
+        "Server-ID": {
+            "type": "string"
+        }
+    },
+    "required": [
+        "Event-Category",
+        "Event-Name",
+        "Server-ID"
+    ],
+    "type": "object"
+}
