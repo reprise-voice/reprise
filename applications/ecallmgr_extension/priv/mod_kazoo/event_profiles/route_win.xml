@@ -1,0 +1,20 @@
+<profile name="route_win" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="targeted" />
+       <param name="amqp-profile" value="priority"/>
+	</params>
+
+	<events>
+		<event name="ROUTE_WINNER"/>
+	</events>
+
+	<routing-key>
+	    <field name="Routing-Queue" encode-part="false" />
+	</routing-key>
+
+	<logging>
+		<log name="producer" value="SWITCH_LOG_CONSOLE" />
+    </logging>
+
+</profile>

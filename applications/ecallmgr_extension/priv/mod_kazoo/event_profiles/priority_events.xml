@@ -1,0 +1,23 @@
+<profile name="priority_events" profile-type="event">
+
+	<params>
+	   <param name="amqp-exchange" value="callevt" />
+	   <param name="amqp-profile" value="priority"/>
+	</params>
+
+	<events>
+        <event name="CHANNEL_CREATE"/>
+        <event name="CHANNEL_ANSWER"/>
+        <event name="CHANNEL_BRIDGE"/>
+		<event name="CHANNEL_DESTROY"/>
+	</events>
+
+	<routing-key>
+		<field name="call" type="static" value="call" />
+		<field name="event" type="first-of"	value="kazoo_event_name|Event-Subclass|Event-Name" />
+		<field name="Unique-ID" />
+		<param name="hash-event-field" value="Unique-ID" />
+		<param name="hash-amqp-header" value="call-id" />
+	</routing-key>
+
+</profile>

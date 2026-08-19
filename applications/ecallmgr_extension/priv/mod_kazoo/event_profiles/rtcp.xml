@@ -1,0 +1,31 @@
+<profile name="rtcp" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="rtcp" />
+       <param name="amqp-profile" value="rtcp"/>
+	   <param name="producer-use-dispatcher" value="true" />
+	   <param name="producer-dispatcher-workers" value="5" />
+	</params>
+
+	<events>
+        <event name="RTCP_RECV_PACKET">
+		    <routing-key>
+		        <field name="rtcp" type="static" value="rtcp" />
+		        <field name="direction" type="static" value="received" />
+		        <field name="Account-ID" />
+		        <field name="Call-Interaction-Key"/>
+		        <field name="Unique-ID" />
+		    </routing-key>
+        </event>
+        <event name="RTCP_SEND_PACKET">
+		    <routing-key>
+		        <field name="rtcp" type="static" value="rtcp" />
+		        <field name="direction" type="static" value="sent" />
+		        <field name="Account-ID" />
+		        <field name="Call-Interaction-Key" />
+		        <field name="Unique-ID" />
+		    </routing-key>
+        </event>
+	</events>
+
+</profile>

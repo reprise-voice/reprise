@@ -1,0 +1,22 @@
+<profile name="channels" profile-type="fetch">
+
+    <fields>
+        <field name="fetch-channels" type="reference" />
+    </fields>
+
+    <connection name="primary" />
+
+    <params>
+        <param name="fetch-section" value="channels" />
+        <param name="fetch-timeout" value="3500000" />
+        <param name="amqp-exchange" value="freeswitch" />
+        <param name="amqp-profile" value="fetch" />
+    </params>
+
+    <routing-key>
+        <field name="freeswitch" type="static" value="freeswitch.channels.fetch" encode-part="false" />
+        <field name="Core-UUID" />
+        <field name="Fetch-UUID" />
+    </routing-key>
+
+</profile>

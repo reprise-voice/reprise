@@ -1,0 +1,3 @@
+<definition name="interaction-base">
+    <field name="Call-Interaction-Key" as="interaction-base" />
+</definition>

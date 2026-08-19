@@ -1,0 +1,12 @@
+<definition name="rtcp-in">
+	<field name="rtcp" type="static" serialize-as="object">
+		<fields>
+      <field name="rtcp_remote_ip" as="srcIp"/>
+      <field name="remote_media_port" as="srcPort" serialize-as="number"/>
+      <field name="dstIp" type="first-of" value="advertised_media_ip|local_media_ip"/>
+      <field name="local_media_ip" as="localIp"/>
+      <field name="local_media_port" as="dstPort" serialize-as="number"/>
+			<field name="packet" as="packet-b64" />
+    </fields>
+  </field>
+</definition>

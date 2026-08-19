@@ -1,0 +1,29 @@
+<profile name="presence" profile-type="worker">
+
+	<connection-ref>
+	   <property name="is-local" value="true"/>
+	</connection-ref>
+
+	<declare-exchanges>
+		<exchange>
+			<param name="name" value="presence" />
+			<param name="type" value="topic" />
+		</exchange>
+	</declare-exchanges>
+
+	<params>
+		<param name="channels" value="5" />
+		<param name="workers" value="5" />
+		<param name="reconnect_interval_ms" value="10000"/>
+	</params>
+
+	<publisher>
+		<params>
+			<param name="delivery-mode" value="0" />
+		</params>
+		<fields>
+			<field name="Server-ID"	value="${Core-UUID}-targeted-${AMQP-Profile-Name}&lt;${AMQP-Worker-PID}.${AMQP-Channel-ID}&gt;" />
+		</fields>
+	</publisher>
+
+</profile>

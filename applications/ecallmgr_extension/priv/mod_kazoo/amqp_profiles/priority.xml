@@ -1,0 +1,41 @@
+<profile name="priority" profile-type="worker">
+
+	<connection-ref>
+	   <property name="is-local" value="true"/>
+	</connection-ref>
+
+	<declare-exchanges>
+		<exchange>
+			<param name="name" value="freeswitch" />
+			<param name="type" value="topic" />
+		</exchange>
+		<exchange>
+			<param name="name" value="callevt" />
+			<param name="type" value="topic" />
+		</exchange>
+		<exchange>
+			<param name="name" value="targeted" />
+			<param name="type" value="direct" />
+		</exchange>
+	</declare-exchanges>
+
+	<params>
+		<param name="workers" value="5" />
+		<param name="channels" value="25" />
+		<param name="reconnect_interval_ms" value="10000"/>
+		<param name="client-side-hash-pipeline" value="false"/>
+		<param name="worker-interval-ms" value="0"/>
+		<param name="worker-cpu-yield-on-publish" value="false"/>
+	</params>
+
+	<publisher>
+		<params>
+			<param name="delivery-mode" value="0" />
+		</params>
+		<fields>
+			<field name="Server-ID"
+				value="${Core-UUID}-targeted-${AMQP-Profile-Name}&lt;${AMQP-Worker-PID}.${AMQP-Channel-ID}&gt;" />
+		</fields>
+	</publisher>
+
+</profile>

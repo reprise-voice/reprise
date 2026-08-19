@@ -1,0 +1,119 @@
+```json
+{
+   "modules": [
+       "node",
+       "authn",
+       "route",
+       "channel",
+       "config",
+       "resource",
+       "notify",
+       "conference",
+       "msg",
+       "event_stream_sup",
+
+       "extension_node_sup",  <<==== will add all extensions (amqp_sup and route_metaflow)
+          "event_amqp_sup",   <<<=== if only amqp extension wanted
+          "route_metaflow",   <<<=== if only konami-pro incall route req wanted
+   ],
+   "fs_amqp_listeners": 1,  <<==== if needed more listeners, not completed as some cfg values are handled here
+   "configuration_handlers": {
+       "amqp.conf": "ecallmgr_fs_amqp_config"
+   },
+   "capabilities": [
+       {
+           "module": "mod_conference",
+           "is_loaded": false,
+           "capability": "conference"
+       },
+       {
+           "module": "mod_channel_move",
+           "is_loaded": false,
+           "capability": "channel_move"
+       },
+       {
+           "module": "mod_http_cache",
+           "is_loaded": false,
+           "capability": "http_cache"
+       },
+       {
+           "module": "mod_dptools",
+           "is_loaded": false,
+           "capability": "dialplan"
+       },
+       {
+           "module": "mod_sofia",
+           "is_loaded": false,
+           "capability": "sip"
+       },
+       {
+           "module": "mod_spandsp",
+           "is_loaded": false,
+           "capability": "fax"
+       },
+       {
+           "module": "mod_flite",
+           "is_loaded": false,
+           "capability": "tts"
+       },
+       {
+           "module": "mod_freetdm",
+           "is_loaded": false,
+           "capability": "freetdm"
+       },
+       {
+           "module": "mod_skypopen",
+           "is_loaded": false,
+           "capability": "skype"
+       },
+       {
+           "module": "mod_dingaling",
+           "is_loaded": false,
+           "capability": "xmpp"
+       },
+       {
+           "module": "mod_skinny",
+           "is_loaded": false,
+           "capability": "skinny"
+       },
+       {
+           "module": "mod_sms",
+           "is_loaded": false,
+           "capability": "sms"
+       },
+       ===> new capability
+       {
+           "module": "mod_amqp",
+           "is_loaded": false,
+           "capability": "amqp"
+       }
+   ],
+   "publish_channel_state": false,  <<=== will not publish from event_stream
+   >>>>>> amqp.conf.xml in here so we don't show we're using it
+   >>>>>> connection is fetched from primary broker
+   "amqp": {
+       "producers": {
+           "channel_state": {
+               "events": [
+                   "CHANNEL_CREATE",
+                   "CHANNEL_ANSWER",
+                   "CHANNEL_DESTROY"
+               ],
+               "params": {
+                   "exchange-type": "topic",
+                   "exchange-name": "freeswitch",
+                   "exchange-durable": false,
+                   "content-type": "application/json",
+                   "delivery-timestamp": false,
+                   "delivery-mode": 0,
+                   "circuit_breaker_ms": "10000",
+                   "reconnect_interval_ms": "1000",
+                   "send_queue_size": "5000",
+                   "enable_fallback_format_fields": "1",
+                   "format_fields": "#FreeSWITCH,FreeSWITCH-Hostname,Event-Subclass|Event-Name,Unique-ID"
+               }
+           }
+       }
+   }
+ }
+ ```

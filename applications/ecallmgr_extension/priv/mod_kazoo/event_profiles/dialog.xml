@@ -1,0 +1,21 @@
+<profile name="dialog" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="dialog" />
+       <param name="amqp-profile" value="dialog"/>
+       <param name="event-channel-mode" value="broadcast"/>
+	</params>
+
+	<events>
+        <event name="KZ_DIALOG_EVENT">
+		    <routing-key>
+		        <field name="dialog" type="static" value="dialog" />
+		        <field name="event" type="static" value="event" />
+		        <field name="variable_ecallmgr_Account-ID" />
+		        <field name="variable_ecallmgr_Authorizing-ID" />
+		        <field name="Unique-ID" />
+		    </routing-key>
+        </event>
+	</events>
+
+</profile>

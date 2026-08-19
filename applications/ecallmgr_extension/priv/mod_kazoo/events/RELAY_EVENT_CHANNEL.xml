@@ -1,0 +1,20 @@
+<event name="RELAY_EVENT_CHANNEL">
+	<fields>
+	    <field name="Event-Category" type="static" value="relay" />
+		<field name="Event-Name" type="expand" value="${Relay-Category}.${Relay-Event}" />
+	    <field name="App-Name" type="static" value="freeswitch" />
+	    <field name="App-Version" type="static" value="1.0" />
+	    <field name="Relay-Msg-ID" as="Msg-ID" />
+		<field name="Event-Channel" />
+		<field name="Event-Channel-Event" />
+		<field name="Event-Channel-ID" />
+		<field name="Event-Channel-Key" />
+	    <field name="Relay-ID"/>
+		<field name="Relay-Event"/>
+	    <field name="Conference-Name" as="Conference-ID" />
+	    <field name="Conference-Unique-ID" as="Instance-ID" />
+	    <field name="Account-ID" type="first-of" value="Account-ID|Conference-Account-ID|variable_ecallmgr_Account-ID" />
+	    <field name="_json_event_channel_data" as="Event-Data" serialize-as="raw"/>
+		<field name="_json_event_channel_payload" as="Event-Payload" serialize-as="raw"/>
+	</fields>
+</event>

@@ -1,0 +1,76 @@
+<profile name="fetch" profile-type="worker">
+
+    <connection-ref>
+       <property name="is-local" value="true"/>
+    </connection-ref>
+
+	<declare-exchanges>
+        <exchange>
+            <param name="name" value="freeswitch" />
+            <param name="type" value="topic" />
+            <param name="durable" value="0" />
+        </exchange>
+        <exchange>
+            <param name="name" value="directory" />
+            <param name="type" value="topic" />
+            <param name="durable" value="0" />
+        </exchange>
+        <exchange>
+            <param name="name" value="kapps" />
+            <param name="type" value="topic" />
+            <param name="durable" value="0" />
+        </exchange>
+        <exchange>
+            <param name="name" value="targeted" />
+            <param name="type" value="direct" />
+            <param name="durable" value="0" />
+        </exchange>
+	</declare-exchanges>
+
+
+	<queue>
+		<param name="name" value="${Core-UUID}-targeted-${AMQP-Profile-Name}&lt;0.${AMQP-Worker-PID}.${AMQP-Channel-ID}&gt;" />
+		<!-- shared targeted queue
+		<param name="name" value="${Core-UUID}-targeted-${AMQP-Profile-Name}" />
+		-->
+
+		<binding>
+			<param name="exchange" value="targeted" />
+			<param name="routing-key" value="${Core-UUID}-targeted-${AMQP-Profile-Name}&lt;0.${AMQP-Worker-PID}.${AMQP-Channel-ID}&gt;" />
+			<!-- shared targeted queue
+			<param name="routing-key" value="${Core-UUID}-targeted-${AMQP-Profile-Name}" />
+			-->
+		</binding>
+
+		<param name="exclusive" value="false" />
+		<param name="consume-exclusive" value="false" />
+		<param name="consume-qos" value="10" />
+		<param name="consume-qos-global" value="false" />
+		<param name="consume-spawn" value="false" />
+	</queue>
+
+
+	<params>
+		<param name="receiver-dispatcher-workers" value="25" />
+		<param name="channels" value="5" />
+		<param name="query-timeout-ms" value="3500" />
+		<param name="cache-expires-ms" value="300000000" />
+	</params>
+
+	<publisher>
+		<params>
+			<param name="delivery-mode" value="0" />
+		</params>
+		<fields>
+			<field name="Server-ID"	value="${Core-UUID}-targeted-${AMQP-Profile-Name}&lt;0.${AMQP-Worker-PID}.${AMQP-Channel-ID}&gt;" />
+			<!-- shared targeted queue
+			  <field name="Server-ID" value="${Core-UUID}-targeted-${AMQP-Profile-Name}" />
+			-->
+		</fields>
+	</publisher>
+
+	<logging>
+		<log name="debug" value="SWITCH_LOG_DEBUG" />
+    </logging>
+
+</profile>
