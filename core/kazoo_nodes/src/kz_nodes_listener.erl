@@ -50,6 +50,9 @@
 
 -define(SERVER, ?MODULE).
 
+%% What `kz_amqp_util:normalize_amqp_uri/1' makes of no broker.
+-define(DISCONNECTED_BROKER, <<"disconnected">>).
+
 -define(BINDINGS, [{'nodes', ['federate']}
                   ,{'self', []}
                   ]).
@@ -490,10 +493,22 @@ notify_new(#kz_node{node=NodeName}=Node) ->
 notify_heartbeat(#kz_node{}=Node) ->
     kz_nodes_notify:notify_heartbeat(Node).
 
+%%------------------------------------------------------------------------------
+%% @doc Remember the zone of the broker an advertised node was heard on.
+%%
+%% The node's broker is normalized already (`get_amqp_broker/1', in
+%% `from_json/2'). A node heard while this one's own broker connection was
+%% down -- a local heartbeat carries no `AMQP-Broker', and takes this node's
+%% primary broker, which is `undefined' until the connection is back -- has
+%% the broker `<<"disconnected">>', which names no broker to remember a zone
+%% for. Normalizing that again crashed this listener: `amqp_uri' cannot parse
+%% it (the lab of 2026-09-28, a node thawed after its broker dropped it).
+%% @end
+%%------------------------------------------------------------------------------
 -spec maybe_add_zone(kz_types:kz_node(), nodes_state()) -> nodes_state().
 maybe_add_zone(#kz_node{zone='undefined'}, #state{}=State) -> State;
-maybe_add_zone(#kz_node{zone=Zone, broker=B}, #state{zones=Zones}=State) ->
-    Broker = kz_amqp_util:normalize_amqp_uri(B),
+maybe_add_zone(#kz_node{broker=?DISCONNECTED_BROKER}, #state{}=State) -> State;
+maybe_add_zone(#kz_node{zone=Zone, broker=Broker}, #state{zones=Zones}=State) ->
     case props:get_value(Broker, Zones) of
         'undefined' -> State#state{zones=[{Broker, Zone} | Zones]};
         _ -> State
@@ -549,3 +564,30 @@ create_node(Heartbeat, Zone, Version, MD5) ->
 notify_waiting([]) -> 'ok';
 notify_waiting(Waiting) ->
     kz_process:spawn(fun() -> [gen_server:reply(Pid, 'ok') || Pid <- Waiting] end).
+
+%%%=============================================================================
+%%% Eunit Tests
+%%%=============================================================================
+
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+
+%% A node heard while this node's broker connection was down names no
+%% broker to remember a zone for, and is no crash (the lab of 2026-09-28).
+maybe_add_zone_test_() ->
+    Broker = kz_amqp_util:normalize_amqp_uri(<<"amqp://guest:guest@broker.example:5672">>),
+    State = #state{zones=[]},
+    Heard = fun(B, Zone) -> #kz_node{node='kazoo_apps@a', broker=B, zone=Zone} end,
+    [?_assertEqual(State
+                  ,maybe_add_zone(Heard(kz_amqp_util:normalize_amqp_uri('undefined'), 'local'), State)
+                  )
+    ,?_assertEqual(State, maybe_add_zone(Heard(Broker, 'undefined'), State))
+    ,?_assertEqual([{Broker, 'local'}]
+                  ,(maybe_add_zone(Heard(Broker, 'local'), State))#state.zones
+                  )
+     %% A broker's zone is the first one heard for it.
+    ,?_assertEqual([{Broker, 'local'}]
+                  ,(maybe_add_zone(Heard(Broker, 'remote'), State#state{zones=[{Broker, 'local'}]}))#state.zones
+                  )
+    ].
+-endif.
