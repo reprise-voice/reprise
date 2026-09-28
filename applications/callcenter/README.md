@@ -1112,8 +1112,9 @@ the same instant can still reach Kamailio in either order.
 
 A caller in a queue is three things on three nodes: the queue's callflow
 action on the node that routed the call, their member on the shard's member
-queue, and their actor on the node holding the shard. Only the actor sends
-the caller's channel anything, and it decides one message at a time.
+queue, and their actor on the node holding the shard. Only the actor decides
+what the caller's channel is sent, one message at a time, and all of it goes
+out through the one publisher its call is given, on one channel.
 
 ### The caller
 
@@ -1158,6 +1159,44 @@ property test): media only while waiting; the answer's marks, and the
 `noop` that shows they ran, only as a leg answers; the bridge only out of
 the wait that follows, never in the step that marked; the recording only
 while connected; the departure's marks and barrier only as it leaves.
+
+**Publishing.** The actor publishes nothing itself. `kz_amqp_assignments`
+gives every process that publishes a channel of its own for the rest of its
+life, so an actor publishing its own commands was a channel per queued call,
+and a node with a couple of thousand callers would reach the broker's
+`channel_max` for its connection (2047 on RabbitMQ), past which the broker
+refuses every new channel (`out_of_channel_numbers`) and no actor can ring
+or command anybody. Instead each node runs a few call publishers
+(`callcenter/call/publishers`): `call_publishers` of them
+(`system_config/callcenter`, 16, at most 256), each asking for one channel
+as it starts. The actor hands everything it would publish -- every command
+to the caller's control queue, the offer's `originate_req`, the legs'
+hangups, `member_continue` and `callflow.resume` -- to the publisher its call
+id hashes to (`erlang:phash2(call_id, call_publishers)`), as a message, in
+the order the core decided it. One sender, one publisher and one channel
+keep that order to the broker, and the last four, which went through the
+node's worker pool -- whichever worker was free, on its channel -- now go
+out on the same channel as the caller's commands. A node's channels for its
+calls are `call_publishers`, however many calls it holds.
+
+What is sent to a process stays with the actor: the dispatcher's replies and
+the shard's word that the caller left go from the actor's own process, so
+that the dispatcher, which watches the actor, never hears the actor's end
+before its last reply. So a reply can overtake a publish decided in the
+same step: the dispatcher can hear a ring's no-answer before the legs'
+hangups reach the broker, as it could when those went through the worker
+pool. The answers to what the actor asks still come to the actor's own
+address, which it names in what it hands over. A shard asking its calls to
+be steady before a handover hears from each actor through its publisher,
+behind what the actor handed it, so nothing a call decided before it
+answered is still waiting to go out when the next holder looks at the
+caller. What a call decides after that and before its shard's tree ends can
+still be queued, and goes out behind it. A
+publisher runs each call's work under a catch -- a crash is logged against
+the call, and the calls queued behind it lose nothing -- and one its
+supervisor is starting again drops what is sent to it, logged. A node that
+runs no publishers, having no broker, publishes from the actor, where every
+publish is unavailable anyway.
 
 **Waiting.** The queue's greeting, then hold (`kz_endless_playback`, whose
 input callback reads the exit keys while it plays), and the announcements;
@@ -1331,8 +1370,8 @@ A caller handed to an actor that does not know them is *Takeover*'s.
 | dispatcher | actor | `Join` (a caller joined, or was handed over: `resumed`), `Ring`, `CallOff`, `QueueGone`, `Positioned`, `Adopt` (an answered call the sweep found) |
 | actor | dispatcher | an offer's `OfferRinging`, `Answered`, `OfferNoAnswer`, `Busy`, `Rejected`, `Failed` and `Ended`; `Present` for a caller handed over |
 | actor | shard | `CallerLeft`: a caller who left of their own accord, settled |
-| actor | action | `member_continue`, answered with `member_continuing` |
-| actor | switch | the caller's commands on their control queue, one `originate_req` per offer, `call_command` hangups of legs |
+| actor | action | `member_continue`, through the call's publisher, answered with `member_continuing` at the actor's own address |
+| actor | switch | the caller's commands on their control queue, one `originate_req` per offer, `call_command` hangups of legs, all through the call's publisher on its one channel |
 
 ## Reconciliation
 
@@ -1766,7 +1805,7 @@ cluster-wide view of who holds what.
 |---|---|
 | `callcenter` | the supervision tree, and the one line that names how an agent is rung |
 | `callcenter/types` | the types the dispatcher, the call path and the agent control agree on |
-| `callcenter/call/*` | the call path: each waiting caller's actor, the pure core it runs, the registry, the reply listener, and finding out about a caller handed over (*Call path*, *Takeover*) |
+| `callcenter/call/*` | the call path: each waiting caller's actor, the pure core it runs, the registry, the reply listener, the publishers every actor publishes through, and finding out about a caller handed over (*Call path*, *Takeover*) |
 | `callcenter/dispatcher` | one account's waiting lists, offers, timers and events |
 | `callcenter/dispatcher/arrival` | a caller reaching the dispatcher, including a redelivery or an answered call a node that died left behind |
 | `callcenter/dispatcher/offers` | an offer from sent to settled: the replies, the misses, the end, and a caller leaving |
@@ -1822,7 +1861,7 @@ cluster-wide view of who holds what.
 | `cb_queues` | `/v2/accounts/{id}/queues` |
 | `cb_agents` | `/v2/accounts/{id}/agents`, and a queue's tiers |
 | `callcenter_maintenance` | the `sup` commands |
-| `callcenter_ffi.erl` | the shard hash, the queue declaration with its counts, the shard count's marker queue, the node's own values, where a callflow action can be reached, the exit signal a listener acts on, the stops a supervised process ends with, and a call actor's reach: its events, its address, its raw commands and a callflow's branches |
+| `callcenter_ffi.erl` | the shard hash, the queue declaration with its counts, the shard count's marker queue, the node's own values, where a callflow action can be reached, the exit signal a listener acts on, the stops a supervised process ends with, a call actor's reach: its events, its address, its raw commands and a callflow's branches, and a call publisher's: its channel, a `kapi` publish from its own process and a run that cannot crash it |
 | `callcenter_closed_ffi.erl` | the node-wide table behind `callcenter/closed` |
 | `callcenter_api_ffi.erl` | registering the application's own CouchDB views, now and on every refresh |
 | `kapi_callcenter.erl` | the application's AMQP event family: the contract with every other application on the bus |

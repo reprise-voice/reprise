@@ -31,26 +31,21 @@ import kazoo/call.{type Call}
 import kazoo/doc.{type Value}
 import kazoo/kazoo
 
-/// Start the recording of a queue call on the caller's channel.
-pub fn start(
+/// The recording of a queue call answered at `at`, with the account's
+/// settings as they are now: what `call.start_recording` starts on the
+/// caller's channel. Read by the caller's actor, which hands the start to
+/// its publisher (`callcenter/call/publishers`) with the settings already in
+/// it, so that the publisher, which runs every call's work in turn, does not
+/// read the account.
+pub fn of_answer(
   caller: Call,
   account_id: String,
   queue_id: String,
   call_id: String,
   agent_id: String,
   at: Int,
-) -> Nil {
-  call.start_recording(
-    caller,
-    of_call(
-      account(account_id),
-      network(caller),
-      queue_id,
-      call_id,
-      agent_id,
-      at,
-    ),
-  )
+) -> call.Recording {
+  of_call(account(account_id), network(caller), queue_id, call_id, agent_id, at)
 }
 
 /// The recording of one answer of one queue call.

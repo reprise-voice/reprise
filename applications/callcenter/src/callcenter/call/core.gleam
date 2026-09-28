@@ -7,7 +7,9 @@
 //// order. Nothing here sends a command, reads a document or looks at a clock
 //// of its own, so every rule below is something a test reads without a
 //// switch -- and the one process that performs the effects is the only
-//// thing that ever commands the caller's channel.
+//// thing that ever commands the caller's channel, through the one
+//// publisher its call is given (`call/publishers`), in the order decided
+//// here.
 ////
 //// **The call model.** The caller stays on hold on their own channel from
 //// the moment they join until they leave, and nothing ever parks or

@@ -13,10 +13,22 @@
 //// the switch's events, `ecallmgr`'s and the callflow action's answers --
 //// into inputs, takes the step, performs the effects in order from this
 //// one process, and sleeps until the next input or the call's next
-//// deadline, whichever is first. So the caller's channel is sent commands
-//// by one process only, one message at a time, in the order they were
-//// decided, and the first message handled of an answer, a key and a
-//// call-off is the one that stands.
+//// deadline, whichever is first. So what the caller's channel is sent is
+//// decided by one process only, one message at a time, and the first
+//// message handled of an answer, a key and a call-off is the one that
+//// stands.
+////
+//// **What it publishes** it does not publish itself. A process that
+//// publishes is given an AMQP channel of its own for the rest of its life,
+//// and an actor per queued call would be a channel per queued call. Every
+//// command to the caller, the offer's `originate_req`, the legs' hangups,
+//// `member_continue` and `callflow.resume` is handed, in the order it was
+//// decided, to the one publisher of the node's pool that the call id
+//// hashes to (`callcenter/call/publishers`), which sends it on its own
+//// channel. One sender, one publisher and one channel keep the order. What
+//// is addressed to a process -- the dispatcher's replies, the shard's word
+//// that the caller left -- the actor sends itself, so that it reaches the
+//// dispatcher before the actor's own end does.
 ////
 //// **What it hears.** The caller's events and each of its offers' legs'
 //// arrive through `kz_events:bind_call_id`, bound from here, in this
@@ -27,12 +39,14 @@
 ////
 //// **The effects' reach.** Everything outside the process goes through
 //// `Io`, which is the node on a node and a recorder in the tests: the
-//// clocks, the queue document, the agents' endpoints, the bindings, and
-//// `perform`, which carries out one of `core`'s effects.
+//// clocks, the queue document, the agents' endpoints, the bindings,
+//// `perform`, which carries out one of `core`'s effects, and `once_sent`,
+//// which waits for what was handed to the call's publisher to go out.
 
 import callcenter/announce
 import callcenter/call/core
 import callcenter/call/originate
+import callcenter/call/publishers
 import callcenter/call/recovery
 import callcenter/call/snapshots
 import callcenter/member as member_message
@@ -157,8 +171,17 @@ pub type Io {
     address: fn() -> Option(String),
     /// Carry out one effect.
     perform: fn(Context, core.Effect) -> Nil,
+    /// Run a function once everything already performed for a call id has
+    /// gone out: behind it at the call's publisher on a node, at once in
+    /// the tests.
+    once_sent: fn(String, fn() -> Nil) -> Nil,
   )
 }
+
+/// How an effect's publishing is handed over: the function that publishes,
+/// run from the call's publisher (`callcenter/call/publishers.of_call`).
+pub type Publish =
+  fn(fn() -> Nil) -> Nil
 
 type State {
   State(
@@ -176,8 +199,6 @@ type State {
     /// The generation of the one wake-up that counts.
     generation: Int,
     timer: Option(process.Timer),
-    /// Whether this process has asked for an AMQP channel of its own yet.
-    channel: Bool,
     /// Started after the call's actors crashed `quarantine_after` times:
     /// whatever the caller joins for, they are handed back.
     quarantined: Bool,
@@ -213,7 +234,6 @@ pub fn start(
         bound: set.new(),
         generation: 0,
         timer: None,
-        channel: False,
         quarantined: strikes >= quarantine_after,
         steadying: [],
       )
@@ -251,16 +271,6 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       ))
     Wake(generation) if generation != state.generation -> actor.continue(state)
     _ -> {
-      // Asked on the first message and not in the initialiser, which the
-      // registry waits on: everything this process publishes goes out on
-      // one channel, in the order it was sent.
-      let state = case state.channel {
-        True -> state
-        False -> {
-          let _ = ensure_channel()
-          State(..state, channel: True)
-        }
-      }
       let now = state.io.now()
       let clock = core.Clock(now: now, now_ms: state.io.monotonic_ms())
       let #(state, input, request) = input_of(state, message)
@@ -282,12 +292,18 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
   }
 }
 
-/// Tell whoever is waiting for the call to be steady that it is, if it is.
+/// Tell whoever is waiting for the call to be steady that it is, if it is,
+/// once what the actor has handed its publisher so far has gone out: a
+/// shard handed over on the word of a call whose last marks were still
+/// waiting at the publisher could have the next holder read the caller's
+/// channel before they land.
 fn steadied(state: State) -> State {
   case state.steadying, core.steady(state.call) {
     [], _ | _, False -> state
     waiting, True -> {
-      list.each(waiting, process.send(_, Nil))
+      list.each(waiting, fn(done) {
+        state.io.once_sent(state.call.call_id, fn() { process.send(done, Nil) })
+      })
       State(..state, steadying: [])
     }
   }
@@ -608,35 +624,50 @@ pub fn live(kz: Kazoo, left: fn(Member, CancelReason) -> Nil) -> Io {
       })
     },
     address: fn() { reply_address() |> option.from_result },
-    perform: fn(context, effect) { perform(context, effect, left) },
+    perform: fn(context: Context, effect) {
+      perform(context, effect, left, publishers.of_call(context.call_id))
+    },
+    once_sent: fn(call_id, then) { publishers.of_call(call_id)(then) },
   )
 }
 
-/// Carry out one effect on a node.
+/// Carry out one effect on a node. What it publishes is handed to
+/// `publish`, in the order the effects come; what it sends to a process is
+/// sent from the calling one, the actor.
 pub fn perform(
   context: Context,
   effect: core.Effect,
   left: fn(Member, CancelReason) -> Nil,
+  publish: Publish,
 ) -> Nil {
   case effect, context.caller {
-    core.Play(media), Some(caller) -> call.play(caller, media)
-    core.Announce(items), Some(caller) -> announce.play(caller, items)
-    core.Hold(moh), Some(caller) -> announce.resume_hold(caller, moh)
-    core.Bridge(leg), Some(caller) -> bridge(context, caller, leg)
-    core.Mark(vars), Some(caller) -> command(context, caller, set_now(vars))
+    core.Play(media), Some(caller) -> publish(fn() { call.play(caller, media) })
+    core.Announce(items), Some(caller) ->
+      publish(fn() { announce.play(caller, items) })
+    core.Hold(moh), Some(caller) ->
+      publish(fn() { announce.resume_hold(caller, moh) })
+    core.Bridge(leg), Some(caller) ->
+      publish(fn() { bridge(context, caller, leg) })
+    core.Mark(vars), Some(caller) ->
+      publish(fn() { command(context, caller, set_now(vars)) })
     core.Confirm(msg_id), Some(caller) ->
-      command(context, caller, noop(msg_id, "now"))
+      publish(fn() { command(context, caller, noop(msg_id, "now")) })
     core.Record(agent_id, at), Some(caller) ->
       case context.member {
         Some(member) -> {
-          recording.start(
-            caller,
-            member.account_id,
-            member.queue_id,
-            member.call_id,
-            agent_id,
-            at,
-          )
+          // The account's settings are read here, in the actor: the
+          // publisher runs every call's work in turn, and waits on as little
+          // as it can.
+          let recorded =
+            recording.of_answer(
+              caller,
+              member.account_id,
+              member.queue_id,
+              member.call_id,
+              agent_id,
+              at,
+            )
+          publish(fn() { call.start_recording(caller, recorded) })
           // The passage's record names the recording, which is what finds
           // media_mgr's `call_recording` document of it again.
           records.recorded(
@@ -646,14 +677,15 @@ pub fn perform(
         }
         None -> Nil
       }
-    core.HangUpCaller, Some(caller) -> call.hangup(caller)
+    core.HangUpCaller, Some(caller) -> publish(fn() { call.hangup(caller) })
     core.Barrier(msg_id), Some(caller) ->
-      command(context, caller, noop(msg_id, "flush"))
+      publish(fn() { command(context, caller, noop(msg_id, "flush")) })
     core.Probe(msg_id), Some(caller) ->
-      command(context, caller, noop(msg_id, "now"))
+      publish(fn() { command(context, caller, noop(msg_id, "now")) })
     core.Originate(_offer, endpoints, _ring_timeout_s), _ ->
-      originate_legs(context, endpoints)
-    core.HangUpLegs(legs), _ -> list.each(legs, hang_up_leg(context, _))
+      publish(fn() { originate_legs(context, endpoints) })
+    core.HangUpLegs(legs), _ ->
+      publish(fn() { list.each(legs, hang_up_leg(context, _)) })
     core.Tell(offer, reply), _ ->
       case context.reply_to {
         Some(reply_to) -> process.send(reply_to, #(offer, reply))
@@ -677,8 +709,10 @@ pub fn perform(
         Some(member) -> left(member, reason)
         None -> Nil
       }
-    core.Continue(handoff, branch), _ -> continue(context, handoff, branch)
-    core.Resume(handoff, branch), _ -> resume(context, handoff, branch)
+    core.Continue(handoff, branch), _ ->
+      publish(fn() { continue(context, handoff, branch) })
+    core.Resume(handoff, branch), _ ->
+      publish(fn() { resume(context, handoff, branch) })
     core.Log(message), _ -> system.log(message)
     core.LogError(message), _ -> system.log_error(message)
     // A command for a caller this actor never had the call of: nothing to
@@ -792,7 +826,11 @@ fn originate_legs(context: Context, endpoints: List(Value)) -> Nil {
           originate.request(ring, endpoints),
         )
       case
-        amqp.publish(module: "resource", function: "originate_req", payload:)
+        publishers.publish(
+          module: "resource",
+          function: "originate_req",
+          payload:,
+        )
       {
         Ok(Nil) -> Nil
         Error(reason) ->
@@ -850,7 +888,7 @@ fn hang_up_leg(context: Context, leg: String) -> Nil {
         ),
       ]),
     )
-  case amqp.publish(module: "switch", function: "fs_command", payload:) {
+  case publishers.publish(module: "switch", function: "fs_command", payload:) {
     Ok(Nil) -> Nil
     Error(reason) ->
       system.log_error(
@@ -900,7 +938,7 @@ fn continue(context: Context, handoff: core.Handoff, branch: String) -> Nil {
           ]),
         )
       case
-        amqp.publish_to(
+        publishers.publish_to(
           target: reply_to,
           module: system.category,
           function: "member_continue",
@@ -986,7 +1024,9 @@ fn resume(context: Context, handoff: core.Handoff, branch: String) -> Nil {
             #("Call-ID", doc.String(member.call_id)),
           ]),
         )
-      case amqp.publish(module: "callflow", function: "resume", payload:) {
+      case
+        publishers.publish(module: "callflow", function: "resume", payload:)
+      {
         Ok(Nil) -> Nil
         Error(reason) ->
           system.log_error(
@@ -1016,6 +1056,3 @@ fn reply_address() -> Result(String, Nil)
 
 @external(erlang, "callcenter_ffi", "send_command")
 fn send_command(caller: Call, json: String) -> Result(Nil, String)
-
-@external(erlang, "callcenter_ffi", "ensure_channel")
-fn ensure_channel() -> Bool

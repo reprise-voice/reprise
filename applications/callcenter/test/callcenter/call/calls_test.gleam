@@ -25,6 +25,7 @@ fn io() -> actor.Io {
     audit: fn(_call_ids) { [] },
     address: fn() { None },
     perform: fn(_context, _effect: core.Effect) { Nil },
+    once_sent: fn(_call_id, then) { then() },
   )
 }
 

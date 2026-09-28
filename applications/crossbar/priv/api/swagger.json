@@ -14079,6 +14079,13 @@
                     "minimum": 15,
                     "type": "integer"
                 },
+                "call_publishers": {
+                    "default": 16,
+                    "description": "How many processes on each node publish what the call actors send, each on an AMQP channel of its own; all of one call's messages go through the same one. Read as the application starts",
+                    "maximum": 256,
+                    "minimum": 1,
+                    "type": "integer"
+                },
                 "default_agent_no_answer_status": {
                     "default": "on_break",
                     "description": "Availability an agent is moved to after too many missed offers, when a queue does not set its own",

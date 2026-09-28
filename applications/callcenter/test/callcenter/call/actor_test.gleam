@@ -1,18 +1,23 @@
 //// The shell around one call's core: what it hears turned into inputs, the
-//// effects performed in order from the one process, and the process gone
-//// when the call is over. `Io` records instead of commanding a switch.
+//// effects performed in order from the one process -- what they publish
+//// handed to the call's publisher -- and the process gone when the call is
+//// over. `Io` records instead of commanding a switch.
 
 import callcenter/call/actor
 import callcenter/call/core
 import callcenter/call/originate
+import callcenter/call/publishers
 import callcenter/call/recovery
 import callcenter/types.{type OfferId, type OfferReply}
-import gleam/erlang/process.{type Subject}
+import gleam/erlang/process.{type Pid, type Subject}
 import gleam/erlang/reference
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/order
+import gleam/string
 import kazoo/doc
 import kazoo/events
+import kazoo/testing/channel
 import support/cluster
 
 const call_id = "caller-leg"
@@ -52,6 +57,7 @@ fn io(did: Subject(Did)) -> actor.Io {
     audit: fn(_call_ids) { [] },
     address: fn() { Some("pid://<0.1.0>/call_replies") },
     perform: fn(_context, effect) { process.send(did, Performed(effect)) },
+    once_sent: fn(_call_id, then) { then() },
   )
 }
 
@@ -392,6 +398,166 @@ pub fn an_actor_says_when_its_call_is_steady_test() {
   assert process.receive(steady, 100) == Error(Nil)
   process.send(to, event(prefix <> "-1", "CHANNEL_CREATE", []))
   assert process.receive(steady, 1000) == Ok(Nil)
+}
+
+// --- Publishing ---------------------------------------------------------------
+
+/// A pool of `count` publishers under the test's own prefix, each recording
+/// what it sends the caller (`kazoo/testing/channel`) from the moment it
+/// asks for its channel, and telling `channels` that it asked.
+fn recording_pool(
+  label: String,
+  count: Int,
+  channels: Subject(Pid),
+) -> publishers.Pool {
+  let pool =
+    publishers.Pool(
+      prefix: "callcenter_test_actor_publishers_" <> label <> "_",
+      count: count,
+    )
+  // The pool is linked to the test's process and goes with it.
+  let assert Ok(_started) =
+    publishers.start(
+      pool,
+      publishers.Io(channel: fn() {
+        channel.record()
+        process.send(channels, process.self())
+        True
+      }),
+    )
+  pool
+}
+
+/// The node's `Io` as far as publishing goes: the effects performed by
+/// `actor.perform` -- the real one -- through the pool, and recorded too.
+fn io_through(did: Subject(Did), pool: publishers.Pool) -> actor.Io {
+  actor.Io(
+    ..io(did),
+    perform: fn(context: actor.Context, effect) {
+      process.send(did, Performed(effect))
+      actor.perform(
+        context,
+        effect,
+        fn(_member, _reason) { Nil },
+        publishers.send(pool, context.call_id, _),
+      )
+    },
+    once_sent: fn(call_id, then) { publishers.send(pool, call_id, then) },
+  )
+}
+
+fn member_of(call: String) -> types.Member {
+  let member = member()
+  types.Member(
+    ..member,
+    call_id: call,
+    call: doc.set(member.call, ["Call-ID"], doc.String(call)),
+  )
+}
+
+/// What the call's publisher has sent the callers it serves, and which
+/// process it is, asked behind everything the call handed it already.
+fn sent_by_publisher_of(
+  pool: publishers.Pool,
+  call: String,
+) -> #(Pid, List(channel.Command)) {
+  let answer = process.new_subject()
+  publishers.send(pool, call, fn() {
+    process.send(answer, #(process.self(), channel.sent()))
+  })
+  let assert Ok(sent) = process.receive(answer, 1000)
+  sent
+}
+
+/// Two callers' actors command their callers from neither of their own
+/// processes: the greeting each is played goes out from the publisher its
+/// call hashes to, and the only channels asked for are the pool's.
+pub fn an_actors_commands_go_out_from_its_calls_publisher_test() {
+  let did = process.new_subject()
+  let channels = process.new_subject()
+  let pool = recording_pool("commands", 2, channels)
+  let replies = process.new_subject()
+  // One call on each publisher, so that both have been heard from.
+  let calls =
+    [0, 1]
+    |> list.map(fn(index) {
+      let assert Ok(call) =
+        list.find(
+          ["caller-0", "caller-1", "caller-2", "caller-3", "caller-4"],
+          fn(call) { publishers.index(call, 2) == index },
+        )
+      call
+    })
+  let actors =
+    list.map(calls, fn(call) {
+      let assert Ok(started) =
+        actor.start(io_through(did, pool), cluster.account_id, call, 0)
+      process.send(started.data, actor.Join(member_of(call), False, replies))
+      // Answered through the publisher, behind the greeting.
+      let steady = process.new_subject()
+      process.send(started.data, actor.Steady(steady))
+      assert process.receive(steady, 1000) == Ok(Nil)
+      started.pid
+    })
+
+  let publisher_pids =
+    [0, 1]
+    |> list.map(fn(index) {
+      let assert Ok(pid) = process.named(publishers.name(pool, index))
+      pid
+    })
+  list.each(calls, fn(call) {
+    let #(pid, sent) = sent_by_publisher_of(pool, call)
+    let assert Ok(own) =
+      publisher_pids |> list.drop(publishers.index(call, 2)) |> list.first
+    assert pid == own
+    assert list.contains(sent, channel.Command("play", "welcome"))
+  })
+  let asked = drain_pids(channels, [])
+  assert list.sort(asked, compare_pids)
+    == list.sort(publisher_pids, compare_pids)
+  assert list.all(actors, fn(actor_pid) { !list.contains(asked, actor_pid) })
+}
+
+/// A shard waiting for its calls to be steady hears from a waiting caller's
+/// actor only once the call's publisher has sent what the actor handed it:
+/// a publisher held up holds the answer up with it.
+pub fn an_actor_is_steady_once_its_publisher_has_sent_everything_test() {
+  let did = process.new_subject()
+  let channels = process.new_subject()
+  let pool = recording_pool("steady", 1, channels)
+  let gate = process.new_subject()
+  publishers.send(pool, "somebody-else", fn() {
+    let release = process.new_subject()
+    process.send(gate, release)
+    let _ = process.receive(release, 2000)
+    Nil
+  })
+  let assert Ok(release) = process.receive(gate, 1000)
+
+  let replies = process.new_subject()
+  let assert Ok(started) =
+    actor.start(io_through(did, pool), cluster.account_id, call_id, 0)
+  process.send(started.data, actor.Join(member(), False, replies))
+  let steady = process.new_subject()
+  process.send(started.data, actor.Steady(steady))
+  assert process.receive(steady, 100) == Error(Nil)
+
+  process.send(release, Nil)
+  assert process.receive(steady, 1000) == Ok(Nil)
+  let #(_pid, sent) = sent_by_publisher_of(pool, call_id)
+  assert sent == [channel.Command("play", "welcome")]
+}
+
+fn drain_pids(subject: Subject(Pid), acc: List(Pid)) -> List(Pid) {
+  case process.receive(subject, 0) {
+    Ok(one) -> drain_pids(subject, [one, ..acc])
+    Error(Nil) -> list.reverse(acc)
+  }
+}
+
+fn compare_pids(a: Pid, b: Pid) -> order.Order {
+  string.compare(string.inspect(a), string.inspect(b))
 }
 
 // --- What is heard ------------------------------------------------------------

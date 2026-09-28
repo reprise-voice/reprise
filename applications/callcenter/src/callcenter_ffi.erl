@@ -53,8 +53,14 @@
         ,kapi_payload/1
         ,reply_address/0
         ,send_command/2
-        ,ensure_channel/0
         ,callflow_branches/2
+        ]).
+
+%% The call publishers': see `callcenter/call/publishers'.
+-export([ensure_channel/0
+        ,publish_here/3
+        ,publish_here_to/4
+        ,run_guarded/1
         ]).
 
 %%------------------------------------------------------------------------------
@@ -576,6 +582,9 @@ reply_address() ->
 %% `Call-ID' and the caller's own headers added. `Json' is the command's
 %% fields. Anything `kazoo_gleam' has no function for -- a `noop' with a
 %% known `Msg-ID', `connect_leg', a `set' run at once -- goes this way.
+%% On a node with a broker the calling process is the call's publisher
+%% (`callcenter/call/publishers'), running what the call's actor handed it,
+%% and never the actor.
 %% @end
 %%------------------------------------------------------------------------------
 -spec send_command(any(), binary()) -> {'ok', 'nil'} | {'error', binary()}.
@@ -593,11 +602,64 @@ send_command(Call, Json) ->
 %%------------------------------------------------------------------------------
 %% @doc Make sure the calling process has an AMQP channel of its own, so that
 %% everything it publishes goes out on one channel, in the order it was
-%% sent. `False' where there is no broker.
+%% sent. `False' where there is no broker, or none within five seconds: the
+%% request stands, and `kz_amqp_assignments' hands the process a channel
+%% when it has one.
+%%
+%% A call publisher's (`callcenter/call/publishers'), asked once as it
+%% starts. `kz_amqp_assignments' gives every process that publishes a
+%% channel of its own for the rest of its life, whether it asks here or
+%% not, which is why a call actor publishes nothing itself.
 %% @end
 %%------------------------------------------------------------------------------
 -spec ensure_channel() -> boolean().
 ensure_channel() -> channel(5000).
+
+%%------------------------------------------------------------------------------
+%% @doc Publish through `kapi_<Module>:publish_<Function>/1' from the calling
+%% process, on the calling process's own channel.
+%%
+%% `kazoo/amqp' publishes through `kz_amqp_worker', which hands each message
+%% to whichever worker of the node's pool is free, on that worker's channel:
+%% two messages published one after the other may go out on two channels,
+%% and nothing orders two channels. A call's publisher
+%% (`callcenter/call/publishers') sends everything of one call on its one
+%% channel, and this is how the call's `originate_req', its legs' hangups and
+%% its `callflow.resume' get there. What the `kapi' function refuses or the
+%% channel throws is an error, as it is from the pool; no platform -- the
+%% test suite -- is `unavailable', as it is there.
+%% @end
+%%------------------------------------------------------------------------------
+-spec publish_here(binary(), binary(), binary()) -> {'ok', 'nil'} | {'error', binary()}.
+publish_here(Module, Function, Json) ->
+    publish_with(Module, Function, 1, fun(Publish, Payload) -> Publish(Payload) end, Json).
+
+%%------------------------------------------------------------------------------
+%% @doc The same through `kapi_<Module>:publish_<Function>/2', at one queue:
+%% how a call's `member_continue' reaches the callflow action's
+%% Controller-Queue.
+%% @end
+%%------------------------------------------------------------------------------
+-spec publish_here_to(binary(), binary(), binary(), binary()) -> {'ok', 'nil'} | {'error', binary()}.
+publish_here_to(Target, Module, Function, Json) ->
+    publish_with(Module, Function, 2, fun(Publish, Payload) -> Publish(Target, Payload) end, Json).
+
+%%------------------------------------------------------------------------------
+%% @doc Run a function and answer what it threw rather than throwing it.
+%%
+%% A call publisher runs every call's work queued on it in turn, and one
+%% call's crash must not take the work of the calls behind it down with the
+%% publisher's mailbox.
+%% @end
+%%------------------------------------------------------------------------------
+-spec run_guarded(fun(() -> any())) -> {'ok', 'nil'} | {'error', binary()}.
+run_guarded(Fun) ->
+    try Fun() of
+        _ -> {'ok', 'nil'}
+    catch
+        Class:Reason ->
+            {'error', iolist_to_binary(io_lib:format("~s: ~0P", [Class, Reason, 30]))}
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc The flows the callflow running a call would go on into on each of
@@ -640,6 +702,48 @@ assigned(Timeout) ->
         _Assignment -> 'true'
     catch
         _E:_R -> 'false'
+    end.
+
+-spec publish_with(binary(), binary(), 1 | 2, fun((fun(), any()) -> any()), binary()) ->
+          {'ok', 'nil'} | {'error', binary()}.
+publish_with(Module, Function, Arity, Apply, Json) ->
+    case kapi_publisher(Module, Function, Arity) of
+        {'error', _Reason}=Error -> Error;
+        {'ok', Publish} ->
+            %% Decoded as `kazoo_gleam' decodes a payload for `kazoo/amqp'.
+            try Apply(Publish, kz_json:from_map(json:decode(Json))) of
+                'ok' -> {'ok', 'nil'};
+                {'error', Reason} -> {'error', reason(Reason)};
+                Other -> {'error', reason(Other)}
+            catch
+                _E:R -> {'error', reason(R)}
+            end
+    end.
+
+%% @doc `fun kapi_<Module>:publish_<Function>/Arity', when the platform is
+%% here to publish with and there is one.
+-spec kapi_publisher(binary(), binary(), 1 | 2) -> {'ok', fun()} | {'error', binary()}.
+kapi_publisher(Module, Function, Arity) ->
+    case code:ensure_loaded('kz_json') of
+        {'error', _Reason} -> {'error', <<"unavailable">>};
+        {'module', 'kz_json'} ->
+            Kapi = binary_to_atom(<<"kapi_", Module/binary>>, 'utf8'),
+            case code:ensure_loaded(Kapi) of
+                {'error', _Reason} -> {'error', <<"unavailable">>};
+                {'module', Kapi} -> exported_publisher(Kapi, <<"publish_", Function/binary>>, Arity)
+            end
+    end.
+
+-spec exported_publisher(atom(), binary(), 1 | 2) -> {'ok', fun()} | {'error', binary()}.
+exported_publisher(Kapi, Function, Arity) ->
+    try binary_to_existing_atom(Function, 'utf8') of
+        Publish ->
+            case erlang:function_exported(Kapi, Publish, Arity) of
+                'true' -> {'ok', fun Kapi:Publish/Arity};
+                'false' -> {'error', <<"no_such_publisher">>}
+            end
+    catch
+        'error':'badarg' -> {'error', <<"no_such_publisher">>}
     end.
 
 -spec reason(any()) -> binary().

@@ -10,6 +10,7 @@
 
 import callcenter/activity
 import callcenter/call/calls
+import callcenter/call/publishers
 import callcenter/call/replies
 import callcenter/call/snapshots
 import callcenter/closed
@@ -66,6 +67,9 @@ pub fn main() -> Nil {
 /// - the reconciler, the sweep behind the events;
 /// - the node's confirming publisher, the one channel every caller's
 ///   `member_call` goes out on;
+/// - the call publishers (`callcenter/call/publishers`), a few processes
+///   with a channel each that everything a call actor publishes goes out
+///   through, started before anything that can start an actor;
 /// - the call reply listener, where the answers to what a call actor asks
 ///   come back (`callcenter/call/replies`);
 /// - the placement, which takes the shards assigned to this node and hands
@@ -110,6 +114,7 @@ fn children(
     True ->
       always
       |> list.append([amqp.confirming_publisher()])
+      |> list.append([publishers.supervised(kz)])
       |> list.append([supervised_listener(replies.listener())])
       |> list.append([
         snapshots.supervised() |> supervision.map_data(fn(_) { Nil }),
