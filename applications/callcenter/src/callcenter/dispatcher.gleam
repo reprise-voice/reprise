@@ -147,8 +147,11 @@ pub type Message {
   /// after which this word closes the caller.
   ChannelGone(call_id: String)
   /// A call answered on a node that died, whose `queue_call` record the
-  /// sweep found still open. The member message was settled when it was
-  /// answered, so this caller reaches this node no other way.
+  /// sweep found still open. A connected call's member is held until the
+  /// call ends, and usually comes back with the shard as well: a caller of
+  /// the passage held here is their actor's, and is left to it
+  /// (`arrival.orphaned`). One whose member was settled -- an earlier
+  /// release's, or one the broker lost -- reaches this node no other way.
   ///
   /// `ended` is the second the caller's channel went, when the switches say
   /// it has gone. `None` is a conversation still going on: the call is

@@ -58,6 +58,39 @@ pub fn recovering(state: State, member: Member, recovered: Bool) -> State {
   // it begins the new passage.
   let state =
     State(..state, departing: dict.delete(state.departing, member.call_id))
+  case
+    dict.get(state.waiting, member.call_id),
+    dict.get(state.offers, member.call_id)
+  {
+    // The member of a call the sweep adopted before it arrived: a node
+    // taking a shard over meets the member redelivered and the shard's open
+    // records at once, in either order. The adopting actor watches the call;
+    // the offer takes the member's delivery, which is what its end settles.
+    Error(Nil), Ok(offer) ->
+      case records.same_passage(offer.member, member) {
+        True -> {
+          system.log(
+            "call "
+            <> member.call_id
+            <> " arrived after the sweep adopted its call: watched as adopted",
+          )
+          State(
+            ..state,
+            offers: dict.insert(
+              state.offers,
+              member.call_id,
+              Offer(..offer, member: member),
+            ),
+          )
+        }
+        False -> arriving(state, member, resumed)
+      }
+    _, _ -> arriving(state, member, resumed)
+  }
+}
+
+/// A caller arriving who is not the member of a call the sweep adopted.
+fn arriving(state: State, member: Member, resumed: Bool) -> State {
   case dict.get(state.waiting, member.call_id) {
     // A redelivery of somebody already here, or the same caller entering
     // the same queue again -- their callflow run again elsewhere: keep the
@@ -72,7 +105,13 @@ pub fn recovering(state: State, member: Member, recovered: Bool) -> State {
       let kept = kept_place(wait, member)
       let state = superseded(state, wait.member, kept)
       let wait = case records.same_passage(wait.member, kept) {
-        True -> Wait(..wait, member: kept)
+        // The passage goes on under the re-entry's handoff and control
+        // queue, as the caller's actor has it: the record says so too, for
+        // a node that has only the record to go by (`records.rejoined`).
+        True -> {
+          records.rejoined(kept)
+          Wait(..wait, member: kept)
+        }
         // A new passage has been told nothing of where it stands yet, and
         // is told on the next pass whether or not the number is the one the
         // passage before it was told.
@@ -627,6 +666,52 @@ pub fn orphaned(
 ) -> State {
   // Closed here already, its end still on its way to the document.
   use <- bool.guard(closed.again(member), state)
+  // A caller of this passage held here: their member came back with the
+  // shard and their actor is finding out where they stand, and says so
+  // (`present`). A connected call's member is held until the call ends, so
+  // a node taking a shard over meets both at once -- the member redelivered,
+  // and the sweep's scan of the shard's open records -- and adopted too, the
+  // call was watched twice. In the lab of 2026-09-29 (`e2e-260927-cca11`)
+  // the actor's word went to an offer the adoption had replaced, the
+  // actor's end was taken for a lost call and closed `failed`, and the
+  // member was never settled: the adoption's member has no delivery.
+  //
+  // A caller held here in another passage -- waiting in a queue the agent
+  // passed them on to, or on their way out of one -- is left to that
+  // passage too, and the orphan to the backstop's next look (every
+  // `reconcile.backstop_sweeps`th sweep), as one with an offer of another
+  // passage in flight is -- the scan of a shard taken does not come back: adopted, the call took the
+  // caller out of the queue they are in, held their agent busy with an offer
+  // nothing would ever answer, and closed `failed` when their actor ended.
+  let waiting = dict.get(state.waiting, member.call_id)
+  let held_here = case waiting {
+    Ok(wait) ->
+      case records.same_passage(wait.member, member) {
+        True -> Some(wait.member)
+        False -> None
+      }
+    Error(Nil) -> None
+  }
+  let has_actor = dict.has_key(state.actors, member.call_id)
+  use <- bool.guard(option.is_some(held_here) && has_actor, state)
+  use <- bool.lazy_guard(
+    { result.is_ok(waiting) && option.is_none(held_here) }
+      || dict.has_key(state.departing, member.call_id),
+    fn() {
+      system.log(
+        "call "
+        <> member.call_id
+        <> " has an open record in queue "
+        <> member.queue_id
+        <> " while its caller is held here in another passage or on their way out: left for now",
+      )
+      state
+    },
+  )
+  // One held here whose actor could not be started, which nothing will
+  // ever say anything of, is adopted with the member held: its delivery is
+  // what the call's end settles.
+  let member = option.unwrap(held_here, member)
   case dict.get(state.offers, member.call_id), end {
     Ok(offer), _ ->
       case records.same_passage(offer.member, member), end {

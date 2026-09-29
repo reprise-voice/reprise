@@ -478,6 +478,9 @@ pub type Desertion {
     /// The monotonic millisecond by which the call is decided, whatever has
     /// been heard.
     until_ms: Int,
+    /// The passage the caller hung up in, which the shard is told they left
+    /// once the call is decided (`Left`).
+    handoff_id: String,
   )
 }
 
@@ -588,9 +591,9 @@ pub type Effect {
   HangUpLegs(legs: List(String))
   /// Tell the dispatcher how an offer went.
   Tell(offer: OfferId, reply: OfferReply)
-  /// Tell the shard the caller has left the queue and is nothing more of
-  /// the queue's: settle their member now.
-  Left(reason: CancelReason)
+  /// Tell the shard the caller has left the passage `handoff_id` and is
+  /// nothing more of the queue's: settle their member now.
+  Left(handoff_id: String, reason: CancelReason)
   /// Tell the shard the caller is leaving the passage `handoff_id` on a
   /// branch: their dispatcher lets them go now, and the shard keeps their
   /// member until the departure is over (`HandedBack`).
@@ -643,6 +646,32 @@ pub fn step(call: Call, input: Input, clock: Clock) -> #(Call, List(Effect)) {
   let #(call, settled) = settle_recalls(call, clock)
   let #(call, audit) = audit(call, clock)
   #(call, list.flatten([effects, handed_back, settled, audit]))
+}
+
+/// The passage the call is in, when it is in one: the member the shard is
+/// told about is that passage's.
+fn passage_id(phase: Phase) -> String {
+  case phase {
+    Waiting(passage: passage, ..)
+    | Offering(passage: passage, ..)
+    | Connected(passage: passage, ..)
+    | Leaving(passage: passage, ..)
+    | Departed(passage: passage, ..)
+    | Resuming(passage: passage, ..)
+    | Resumed(passage: passage, ..) -> passage.handoff.id
+    Recovering(joining: joining, ..) -> joining.handoff.id
+    Idle | Done -> ""
+  }
+}
+
+/// Whether the call is taken over by an adoption: only by an actor that has
+/// no passage going. One that has -- waiting, ringing, found out about,
+/// connected, leaving -- is that passage's, whatever the sweep believes.
+pub fn takes_adoption(call: Call) -> Bool {
+  case call.phase {
+    Idle | Done -> True
+    _ -> False
+  }
 }
 
 /// Whether the call is on its way out of a queue: from the moment it leaves
@@ -910,8 +939,8 @@ fn adopted(
   adoption: Adoption,
   clock: Clock,
 ) -> #(Call, List(Effect)) {
-  case call.phase {
-    Idle | Done -> {
+  case takes_adoption(call) {
+    True -> {
       let joining = adoption.joining
       let offer =
         Offer(
@@ -946,7 +975,7 @@ fn adopted(
         [],
       )
     }
-    _ -> stay(call)
+    False -> stay(call)
   }
 }
 
@@ -1336,7 +1365,7 @@ fn rehydrate(
     into(call, Done, list.append(hang_up, effects))
   }
   case finding {
-    recovery.Gone -> settle([Left(types.Hangup)])
+    recovery.Gone -> settle([Left(joining.handoff.id, types.Hangup)])
     recovery.Finished(agent_id, at, pickup) ->
       settle([
         Present(Some(id), types.PresentConnected(agent_id, "", at, pickup)),
@@ -1358,8 +1387,9 @@ fn rehydrate(
         Present(None, types.PresentOver),
         HandedBack(joining.handoff.id),
       ])
-    recovery.Departed(branch) -> settle([Left(cancel_reason(exit_of(branch)))])
-    recovery.Moved -> settle([Left(types.Transfer)])
+    recovery.Departed(branch) ->
+      settle([Left(joining.handoff.id, cancel_reason(exit_of(branch)))])
+    recovery.Moved -> settle([Left(joining.handoff.id, types.Transfer)])
     // A caller the probe reached is parked where the agent's end left them,
     // and is hung up, as the actor that watched the end would have done
     // (`talk.silence`). One it did not reach may be in the callflow a
@@ -2177,7 +2207,7 @@ fn desertion_decided(offer: Offer, desertion: Desertion) -> List(Effect) {
       Tell(offer.id, types.Answered(agent_id, leg, at)),
       Tell(offer.id, types.Ended(types.CallerHangup, desertion.at)),
     ]
-    None -> [Left(types.Hangup)]
+    None -> [Left(desertion.handoff_id, types.Hangup)]
   }
 }
 
@@ -2621,8 +2651,9 @@ fn caller_gone(
   clock: Clock,
 ) -> #(Call, List(Effect)) {
   case call.phase {
-    Waiting(..) -> into(call, Done, [Left(types.Hangup)])
-    Offering(_, offer, Ringing(_)) -> {
+    Waiting(passage: passage, ..) ->
+      into(call, Done, [Left(passage.handoff.id, types.Hangup)])
+    Offering(passage, offer, Ringing(_)) -> {
       let #(call, effects) =
         recall_deserted(
           call,
@@ -2633,6 +2664,7 @@ fn caller_gone(
             at: clock.now,
             answer: None,
             until_ms: clock.now_ms + desertion_ms,
+            handoff_id: passage.handoff.id,
           )),
         )
       into(call, Done, effects)
@@ -2663,7 +2695,7 @@ fn moved(call: Call, ringing: Option(Offer)) -> #(Call, List(Effect)) {
     call,
     Done,
     list.append(calling_off, [
-      Left(types.Transfer),
+      Left(passage_id(call.phase), types.Transfer),
       Log("call " <> call.call_id <> " was taken out of the queue by a bridge"),
     ]),
   )
@@ -3197,7 +3229,7 @@ fn allowed_from(before: Phase, after: Phase, effect: Effect) -> Bool {
     Originate(..)
     | HangUpLegs(_)
     | Tell(..)
-    | Left(_)
+    | Left(..)
     | Departing(..)
     | HandedBack(_)
     | Continue(..)
@@ -3226,7 +3258,7 @@ pub fn commands_caller(effect: Effect) -> Bool {
     Originate(..)
     | HangUpLegs(_)
     | Tell(..)
-    | Left(_)
+    | Left(..)
     | Departing(..)
     | HandedBack(_)
     | Continue(..)

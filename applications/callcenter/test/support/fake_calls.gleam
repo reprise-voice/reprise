@@ -64,12 +64,14 @@ pub opaque type Message {
   Join(
     told: Told,
     reply_to: Subject(#(OfferId, OfferReply)),
-    done: Subject(Pid),
+    done: Subject(Result(Pid, String)),
   )
   WillPresent(call_id: String, presence: Option(Presence), done: Subject(Nil))
   Presentations(done: Subject(List(Presented)))
   ActorDied(done: Subject(Nil))
   ActorEnded(done: Subject(Nil))
+  PresentNow(call_id: String, presence: Presence, done: Subject(Nil))
+  RefuseJoins(done: Subject(Nil))
   Tell(told: Told)
   Adopt(adoption: Adoption, done: Subject(Result(Pid, String)))
   Told(done: Subject(List(Told)))
@@ -98,25 +100,29 @@ type State {
     presences: Dict(String, Option(Presence)),
     /// Every presence told, oldest first.
     presented: List(Presented),
+    /// Where each call's last join said to reply.
+    replies: Dict(String, Subject(#(OfferId, OfferReply))),
+    /// Whether a join is refused: no actor can be had.
+    refusing: Bool,
   )
 }
 
 pub fn new() -> Fake {
   let stand_in = ender()
   let assert Ok(started) =
-    actor.new(
-      State(
-        told: [],
-        adoptions: [],
-        failure: Ok(Nil),
-        once: False,
-        processes: [],
-        actor: stand_in.0,
-        actor_end: stand_in.1,
-        presences: dict.new(),
-        presented: [],
-      ),
-    )
+    actor.new(State(
+      told: [],
+      adoptions: [],
+      failure: Ok(Nil),
+      once: False,
+      processes: [],
+      actor: stand_in.0,
+      actor_end: stand_in.1,
+      presences: dict.new(),
+      presented: [],
+      replies: dict.new(),
+      refusing: False,
+    ))
     |> actor.on_message(handle)
     |> actor.start
   Fake(subject: started.data)
@@ -126,13 +132,11 @@ pub fn new() -> Fake {
 pub fn calls(fake: Fake) -> config.Calls {
   config.Calls(
     join: fn(member: Member, resumed, reply_to) {
-      Ok(
-        process.call(fake.subject, 5000, Join(
-          Joined(member.call_id, resumed),
-          reply_to,
-          _,
-        )),
-      )
+      process.call(fake.subject, 5000, Join(
+        Joined(member.call_id, resumed),
+        reply_to,
+        _,
+      ))
     },
     adopt: fn(member, offer, agent_id, leg, answered_at, reply_to) {
       process.call(fake.subject, 5000, Adopt(
@@ -242,6 +246,18 @@ pub fn actor_died(fake: Fake) -> Nil {
   process.sleep(20)
 }
 
+/// A caller's actor says now, after their join, where they stand: what a
+/// joined `resumed` whose answer was held back (`will_say_nothing`) says
+/// once it has found out.
+pub fn present_now(fake: Fake, call_id: String, presence: Presence) -> Nil {
+  process.call(fake.subject, 5000, PresentNow(call_id, presence, _))
+}
+
+/// From now on, no actor can be had for a caller who joins.
+pub fn refusing_joins(fake: Fake) -> Nil {
+  process.call(fake.subject, 5000, RefuseJoins)
+}
+
 /// The waiting callers' actors end as an actor that is done ends:
 /// normally.
 pub fn actor_ended(fake: Fake) -> Nil {
@@ -270,8 +286,17 @@ pub fn reply(adoption: Adoption, reply: OfferReply) -> Nil {
 
 fn handle(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
+    Join(told, _reply_to, done) if state.refusing -> {
+      process.send(done, Error("no actor can be had"))
+      actor.continue(State(..state, told: list.append(state.told, [told])))
+    }
     Join(told, reply_to, done) -> {
       let state = State(..state, told: list.append(state.told, [told]))
+      let state = case told {
+        Joined(call_id, _) ->
+          State(..state, replies: dict.insert(state.replies, call_id, reply_to))
+        _ -> state
+      }
       // The presence goes before the answer to the join, so that it is in
       // the dispatcher's mailbox before the dispatcher goes on.
       let next = case told {
@@ -295,7 +320,7 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
           }
         _ -> state
       }
-      process.send(done, state.actor)
+      process.send(done, Ok(state.actor))
       actor.continue(next)
     }
     WillPresent(call_id, presence, done) -> {
@@ -316,6 +341,27 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       process.send(done, Nil)
       let #(pid, end) = ender()
       actor.continue(State(..state, actor: pid, actor_end: end))
+    }
+    PresentNow(call_id, presence, done) -> {
+      let next = case dict.get(state.replies, call_id) {
+        Ok(reply_to) -> {
+          let offer = types.OfferId(call_id: call_id, serial: reference.new())
+          process.send(reply_to, #(offer, types.Present(presence)))
+          State(
+            ..state,
+            presented: list.append(state.presented, [
+              Presented(call_id, offer, presence, reply_to),
+            ]),
+          )
+        }
+        Error(Nil) -> state
+      }
+      process.send(done, Nil)
+      actor.continue(next)
+    }
+    RefuseJoins(done) -> {
+      process.send(done, Nil)
+      actor.continue(State(..state, refusing: True))
     }
     ActorEnded(done) -> {
       process.send(state.actor_end, Nil)

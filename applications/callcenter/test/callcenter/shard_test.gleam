@@ -1721,7 +1721,8 @@ fn gone_within(pid: Pid, attempts: Int) -> Bool {
 
 /// A caller's actor says the caller left a queue: the shard settles their
 /// member as their cancel did, and tells their dispatcher, once. A word for
-/// a passage earlier than the one held settles nothing.
+/// a passage earlier than the one held, on that passage's own delivery,
+/// settles nothing.
 pub fn a_caller_who_left_is_settled_by_the_shard_test() {
   let h = take(88, [], Settles, Stops)
   arrive(h, "call-one")
@@ -1744,9 +1745,39 @@ pub fn a_caller_who_left_is_settled_by_the_shard_test() {
     types.Member(
       ..cluster.member("call-two", queue_id, 0, 63_900_000_000),
       account_id: account_id,
+      delivery: another_delivery(),
     )
   process.send(h.to, shard.CallerLeft(earlier, types.Timeout))
   assert drain(h.acks) == []
   assert holding(h) == ["call-two"]
+  finish(h)
+}
+
+/// A caller who entered the same queue again -- resumed on another callflow
+/// node -- keeps the older join in their dispatcher and their actor
+/// (`arrival.kept_place`), and takes the new delivery; the member held here
+/// joined at the newer. When they leave, the word naming that delivery is
+/// about the member held, however old the join it names: settled once, and
+/// their dispatcher told. Judged by its join, it was an earlier passage, and
+/// the caller stayed counted as waiting until the shard went.
+pub fn a_caller_who_left_under_the_held_delivery_is_settled_test() {
+  let h = take(89, [], Ignores, Stops)
+  arrive_joined(h, account_id, "call-one", delivery(), 63_900_000_100)
+  let _ = drain(h.starts)
+
+  let resumed =
+    types.Member(
+      ..cluster.member("call-one", queue_id, 0, 63_900_000_000),
+      account_id: account_id,
+      delivery: delivery(),
+    )
+  process.send(h.to, shard.CallerLeft(resumed, types.Hangup))
+  assert list.length(drain(h.acks)) == 1
+  assert drain(h.lefts) == [#(account_id, "call-one")]
+  assert holding(h) == []
+
+  // Once: the same word again settles nothing.
+  process.send(h.to, shard.CallerLeft(resumed, types.Hangup))
+  assert drain(h.acks) == []
   finish(h)
 }

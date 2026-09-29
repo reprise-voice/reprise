@@ -123,8 +123,10 @@ pub type Message {
     done: Subject(Bool),
   )
   /// A caller's actor says the caller left a queue without an agent: a key,
-  /// a clock, a hang-up, a bridge somebody else made. Settled as the
-  /// caller's cancel settled it, and their dispatcher told.
+  /// a clock, a hang-up, a bridge somebody else made. The member held under
+  /// the actor's delivery is settled, and their dispatcher told; one held
+  /// under another is settled as the caller's cancel would settle it
+  /// (`caller_left`).
   CallerLeft(member: types.Member, reason: types.CancelReason)
   /// A caller's actor says the caller is leaving a queue on a branch it
   /// hands them back on. Their dispatcher is told, as of a caller who left,
@@ -658,8 +660,8 @@ pub fn queue_deleted(shard: Int, account_id: String, queue_id: String) -> Nil {
 /// The same, starting one if the shard has none.
 ///
 /// The one caller is the sweep, closing a call answered on a node that
-/// died: the caller's member message was settled when they were answered,
-/// so nothing else will ever bring that account a dispatcher, and the
+/// died whose member no longer brings the account a dispatcher -- settled
+/// by an earlier release as the call was answered, or lost -- and the
 /// wrap-up, the counters and the events all belong to one.
 pub fn start_dispatcher(
   shard: Int,
@@ -884,19 +886,8 @@ fn act(state: State, message: Message) -> actor.Next(State, Message) {
     CallerDeparting(caller, reason) ->
       actor.continue(departing(state, caller, reason))
 
-    CallerLeft(caller, reason) -> {
-      let #(_settled, state) =
-        cancelled(
-          state,
-          caller.account_id,
-          caller.call_id,
-          caller.queue_id,
-          records.reason_to_string(reason),
-          Some(caller.joined),
-          Some(modb.now()),
-        )
-      actor.continue(state)
-    }
+    CallerLeft(caller, reason) ->
+      actor.continue(caller_left(state, caller, reason))
 
     Settle(account_id, call_id, delivery) -> {
       // Only the delivery the dispatcher was handed. The call may since
@@ -1199,19 +1190,7 @@ fn cancelled(
     Ok(held) ->
       case later_passage(held, queue_id, option.unwrap(joined, at)) {
         False -> {
-          state.hooks.settle(held.delivery)
-          left(state, account_id, call_id, reason)
-          system.log(
-            "member call "
-            <> call_id
-            <> " of account "
-            <> account_id
-            <> " left shard "
-            <> int.to_string(state.shard)
-            <> ": "
-            <> reason,
-          )
-          let state = State(..state, holding: forget(state.holding, key))
+          let state = settle_left(state, held, reason)
           #(True, case joined {
             // An earlier passage than the cancel's own, whose member is
             // still to come.
@@ -1260,6 +1239,56 @@ fn cancelled(
 fn later_passage(held: Entry, queue_id: String, by: Int) -> Bool {
   { queue_id != "" && held.queue_id != "" && queue_id != held.queue_id }
   || held.joined_at > by
+}
+
+/// A caller's actor says the caller left a queue. The member held under the
+/// delivery the actor was handed is the passage leaving, whatever join the
+/// actor names: a caller who entered the same queue again keeps the older
+/// join (`dispatcher/arrival.kept_place`) and takes the new delivery, while
+/// the member held here joined at the newer. Judged by its join, as a cancel
+/// is, it would be an earlier passage, and kept, with the dispatcher never
+/// told. Only a member held under another delivery is judged as a cancel is.
+fn caller_left(
+  state: State,
+  caller: types.Member,
+  reason: types.CancelReason,
+) -> State {
+  let reason = records.reason_to_string(reason)
+  case find(state.holding, #(caller.account_id, caller.call_id)) {
+    Ok(held) if held.delivery == caller.delivery ->
+      settle_left(state, held, reason)
+    _other_or_none -> {
+      let #(_settled, state) =
+        cancelled(
+          state,
+          caller.account_id,
+          caller.call_id,
+          caller.queue_id,
+          reason,
+          Some(caller.joined),
+          Some(modb.now()),
+        )
+      state
+    }
+  }
+}
+
+/// Settle the member held for a caller who left, and tell their dispatcher.
+fn settle_left(state: State, held: Entry, reason: String) -> State {
+  let #(account_id, call_id) = held.key
+  state.hooks.settle(held.delivery)
+  left(state, account_id, call_id, reason)
+  system.log(
+    "member call "
+    <> call_id
+    <> " of account "
+    <> account_id
+    <> " left shard "
+    <> int.to_string(state.shard)
+    <> ": "
+    <> reason,
+  )
+  State(..state, holding: forget(state.holding, held.key))
 }
 
 /// A caller on their way out: their dispatcher lets them go, and their

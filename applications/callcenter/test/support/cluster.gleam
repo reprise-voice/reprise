@@ -544,6 +544,70 @@ pub fn stored_record(
   |> result.replace_error(Nil)
 }
 
+/// Run `body` with the node's record writer writing to this cluster's
+/// datastore, and wait for everything it asked to be written.
+///
+/// A dispatcher's record writes go to the writer registered on the node,
+/// and are dropped when none is (`records.send`): most of this suite runs
+/// with none, and reads what it put in the datastore itself. A writer
+/// something earlier in the run left registered is set aside for as long
+/// as `body` runs, and given its name back once this one has gone.
+pub fn writing_records(cluster: Cluster, body: fn() -> a) -> a {
+  let name = records.name()
+  let set_aside = process.named(name)
+  case set_aside {
+    Ok(_pid) -> {
+      let _ = process.unregister(name)
+      Nil
+    }
+    Error(Nil) -> Nil
+  }
+  let assert Ok(writer) =
+    records.start_with(Some(name), store(cluster), "t-", fn() { 0 })
+  let result = body()
+  records.flush()
+  let monitor = process.monitor(writer.pid)
+  let _ = process.call(writer.data, 1000, records.Stop)
+  let assert Ok(_down) =
+    process.new_selector()
+    |> process.select_specific_monitor(monitor, fn(down) { down })
+    |> process.selector_receive(1000)
+  case set_aside {
+    Ok(pid) -> {
+      let _ = process.register(pid, name)
+      Nil
+    }
+    Error(Nil) -> Nil
+  }
+  result
+}
+
+/// The records writer's datastore, over this cluster's: a node writes a
+/// caller's document through `modb`, which is the node's and not the fake.
+fn store(cluster: Cluster) -> records.Store {
+  let db = fn(where) {
+    case where {
+      records.Account(account) -> kazoo.account_db(account)
+      records.Month(account, at) -> modb.db_name(account, at: Some(at))
+    }
+  }
+  records.Store(
+    read: fn(where, doc_id) { cluster.kz.datamgr.open_doc(db(where), doc_id) },
+    save: fn(where, _doc_id, kind, document) {
+      let account = case where {
+        records.Account(account) | records.Month(account, _) -> account
+      }
+      cluster.kz.datamgr.save_doc(
+        db(where),
+        document
+          |> doc.set(["pvt_type"], doc.String(kind))
+          |> doc.set(["pvt_account_id"], doc.String(account)),
+      )
+      |> result.replace(Nil)
+    },
+  )
+}
+
 // --- Talking to it ---------------------------------------------------------
 
 /// A caller enters a queue.

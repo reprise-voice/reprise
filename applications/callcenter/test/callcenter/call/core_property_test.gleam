@@ -631,7 +631,7 @@ fn released(
   let left =
     list.any(effects, fn(effect) {
       case effect {
-        core.Left(_) | core.Departing(..) -> True
+        core.Left(..) | core.Departing(..) -> True
         _ -> False
       }
     })
@@ -769,7 +769,7 @@ fn found_out(
   let told =
     list.any(effects, fn(effect) {
       case effect {
-        core.Present(..) | core.Left(_) | core.Departing(..) -> True
+        core.Present(..) | core.Left(..) | core.Departing(..) -> True
         _ -> False
       }
     })
@@ -940,7 +940,7 @@ fn check(
         replies: dict.insert(seen.replies, key, list.append(replies, [reply])),
       )
     }
-    core.Left(_) -> Seen(..seen, lefts: [seen.step, ..seen.lefts])
+    core.Left(..) -> Seen(..seen, lefts: [seen.step, ..seen.lefts])
     core.Present(offer, presence) -> {
       let seen = Seen(..seen, presents: seen.presents + 1)
       // A ring found going on: marks from before it are an earlier answer's.

@@ -7,6 +7,7 @@ import callcenter/types.{CallerHangup, Completed, QueueDeleted, Transferred}
 import gleam/int
 import gleam/list
 import gleam/option.{None, Some}
+import gleam/result
 import kazoo/doc
 import kazoo/kazoo.{Datamgr, Invalid, Kazoo, NotFound, Unavailable}
 import support/cluster
@@ -198,6 +199,34 @@ pub fn a_cancel_is_not_moved_by_a_second_test() {
   assert doc.get_int(again, ["cancelled"]) == Ok(joined_at + 30)
   assert doc.get_string(again, ["cancel_reason"]) == Ok("quarantined")
   assert again == first
+}
+
+/// A passage that ended -- an answered call -- is not cancelled after: a
+/// member redelivered after the end was written is a caller the queue has
+/// finished with.
+pub fn an_ended_passage_is_not_cancelled_test() {
+  let ended = records.closed(record([]), Completed, joined_at + 90)
+  let again = records.cancellation(ended, types.Hangup, joined_at + 140)
+  assert doc.get_int(again, ["cancelled"]) == Error(Nil)
+  assert again == ended
+}
+
+/// A record names how its caller is reached: the passage's handoff id, and
+/// the control queue their channel is commanded through when the call
+/// says it -- written as they join, and again as they join again.
+pub fn a_record_names_how_its_caller_is_reached_test() {
+  let member =
+    cluster.member("call-one", "support", 0, joined_at)
+    |> cluster.with_control_queue("pid://<0.4.0>/control")
+  let reached = records.reached_by(record([]), member)
+  assert doc.get_string(reached, ["handoff_id"]) == Ok(member.handoff_id)
+  assert doc.get_string(reached, ["control_queue"])
+    == Ok("pid://<0.4.0>/control")
+
+  let unreachable = cluster.member("call-one", "support", 0, joined_at)
+  let reached = records.reached_by(record([]), unreachable)
+  assert doc.get_string(reached, ["handoff_id"]) == Ok(unreachable.handoff_id)
+  assert doc.get_string(reached, ["control_queue"]) |> result.is_error
 }
 
 /// A caller the dispatcher took out of a deleted queue is a cancelled

@@ -14,8 +14,8 @@ import kazoo/doc.{type Value}
 import kazoo/events
 import support/call_script.{
   answer_marking, at, at_ms, barrier_done, bridged_to, call_id, departing,
-  departure_marked, event, fresh, gone, handoff, key, last, marks_ran, noop_done,
-  offer, parked, phase_name, ring, script, settings, t0, waiting,
+  departure_marked, event, fresh, gone, handoff, key, last, marks_ran, offer,
+  parked, phase_name, ring, script, settings, t0, waiting,
 }
 
 const prefix = "0a1b2c3d4e5f6a7b8c9d0e1f"
@@ -312,7 +312,7 @@ pub fn a_record_not_read_is_asked_again_test() {
   assert present
     == core.Present(Some(id), types.PresentConnected("ann", "", t0 - 30, False))
   assert ended == core.Tell(id, types.Ended(types.CallerHangup, t0 + 11))
-  assert !list.contains(list.flatten(done), core.Left(types.Hangup))
+  assert !list.contains(list.flatten(done), core.Left("h1", types.Hangup))
   assert core.finished(call)
 }
 
@@ -373,9 +373,9 @@ pub fn a_record_never_read_is_taken_as_the_switches_find_it_test() {
         ),
       ]
     }),
-    #([], None, "done", fn(_id) { [core.Left(types.Hangup)] }),
+    #([], None, "done", fn(_id) { [core.Left("h1", types.Hangup)] }),
     #([caller_row(None)], Some(departed), "done", fn(_id) {
-      [core.Left(types.Timeout)]
+      [core.Left("h1", types.Timeout)]
     }),
     #([caller_row(None)], Some([]), "waiting", fn(_id) {
       [
@@ -418,7 +418,8 @@ pub fn a_caller_found_gone_test() {
       #(surveyed(rows, None), at(1)),
       #(core.Tick, at_ms(1000 + core.probe_ms)),
     ])
-  assert last(done) == [core.HangUpLegs([leg("1")]), core.Left(types.Hangup)]
+  assert last(done)
+    == [core.HangUpLegs([leg("1")]), core.Left("h1", types.Hangup)]
   assert core.finished(call)
 }
 
@@ -575,7 +576,7 @@ pub fn a_caller_found_parked_and_bridged_to_the_leg_test() {
     let effects = list.flatten(done)
     assert phase_name(call) == ends as name
     let answered = core.Tell(id, types.Answered("ann", leg("1"), t0 + 1))
-    let took = core.Left(types.Transfer)
+    let took = core.Left("h1", types.Transfer)
     assert #(list.contains(effects, answered), list.contains(effects, took))
       == case ends {
         "connected" -> #(True, False)
@@ -682,7 +683,7 @@ pub fn a_caller_found_elsewhere_is_let_go_test() {
       #(recovery.departed_var, "h1"),
       #(recovery.departing_branch_var, "timeout"),
     ])
-  assert last(done) == [core.Left(types.Timeout)]
+  assert last(done) == [core.Left("h1", types.Timeout)]
   assert core.finished(call)
 
   let rows = [
@@ -690,7 +691,7 @@ pub fn a_caller_found_elsewhere_is_let_go_test() {
     row("pickup", Some(call_id), True, []),
   ]
   let #(call, done, _id) = recovered(rows, None, [])
-  assert last(done) == [core.Left(types.Transfer)]
+  assert last(done) == [core.Left("h1", types.Transfer)]
   assert core.finished(call)
 }
 

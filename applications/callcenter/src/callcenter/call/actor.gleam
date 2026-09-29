@@ -406,10 +406,19 @@ fn input_of(
       #(state, Some(input), None)
     }
     Adopt(member, offer, agent_id, leg, answered_at, reply_to) -> {
-      let state = joined(state, member, reply_to)
-      let state = case leg {
-        "" -> state
-        leg -> bind(state, leg)
+      // Only an actor with no passage going takes an adoption; one that has
+      // is that passage's, and keeps the member, the caller and the replies
+      // it has. Taken as its own, the sweep's rebuilt member -- no delivery
+      // -- was what a caller's end was settled with, and settled nothing.
+      let state = case core.takes_adoption(state.call) {
+        True -> {
+          let state = joined(state, member, reply_to)
+          case leg {
+            "" -> state
+            leg -> bind(state, leg)
+          }
+        }
+        False -> state
       }
       #(
         state,
@@ -791,10 +800,25 @@ pub fn perform(
       }
     // The actor starts the survey and the audit itself (`carry_out`).
     core.Survey, _ | core.Audit(_), _ -> Nil
-    core.Left(reason), _ ->
-      case context.member {
-        Some(member) -> shard.left(member, reason)
-        None -> Nil
+    // The member of the passage left, which one joined since -- held while
+    // the caller was being found out about -- may have replaced in the
+    // context.
+    core.Left(id, reason), _ ->
+      case dict.get(context.members, id) {
+        Ok(member) -> shard.left(member, reason)
+        // Every passage the actor has joined is among its members until it
+        // is handed back. One that is not is not settled here, rather than
+        // another passage's member settled in its place: the member stays
+        // held, and the actor that takes the caller on next finds them gone
+        // and settles it, or the shard gives it back to the broker.
+        Error(Nil) ->
+          system.log_error(
+            "call "
+            <> context.call_id
+            <> " left passage "
+            <> id
+            <> ", whose member its actor does not hold: not settled here",
+          )
       }
     // The member of the passage leaving, which a passage joined since --
     // one held while the caller was being found out about -- may have

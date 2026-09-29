@@ -251,7 +251,7 @@ pub fn the_actor_ends_with_the_call_test() {
   let _ = done(did)
 
   process.send(to, event(call_id, "CHANNEL_DESTROY", []))
-  assert done(did) == [Performed(core.Left(types.Hangup))]
+  assert done(did) == [Performed(core.Left("handoff-1", types.Hangup))]
   assert !process.is_alive(pid)
 }
 
@@ -393,6 +393,74 @@ pub fn a_caller_handed_over_is_found_out_about_test() {
   assert ceiling == cluster.start_of_time + 20
 }
 
+/// A caller found moved -- through to somebody the queue did not ring --
+/// while the member of their next passage waited to be heard is let go of
+/// with the member of the passage found: the shard settles that one, and
+/// the next passage's is left to go on.
+pub fn a_caller_left_is_settled_with_the_passage_left_test() {
+  let did = process.new_subject()
+  let replies = process.new_subject()
+  let told = process.new_subject()
+  let rows = [
+    events.channel(
+      doc.object([
+        #("uuid", doc.String(call_id)),
+        #("other_leg", doc.String("somebody")),
+        #("answered", doc.Bool(True)),
+      ]),
+    ),
+    events.channel(
+      doc.object([
+        #("uuid", doc.String("somebody")),
+        #("other_leg", doc.String(call_id)),
+        #("answered", doc.Bool(True)),
+      ]),
+    ),
+  ]
+  let shard =
+    actor.Shard(
+      left: fn(member: types.Member, _reason) {
+        process.send(told, member.handoff_id)
+      },
+      departing: fn(_member, _reason) { Nil },
+      handed_back: fn(_member) { Nil },
+    )
+  let io =
+    actor.Io(
+      ..io(did),
+      survey: fn(_member) {
+        recovery.Survey(
+          channels: Some(events.Channels(channels: rows, complete: True)),
+          record: recovery.RecordRead(None),
+        )
+      },
+      perform: fn(context, effect) {
+        process.send(did, Performed(effect))
+        case effect {
+          core.Left(..) ->
+            actor.perform(context, effect, shard, fn(run) { run() })
+          _ -> Nil
+        }
+      },
+    )
+  let assert Ok(started) = actor.start(io, cluster.account_id, call_id, 0)
+  process.send(started.data, actor.Join(member(), True, replies))
+  let _ = done(did)
+  // The next passage's member, held while the first is found out about.
+  let next = types.Member(..member(), handoff_id: "handoff-2")
+  process.send(started.data, actor.Join(next, False, replies))
+  process.send(
+    started.data,
+    event(call_id, "CHANNEL_EXECUTE_COMPLETE", [
+      #("Application-Name", doc.String("noop")),
+      #("Application-Response", doc.String(recovery.probe_id("handoff-1", 1))),
+    ]),
+  )
+  let _ = done(did)
+  assert process.receive(told, 100) == Ok("handoff-1")
+  assert process.receive(told, 0) == Error(Nil)
+}
+
 /// An actor started after `quarantine_after` crashes of the call's actors
 /// hands the caller back whatever they join for.
 pub fn a_quarantined_actor_hands_the_caller_back_test() {
@@ -409,6 +477,51 @@ pub fn a_quarantined_actor_hands_the_caller_back_test() {
     Performed(core.Confirm(_)),
   ] = done(did)
   Nil
+}
+
+/// An adoption the call does not take -- the actor has a passage going --
+/// leaves the actor as it was: the member and the caller it performs with.
+/// Taken as its own, the sweep's rebuilt member, with no delivery and no
+/// control queue, was what the caller's end was settled with and their
+/// commands sent through.
+pub fn an_adoption_not_taken_changes_nothing_test() {
+  let did = process.new_subject()
+  let replies = process.new_subject()
+  let performed_as = process.new_subject()
+  let io =
+    actor.Io(..io(did), perform: fn(context: actor.Context, effect) {
+      process.send(did, Performed(effect))
+      process.send(
+        performed_as,
+        option.map(context.member, fn(member) { member.handoff_id }),
+      )
+    })
+  let assert Ok(started) = actor.start(io, cluster.account_id, call_id, 0)
+  let to = started.data
+  process.send(to, actor.Join(member(), False, replies))
+  process.send(
+    to,
+    actor.Adopt(
+      types.Member(..member(), handoff_id: "rebuilt"),
+      types.OfferId(call_id: call_id, serial: reference.new()),
+      "ann",
+      "",
+      cluster.start_of_time,
+      replies,
+    ),
+  )
+  process.send(to, event(call_id, "DTMF", [#("DTMF-Digit", doc.String("#"))]))
+  let _ = done(did)
+  let members = drain_as(performed_as, [])
+  assert members != []
+  assert list.all(members, fn(member) { member == Some("handoff-1") })
+}
+
+fn drain_as(subject: Subject(a), acc: List(a)) -> List(a) {
+  case process.receive(subject, 0) {
+    Ok(one) -> drain_as(subject, [one, ..acc])
+    Error(Nil) -> list.reverse(acc)
+  }
 }
 
 /// The shard hears a caller leaving on a branch as they leave, with the
@@ -435,7 +548,7 @@ pub fn a_departing_callers_member_is_settled_once_they_are_handed_back_test() {
     actor.Io(..io(did), perform: fn(context, effect) {
       process.send(did, Performed(effect))
       case effect {
-        core.Left(_) | core.Departing(..) | core.HandedBack(_) ->
+        core.Left(..) | core.Departing(..) | core.HandedBack(_) ->
           actor.perform(context, effect, shard, fn(run) { run() })
         _ -> Nil
       }

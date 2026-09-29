@@ -638,31 +638,66 @@ pub fn of_passage(document: Value, member: Member) -> Bool {
 /// A caller entered a queue.
 ///
 /// Written once per passage: a member redelivered to another node finds the
-/// document the first node wrote and changes nothing.
+/// document the first node wrote, and changes only how the caller is
+/// reached (`reached_by`).
 pub fn joined(member: Member) -> Nil {
-  send(ChangePassage(
-    member,
-    // Only a redelivery can have been written by an earlier release.
-    listener.redelivered(member.delivery),
-    fn(existing) {
-      case existing {
-        // Already there: this is a re-entry, not an arrival.
-        Some(document) -> document
-        None ->
-          doc.object_some([
-            #("call_id", Some(doc.String(member.call_id))),
-            #("queue_id", Some(doc.String(member.queue_id))),
-            #("joined", Some(doc.Int(member.joined))),
-            #("caller_id_name", option.map(member.caller_id_name, doc.String)),
-            #(
-              "caller_id_number",
-              option.map(member.caller_id_number, doc.String),
-            ),
-            #("offered_to", Some(doc.List([]))),
-          ])
-      }
-    },
-  ))
+  // Only a redelivery can have been written by an earlier release.
+  send(joining(member, listener.redelivered(member.delivery)))
+}
+
+/// A caller entered the queue they wait in again and kept their place: the
+/// same passage, going on under the re-entry's handoff and control queue
+/// (`reached_by`).
+///
+/// The passage was written when it began -- by this release, or, for a
+/// caller waiting across the upgrade, by an earlier one under the call id
+/// -- and the re-entry is a fresh delivery that says nothing of which. So
+/// the call id document is looked for, as it is for a redelivery: written
+/// under the passage id instead, the passage would have two documents, the
+/// later writes would all go to the new one, and the old one would never
+/// be closed.
+pub fn rejoined(member: Member) -> Nil {
+  send(joining(member, True))
+}
+
+/// The change a caller's joining makes to their passage's document: made
+/// with what the member knows of the caller when there is none, and naming
+/// how they are reached either way. `legacy`: whether the passage may be in
+/// a call id document an earlier release wrote (`locate`).
+pub fn joining(member: Member, legacy: Bool) -> Edit {
+  ChangePassage(member, legacy, fn(existing) {
+    case existing {
+      // Already there: this is a re-entry, not an arrival. The passage it
+      // continues is the re-entry's now, as the caller's actor has it.
+      Some(document) -> reached_by(document, member)
+      None ->
+        doc.object_some([
+          #("call_id", Some(doc.String(member.call_id))),
+          #("queue_id", Some(doc.String(member.queue_id))),
+          #("joined", Some(doc.Int(member.joined))),
+          #("caller_id_name", option.map(member.caller_id_name, doc.String)),
+          #("caller_id_number", option.map(member.caller_id_number, doc.String)),
+          #("offered_to", Some(doc.List([]))),
+        ])
+        |> reached_by(member)
+    }
+  })
+}
+
+/// The document as it names how the caller is reached: the passage's
+/// handoff id, which is what their actor knows the passage by, and the
+/// control queue the callflow commands their channel through. A node that
+/// takes over an answered call whose member nobody holds any more has
+/// only the record to go by (`reconcile.rebuilt`), and with these its actor
+/// knows the passage it is and can hang the caller up.
+pub fn reached_by(document: Value, member: Member) -> Value {
+  let document =
+    doc.set(document, ["handoff_id"], doc.String(member.handoff_id))
+  case doc.get_string(member.call, ["Control-Queue"]) {
+    Ok(queue) if queue != "" ->
+      doc.set(document, ["control_queue"], doc.String(queue))
+    _ -> document
+  }
 }
 
 /// The caller is being offered to an agent, by the offer `id`. The entry
@@ -871,11 +906,14 @@ pub fn cancelled(member: Member, reason: CancelReason, at: Int) -> Nil {
 /// why -- `queue_deleted` for a caller the dispatcher took out of a queue
 /// that was deleted. A passage cancelled already keeps its second and its
 /// reason: a node that takes a caller over on their way out cancels it
-/// again, later, and on a branch that may not say which reason it was.
+/// again, later, and on a branch that may not say which reason it was. And
+/// a passage that ended -- an answered call -- is not cancelled at all: a
+/// member redelivered after the end was written is a caller the queue has
+/// finished with, whatever becomes of them after.
 pub fn cancellation(document: Value, reason: CancelReason, at: Int) -> Value {
-  case doc.get_int(document, ["cancelled"]) {
-    Ok(_) -> offers_settled(document)
-    Error(_) ->
+  case doc.get_int(document, ["cancelled"]), doc.get_int(document, ["ended"]) {
+    Ok(_), _ | _, Ok(_) -> offers_settled(document)
+    Error(_), Error(_) ->
       document
       |> doc.set(["cancelled"], doc.Int(at))
       |> doc.set(["cancel_reason"], doc.String(reason_to_string(reason)))

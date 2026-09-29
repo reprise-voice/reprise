@@ -230,6 +230,41 @@ pub fn the_open_scan_finds_an_answered_second_passage_test() {
   assert id == records.passage_id(overflow())
 }
 
+/// A caller waiting across the upgrade whose callflow is run again on
+/// another node enters the queue they wait in again, and keeps their place:
+/// the same passage, whose call id document the earlier release wrote. The
+/// re-entry names how the caller is reached now on that document, and
+/// begins no document of the passage's own id beside it -- one every later
+/// write would go to, while the call id document was never closed.
+pub fn a_re_entry_across_the_upgrade_goes_on_in_its_call_id_document_test() {
+  let c = two_queues()
+  cluster.agent_is(c, "ann", "logged_out")
+  cluster.put_record(
+    c,
+    0,
+    cluster.legacy_record(call_id, "support", 0, [], None),
+  )
+  let again =
+    types.Member(
+      ..support(),
+      joined: cluster.start_of_time + 5,
+      handoff_id: "again",
+    )
+    |> cluster.with_control_queue("control-again")
+  cluster.writing_records(c, fn() {
+    cluster.redelivered(c, call_id, "support", 0, 0)
+    cluster.arrive_as(c, again)
+  })
+  assert cluster.waiting(c) == [call_id]
+
+  let assert Ok(document) = cluster.stored_record(c, 0, call_id)
+  assert doc.get_string(document, ["handoff_id"]) == Ok("again")
+  assert doc.get_string(document, ["control_queue"]) == Ok("control-again")
+  assert doc.get_int(document, ["joined"]) == Ok(cluster.start_of_time)
+  assert cluster.stored_record(c, 0, records.passage_id(support()))
+    == Error(Nil)
+}
+
 /// An answered call id document from an earlier release is still open to
 /// the scan, and the member rebuilt from it closes that document.
 pub fn the_open_scan_finds_a_call_id_document_test() {

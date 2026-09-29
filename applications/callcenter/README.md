@@ -1667,6 +1667,28 @@ monitor closes it at once, and the dispatcher's tick closes any connected
 call it finds with nothing watching it. Either way the agent's own channels
 keep them out of the next offer for as long as they really are talking.
 
+A connected call whose member is held -- this release's -- comes back with
+the shard, and the node taking it meets the member and the scan at once.
+A caller of the passage the dispatcher holds is their actor's, finding out
+where they stand: the scan does not adopt them as well. In the lab of
+2026-09-29 (`e2e-260927-cca11`) it did, the actor's word went to an offer
+the adoption had replaced, its end was taken for a lost call and closed
+`failed`, and the member was never settled. A caller held here in another
+passage -- waiting in a queue the agent passed them on to, or on their way
+out of one -- is left to that passage too, and the record to the backstop's
+next look (the scan of a shard taken does not come back): an actor running
+a passage ignores an adoption, and the dispatcher would have taken the
+caller for connected and forgotten they wait. A caller of this passage held
+here whose actor could not be started is adopted, with the member held,
+whose delivery the end settles. In the other order -- the scan first, at the moment the shard
+is taken -- the member that arrives is the adopted call's member, with no
+actor of its own. The record names the passage's handoff id and the
+control queue the caller is commanded through (`records.reached_by`), so
+the caller rebuilt from it is the passage its actor knows, and can be hung
+up when the agent's end leaves them parked. An actor adopts a call only
+when it has no passage going: one that has keeps its own member, caller
+and replies.
+
 **That scan runs when a shard is taken, not on every sweep.** An orphan appears
 because a node died, and a node dying is a shard moving here: a shard this node
 holds now and did not at the last sweep is the whole of the trigger, and the
@@ -1734,10 +1756,13 @@ What still does not survive the node:
 - **a call answered in a month the scan no longer reads.** It looks at the
   current month only, so a call answered at ten to midnight on the last day of
   one, whose holder died after it, is not found.
-- **commanding a call the sweep adopted.** The `kapps_call` the callflow
-  published went with the node that died, so a call rebuilt from its record
-  can be watched and written about but not hung up. For those,
-  `hangup_after_bridge` is the switch's own bridge teardown.
+- **commanding a call the sweep adopted from an earlier release's
+  record.** The `kapps_call` the callflow published went with the node that
+  died. This release's record names the control queue the caller is
+  commanded through, and a call rebuilt from it can be hung up; one an
+  earlier release wrote names none, and can be watched and written about
+  but not hung up. For those, `hangup_after_bridge` is the switch's own
+  bridge teardown.
 
 ## Documents and views
 

@@ -886,6 +886,129 @@ pub fn an_actor_shut_down_leaves_its_call_to_whoever_has_it_next_test() {
   })
 }
 
+// --- A shard taken over: the member and the sweep at once -------------------
+
+/// A node taking a shard over meets a connected call's member redelivered,
+/// its member being held until the call ends, and the sweep's scan of the
+/// shard's open records, at once. A caller of the passage held here is
+/// their actor's, finding out where they stand: the sweep does not adopt
+/// them as well. In the lab of 2026-09-29 (`e2e-260927-cca11`) it did, the
+/// actor's word went to an offer the adoption had replaced, the actor's end
+/// was taken for a lost call and closed `failed`, and the member was never
+/// settled.
+pub fn an_orphan_being_found_out_about_is_its_actors_test() {
+  let c = two_agent_queue()
+  fake_calls.will_say_nothing(c.calls, "call-one")
+  cluster.redelivered(c, "call-one", "support", 0, 0)
+  cluster.orphaned(c, "call-one", "support", "ann", 2, None)
+  assert fake_calls.adoptions(c.calls) == []
+  assert cluster.waiting(c) == ["call-one"]
+  assert cluster.settled(c) == []
+}
+
+/// The sweep's word that the call has ended is the actor's to say as well:
+/// a caller being found out about is not closed from the sweep's scan
+/// either, whose end is the second it asked, not the call's.
+pub fn an_orphan_ended_while_being_found_out_about_is_its_actors_test() {
+  let c = two_agent_queue()
+  fake_calls.will_say_nothing(c.calls, "call-one")
+  cluster.redelivered(c, "call-one", "support", 0, 0)
+  cluster.orphaned(c, "call-one", "support", "ann", 2, Some(40))
+  assert fake_calls.adoptions(c.calls) == []
+  assert cluster.waiting(c) == ["call-one"]
+  assert cluster.settled(c) == []
+}
+
+/// The lab's order end to end: the member redelivered, the sweep's orphan,
+/// then the actor finding the call connected and hearing its end. The call
+/// is the actor's all through, and its end settles the member the shard
+/// holds.
+pub fn a_call_taken_over_is_its_actors_to_the_end_test() {
+  let c = two_agent_queue()
+  fake_calls.will_say_nothing(c.calls, "call-one")
+  cluster.redelivered(c, "call-one", "support", 0, 0)
+  cluster.orphaned(c, "call-one", "support", "ann", 2, None)
+  fake_calls.present_now(
+    c.calls,
+    "call-one",
+    types.PresentConnected("ann", "ann-leg", cluster.start_of_time + 2, False),
+  )
+  cluster.sync(c)
+  assert cluster.watching(c, "call-one") == ["ann"]
+  cluster.watch_reply(
+    c,
+    "call-one",
+    Ended(types.AgentHangup, cluster.start_of_time + 60),
+  )
+  assert cluster.settled_deliveries(c) == ["call-one again"]
+  assert cluster.report(c).offers == []
+}
+
+/// A caller of the passage held here whose actor could not be started is
+/// one nothing will ever say anything of: the sweep adopts their call, with
+/// the member held here -- redelivered, here -- whose delivery is what the
+/// call's end settles, and not the sweep's rebuilt one.
+pub fn an_orphan_whose_caller_has_no_actor_is_adopted_with_their_member_test() {
+  let c = nobody_to_ring()
+  fake_calls.refusing_joins(c.calls)
+  cluster.redelivered(c, "call-one", "support", 0, 0)
+  assert cluster.waiting(c) == ["call-one"]
+  cluster.orphaned(c, "call-one", "support", "ann", 2, None)
+  assert list.length(fake_calls.adoptions(c.calls)) == 1
+  assert cluster.waiting(c) == []
+  cluster.watch_reply(
+    c,
+    "call-one",
+    Ended(Completed, cluster.start_of_time + 60),
+  )
+  assert cluster.settled_deliveries(c) == ["call-one again"]
+}
+
+/// An open record of one passage of a call whose caller waits here in
+/// another is not the sweep's to adopt: the caller's actor is running the
+/// passage it has, and an adoption would be ignored by it while the
+/// dispatcher took the caller for connected and forgot they wait. The same
+/// for a caller on their way out, whose actor is handing them back. Both
+/// are left for now, and the sweep finds the record again next time.
+pub fn an_orphan_of_a_caller_held_otherwise_is_left_test() {
+  // Waiting, in a later passage.
+  let c = nobody_to_ring()
+  cluster.arrive(c, "call-one", "support", 0, 5)
+  cluster.orphaned(c, "call-one", "support", "ann", 2, None)
+  assert fake_calls.adoptions(c.calls) == []
+  assert cluster.waiting(c) == ["call-one"]
+  assert cluster.settled(c) == []
+
+  // On their way out.
+  let c = nobody_to_ring()
+  cluster.arrive(c, "call-one", "support", 0, 0)
+  process.send(c.dispatcher, dispatcher.Departing("call-one", ExitKey))
+  cluster.sync(c)
+  cluster.orphaned(c, "call-one", "support", "ann", 2, None)
+  assert fake_calls.adoptions(c.calls) == []
+  assert cluster.settled(c) == []
+}
+
+/// The other order: the sweep adopts the call before its member arrives.
+/// The adopting actor watches it, the member is not joined to an actor of
+/// its own, and the call's end settles the member the shard holds -- the one
+/// that arrived, not the adoption's, which has no delivery.
+pub fn a_member_arriving_after_its_adoption_is_the_adoptions_test() {
+  let c = two_agent_queue()
+  cluster.orphaned(c, "call-one", "support", "ann", 2, None)
+  assert list.length(fake_calls.adoptions(c.calls)) == 1
+  cluster.redelivered(c, "call-one", "support", 0, 0)
+  assert fake_calls.joined(c.calls) == []
+  assert cluster.waiting(c) == []
+
+  cluster.watch_reply(
+    c,
+    "call-one",
+    Ended(Completed, cluster.start_of_time + 60),
+  )
+  assert cluster.settled_deliveries(c) == ["call-one again"]
+}
+
 // --- Callers on their way out ------------------------------------------------
 
 /// A caller with nobody to take them: both agents logged out.
@@ -2181,8 +2304,9 @@ pub fn an_orphaned_call_still_going_on_test() {
 
   assert cluster.watching(c, "call-one") == ["ann"]
   assert cluster.ringing(c, "call-one") == ["ann"]
-  // The member message was settled by the node that answered it; there is
-  // nothing here to settle.
+  // Nobody holds the member of a call the sweep hands over -- an earlier
+  // release settled it as the call was answered, or it was lost -- and
+  // nothing is settled as the call is taken on.
   assert cluster.settled(c) == []
 
   cluster.watch_reply(

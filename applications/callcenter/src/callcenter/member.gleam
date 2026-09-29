@@ -181,10 +181,11 @@ pub fn system_joined_value(value: Value) -> Option(Int) {
 
 /// A delivery that settles nothing.
 ///
-/// What a caller rebuilt from their own `queue_call` document carries: the
-/// message they arrived on was acked by the node that connected them, which
-/// then died before it could close the record. There is nothing left on a
-/// broker to settle, and settling this one is a no-op rather than an error.
+/// What a caller rebuilt from their own `queue_call` document carries
+/// (`reconcile.rebuilt`). Settling it is a no-op rather than an error: the
+/// member it stands for is gone -- settled by an earlier release as the
+/// call was answered, or lost -- or still on its way to the shard, and
+/// takes the adopted call's place as it arrives.
 @external(erlang, "callcenter_ffi", "unsettled_delivery")
 pub fn no_delivery() -> Delivery
 

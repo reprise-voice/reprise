@@ -80,6 +80,55 @@ pub fn an_adopted_call_is_watched_to_its_end_test() {
   assert phase_name(call) == "waiting"
 }
 
+/// The member of an adopted call, arriving after the adoption, is the
+/// passage the actor is watching when its record named how its caller is
+/// reached (`records.reached_by`): the actor says the call is connected, and
+/// nothing is done to the caller's media. A member of another passage is a
+/// caller handed on by the agent, and starts that passage.
+pub fn an_adopted_call_rejoined_by_its_member_stays_connected_test() {
+  let #(id, _endpoints) = offer(["ann"])
+  let joined = fn(handoff_id) {
+    core.Joining(
+      queue_id: call_script.queue_id,
+      joined: t0,
+      handoff: handoff(handoff_id),
+      settings: settings(),
+    )
+  }
+  let adoption =
+    core.Adopt(core.Adoption(
+      joining: joined("h1"),
+      offer: id,
+      agent_id: "ann",
+      leg: "ann-leg",
+      answered_at: t0 + 20,
+    ))
+  let #(call, done) =
+    script(fresh(), [
+      #(adoption, at(60)),
+      #(core.Rejoined(joined("h1"), id), at(61)),
+    ])
+  assert last(done)
+    == [
+      core.Present(
+        Some(id),
+        types.PresentConnected("ann", "ann-leg", t0 + 20, False),
+      ),
+    ]
+  assert phase_name(call) == "connected"
+
+  let #(call, done) =
+    script(fresh(), [
+      #(adoption, at(60)),
+      #(core.Rejoined(joined("h2"), id), at(61)),
+    ])
+  assert list.contains(
+    last(done),
+    core.Tell(id, types.Ended(types.Transferred, t0 + 61)),
+  )
+  assert phase_name(call) == "waiting"
+}
+
 /// The same member delivered again changes nothing.
 pub fn the_same_passage_joined_twice_test() {
   let #(_call, done) = script(waiting(), [#(joining("h1", settings()), at(5))])
@@ -638,7 +687,7 @@ pub fn the_caller_taken_by_another_bridge_test() {
       #(bridged_to("somebody-else"), at(11)),
     ])
   assert case last(done) {
-    [core.HangUpLegs(_), core.Left(types.Transfer), core.Log(_)] -> True
+    [core.HangUpLegs(_), core.Left("h1", types.Transfer), core.Log(_)] -> True
     _ -> False
   }
   assert call.phase == core.Done
@@ -1148,7 +1197,7 @@ pub fn a_queue_deleted_while_waiting_test() {
 pub fn the_caller_hangs_up_while_waiting_test() {
   let #(call, done) =
     script(waiting(), [#(gone(call_id, "NORMAL_CLEARING"), at(10))])
-  assert done == [[core.Left(types.Hangup)]]
+  assert done == [[core.Left("h1", types.Hangup)]]
   assert core.finished(call)
 
   let #(id, endpoints) = offer(["ann"])
@@ -1161,7 +1210,7 @@ pub fn the_caller_hangs_up_while_waiting_test() {
   assert !core.finished(call)
   let #(call, done) =
     script(call, [#(originate_error(id, "ORIGINATOR_CANCEL"), at(11))])
-  assert done == [[core.Left(types.Hangup)]]
+  assert done == [[core.Left("h1", types.Hangup)]]
   assert core.finished(call)
 }
 
@@ -1221,7 +1270,7 @@ pub fn an_answer_after_the_caller_left_is_no_call_test() {
       #(gone(leg, "NORMAL_CLEARING"), at(12)),
       #(originate_error(id, "ORIGINATOR_CANCEL"), at(12)),
     ])
-  assert last(done) == [core.Left(types.Hangup)]
+  assert last(done) == [core.Left("h1", types.Hangup)]
   assert !list.any(list.flatten(done), fn(effect) {
     case effect {
       core.Tell(_, types.Answered(..)) -> True
@@ -1242,7 +1291,7 @@ pub fn a_deserted_ring_is_decided_in_time_test() {
       #(Tick, at_ms(11_000 + core.desertion_ms - 1)),
       #(Tick, at_ms(11_000 + core.desertion_ms)),
     ])
-  assert list.drop(done, 2) == [[], [core.Left(types.Hangup)]]
+  assert list.drop(done, 2) == [[], [core.Left("h1", types.Hangup)]]
   assert !core.finished(call)
   assert core.wait_ms(call, at_ms(11_000 + core.desertion_ms)) >= 1
 }
@@ -1334,7 +1383,7 @@ pub fn a_waiting_caller_is_audited_test() {
 
   let #(call, done) =
     script(call, [#(core.Audited([call_id]), at_ms(2 * core.audit_ms + 10))])
-  let assert [core.Log(_), core.Left(types.Hangup)] = last(done)
+  let assert [core.Log(_), core.Left("h1", types.Hangup)] = last(done)
   assert core.finished(call)
 }
 

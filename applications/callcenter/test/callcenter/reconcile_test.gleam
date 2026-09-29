@@ -7,6 +7,7 @@ import callcenter/shards
 import callcenter/types.{Completed}
 import gleam/dict
 import gleam/erlang/process
+import gleam/int
 import gleam/option.{None, Some}
 import gleam/result
 import gleam/set
@@ -391,6 +392,8 @@ fn call_in(account_id: String, call_id: String) -> reconcile.OpenCall {
     agent_call_id: "agent-leg",
     answered: cluster.start_of_time + 3,
     picked_up: False,
+    handoff_id: None,
+    control_queue: None,
   )
 }
 
@@ -413,6 +416,38 @@ pub fn a_caller_is_rebuilt_from_the_record_test() {
   assert member.call_id == "call-one"
   assert member.joined == cluster.start_of_time
   assert doc.get_string(member.call, ["Call-ID"]) == Ok("call-one")
+  // A record an earlier release wrote names no handoff and no control
+  // queue: the passage is the call and the second, and the caller cannot
+  // be commanded.
+  assert member.handoff_id
+    == "call-one-" <> int.to_string(cluster.start_of_time)
+  assert doc.get_string(member.call, ["Control-Queue"]) |> result.is_error
+}
+
+/// A record names the passage's handoff id and the caller's control queue
+/// (`records.reached_by`), and the caller rebuilt out of it has both: the
+/// passage is the one the caller's actor knows, and the actor watching the
+/// call can hang up a caller the agent's end left parked.
+pub fn a_caller_rebuilt_is_reached_as_the_record_says_test() {
+  let c = cluster.new([], [])
+  cluster.put_record(
+    c,
+    0,
+    answered()
+      |> doc.set(["handoff_id"], doc.String("a-handoff"))
+      |> doc.set(["control_queue"], doc.String("pid://<0.4.0>/control")),
+  )
+  let assert [call] =
+    reconcile.open_calls(
+      c.kz,
+      cluster.account_id,
+      at: Some(cluster.start_of_time),
+    )
+  let member = reconcile.rebuilt(call)
+  assert member.handoff_id == "a-handoff"
+  assert doc.get_string(member.call, ["Control-Queue"])
+    == Ok("pid://<0.4.0>/control")
+  assert doc.get_string(member.call, ["Account-ID"]) == Ok(cluster.account_id)
 }
 
 /// A supervisor's pickup is open in the view like an agent's call -- it has

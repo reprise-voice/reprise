@@ -17,16 +17,21 @@
 //// this asks the switches about every waiting caller on this node and tells
 //// the dispatcher about the ones nobody is carrying.
 ////
-//// And a call somebody answered on a node that then died. Its member
-//// message was settled the moment it was answered, so the broker has
-//// nothing left to redeliver and no other node will ever hear of it: the
-//// `queue_call` document stays open with no end, the agent gets no wrap-up
-//// and no counters, and nothing publishes `member_result` or
-//// `agent_wrapup`. The record is the only thing that survived, so the
-//// records are what this looks at -- `callcenter/queue_calls_open` over the
-//// accounts of the shards concerned. A record whose caller is on no switch
-//// is closed; one whose caller is still talking is handed to a dispatcher,
-//// which adopts the call and watches it for the end.
+//// And a call somebody answered on a node that then died, whose member no
+//// broker will hand out again. A connected call's member is held until the
+//// call ends, and comes back to whoever takes the shard, whose caller's
+//// actor finds the call and watches it (*Takeover*). But a member an
+//// earlier release settled the moment the call was answered, or one the
+//// broker lost, is gone: the `queue_call` document stays open with no end,
+//// the agent gets no wrap-up and no counters, and nothing publishes
+//// `member_result` or `agent_wrapup`. The record is the only thing that
+//// survived, so the records are what this looks at --
+//// `callcenter/queue_calls_open` over the accounts of the shards
+//// concerned. A record whose caller is on no switch is closed; one whose
+//// caller is still talking is handed to a dispatcher, which adopts the call
+//// and watches it for the end -- unless the caller's member is the
+//// dispatcher's already, and the caller's actor is watching it
+//// (`arrival.orphaned`).
 ////
 //// **That scan runs when this node takes a shard, and not on every sweep.**
 //// An orphan appears when a node dies, and a node dying is a shard taken
@@ -114,6 +119,11 @@ pub type OpenCall {
     /// call: `agent_id` is whoever picked the caller up, and nothing an
     /// agent's call counts is counted when it closes.
     picked_up: Bool,
+    /// The passage's handoff id and the caller's control queue, as the
+    /// record names them (`records.reached_by`): nothing, on a record an
+    /// earlier release wrote.
+    handoff_id: Option(String),
+    control_queue: Option(String),
   )
 }
 
@@ -768,6 +778,9 @@ pub fn open_call(row: Value, account_id: String) -> Result(OpenCall, Nil) {
       |> result.unwrap(""),
     answered: answered,
     picked_up: doc.get_bool(document, ["picked_up"]) |> result.unwrap(False),
+    handoff_id: doc.get_string(document, ["handoff_id"]) |> option.from_result,
+    control_queue: doc.get_string(document, ["control_queue"])
+      |> option.from_result,
   ))
 }
 
@@ -990,23 +1003,39 @@ fn say(call: OpenCall, ended: Option(Int)) -> Nil {
 
 /// The caller as a `Member` again, out of their own record.
 ///
-/// The message they arrived on was settled by the node that answered them,
-/// so the delivery settles nothing; the call is the identifier and no more,
-/// because the `kapps_call` the callflow published went with that node. A
-/// call rebuilt this way can be watched and written about but not
-/// commanded.
+/// The delivery settles nothing. A record the sweep hands over is one
+/// whose member nobody holds -- an earlier release settled it as the call
+/// was answered, or it was lost -- or, at the moment a shard is taken, one
+/// whose member is still on its way: that member, arriving, takes the
+/// adopted call's place, and its delivery is what the end settles. A
+/// caller the dispatcher already holds is left to their actor, and one it
+/// holds in another passage to that passage; one of this passage whose
+/// actor could not be started is adopted with the member held, whose
+/// delivery the end settles (`arrival.orphaned`). The `kapps_call` the
+/// callflow published went with the node that died; what is rebuilt is
+/// what the record names: the call, the passage's handoff id and the
+/// control queue the caller is commanded through (`records.reached_by`),
+/// so that the actor watching the call can hang up a caller the agent's
+/// end left parked. A record an earlier release wrote names neither, and a
+/// call rebuilt from it can be watched and written about but not commanded.
 pub fn rebuilt(call: OpenCall) -> types.Member {
   Member(
     account_id: call.account_id,
     queue_id: call.queue_id,
     call_id: call.call_id,
-    call: doc.object([#("Call-ID", doc.String(call.call_id))]),
+    call: doc.object_some([
+      #("Call-ID", Some(doc.String(call.call_id))),
+      #("Account-ID", Some(doc.String(call.account_id))),
+      #("Control-Queue", option.map(call.control_queue, doc.String)),
+    ]),
     priority: 0,
     joined: call.joined,
     callflow_node: "",
     caller_id_name: None,
     caller_id_number: None,
-    handoff_id: member.handoff_of(call.call_id, call.joined),
+    handoff_id: option.lazy_unwrap(call.handoff_id, fn() {
+      member.handoff_of(call.call_id, call.joined)
+    }),
     branches: doc.object([]),
     delivery: member.no_delivery(),
   )
