@@ -28,6 +28,12 @@ fn answered() -> doc.Value {
   event("call_event", "CHANNEL_ANSWER", [])
 }
 
+fn bridged() -> doc.Value {
+  event("call_event", "CHANNEL_BRIDGE", [
+    #("Other-Leg-Call-ID", doc.String("0a1b2c3d4e5f6a7b8c9d0e1f-1")),
+  ])
+}
+
 fn hangup() -> doc.Value {
   event("call_event", "CHANNEL_DESTROY", [])
 }
@@ -417,4 +423,24 @@ pub fn what_a_waiting_caller_hears_test() {
   assert cf_callcenter.heard(hangup(), caller_id, "h1") == cf_callcenter.Gone
   assert cf_callcenter.heard(answered(), caller_id, "h1")
     == cf_callcenter.Nothing
+  assert cf_callcenter.heard(bridged(), caller_id, "h1")
+    == cf_callcenter.Through
+  assert cf_callcenter.heard(
+      doc.set(bridged(), ["Call-ID"], doc.String("other")),
+      caller_id,
+      "h1",
+    )
+    == cf_callcenter.Nothing
+}
+
+/// A caller through to somebody -- an agent the queue rang, a supervisor
+/// who picked them up -- is never handed back: the callflow ends and leaves
+/// the channel alone. An executor kept up for the conversation would hang
+/// the caller up if its node stopped.
+pub fn a_caller_through_to_somebody_is_let_go_test() {
+  let rt =
+    runtime.new([EventAfter(0, answered()), EventAfter(3000, bridged())], 0)
+  run(doc.object([]), rt)
+  assert list.last(commands()) == Ok(Command("let_go", ""))
+  assert !list.contains(commands(), Command("stop", ""))
 }

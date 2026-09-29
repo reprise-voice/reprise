@@ -1123,7 +1123,11 @@ under 32 KB). Then it sends the channel nothing. It waits for the actor to
 hand the caller back: a `member_continue` naming its `Handoff-ID` is
 answered with `member_continuing`, the channel is marked `Queue-Departed`
 for the passage, and the callflow goes on down the branch. The channel going,
-or four hours, stops it.
+or four hours, stops it. So does the caller being bridged -- to the agent the
+queue put them through to, or to a supervisor who picked them up -- and that
+ends the callflow without touching the channel (`control_usurped`): nothing
+is handed back after it, and an executor kept up through the conversation
+hangs its channel up if its node stops, which drops the call.
 
 The shard holds the member until the call is over (*One ack per member*),
 and the dispatcher joins the caller to their actor.
@@ -1152,7 +1156,10 @@ barrier only as it leaves.
 
 **Waiting.** The queue's greeting, then hold (`kz_endless_playback`, whose
 input callback reads the exit keys while it plays), and the announcements;
-the caller's own clocks (`callcenter/caller`) take them out.
+the caller's own clocks (`callcenter/caller`) take them out. An announcement
+flushes the hold before it plays: a callflow executor that stops queues its
+channel's hangup on the way out, which the endless hold keeps from running
+and an announcement that only interrupted the hold would let run.
 
 **An offer.** One `originate_req` rings every device of every agent the
 dispatcher chose, at once (`call/originate`), whatever the strategy that
@@ -1170,15 +1177,27 @@ chose them:
 | `Media-Control.park_timeout` | an answered leg nobody bridges hangs itself up after ten seconds |
 | `Msg-ID` | the leg prefix, which the answer echoes |
 
-The caller hears their hold all through. The first leg to answer is
-bridged, on the caller's control queue: a `noop` that flushes the hold,
-`connect_leg` run at once (not queued, so the caller's queue keeps running,
-and with `Park-After-Pickup` false, which `ecallmgr` would write on both
-legs), then `park_after_bridge=true` set at once on the caller alone. The
-caller's own `CHANNEL_BRIDGE` naming the leg is the connection: the channel
-is marked with the agent and the second, the recording starts, and the
-dispatcher hears `Answered`. A bridge that has not shown in five seconds,
-or a leg that went first, is hung up, and the caller is put back on hold.
+The caller hears their hold all through. The first leg to answer decides
+the call, and the caller's channel is marked with the agent and the second
+then, while they are still on hold: a `set` is an application, and a
+channel in a bridge runs none. The caller is bridged once the leg's
+originate has finished with it -- the leg's `park` is heard, or the
+originate's own success, or 150 ms have gone by, the switch running that
+`park` within 40 ms of the answer -- because a leg bridged sooner is taken
+back out of the bridge by that `park` (the lab of 2026-09-27,
+`e2e-260927-cca2`). The wait is kept short: until the bridge the agent's
+leg is on its own, and the switch refuses a blind transfer from it. The bridge is on the caller's control
+queue: a `noop` that flushes the hold, then `connect_leg` run at once, not
+queued, so that the caller's queue keeps running, with `Park-After-Pickup`,
+which `ecallmgr` sets on both channels through the switch's API before the
+bridge. So the caller parks rather than hangs up when the agent's leg goes,
+and the agent's leg parks when the caller goes, and is hung up by the actor.
+The caller's own `CHANNEL_BRIDGE` naming the leg is the connection: the
+recording starts, and the dispatcher hears `Answered`. A bridge that has not
+shown in five seconds is hung up, and the caller is put back on hold. Either
+side hanging up between the answer and the bridge ends the call as the
+answered call it is: the dispatcher hears the answer and its end, and the
+other side is hung up.
 
 **The race.** An answer, a key, a clock running out and a call-off can all be
 in flight at once. Whichever the actor handles first stands: a leg that
@@ -1192,10 +1211,30 @@ deleted, a pickup let go -- hangs the offer's legs up by name, through
 the offer that turns up later as it does. That never touches the caller.
 Nothing ever parks or unbridges the caller.
 
+**The caller hanging up while the phones ring.** The ring is called off at
+once, but the shard hears the caller left only once the ring is over, or
+two seconds later (`desertion_ms`). The caller's end and a leg's answer are
+events of two channels, and nothing orders them. An agent who answers just
+as the caller hangs up may be heard answering second. In the lab of
+2026-09-27 (`e2e-260927-cca5`), a call answered like that was never
+counted. So the call-off watches its legs. A leg whose answer the switch
+dates before the caller's end, by `Event-Timestamp` on the caller's
+switch's one clock, makes it an answered call that the caller ended: the
+dispatcher hears `Answered` and `Ended(caller_hangup)`, and the counters,
+the record and the wrap-up are an answered call's. An answer dated after
+the caller's end is an agent picking up a caller already gone, and is no
+call.
+
 **Connected.** When the agent's leg goes the caller parks; the end waits
 `transfer_wait_ms` for a sign that it was a transfer, and hangs the caller up
-if none came (`call/talk`). When the caller goes, the leg ends by itself.
-The dispatcher hears `Ended`, and settles the member.
+if none came (`call/talk`). When the caller goes, the leg parks and the
+actor hangs it up. A transfer ends the queue's part and leaves the caller
+alone, on their way to the target. The agent's leg is hung up then too: the
+bridge's `park_after_bridge` parks it rather than letting it end. In the lab
+of 2026-09-27 (`e2e-260927-cca5`), a leg stayed parked for 45 minutes after
+a blind transfer, and the agent's phone was busy with it. A leg the
+transfer itself is moving (its own `CHANNEL_TRANSFEREE`) is left alone. The
+dispatcher hears `Ended`, and settles the member.
 
 **The audit.** Every thirty seconds a waiting, ringing or connected call
 asks every switch about the caller, and about the agent's leg once they are
@@ -1345,7 +1384,7 @@ stands, and every leg of theirs it does not keep is hung up:
 
 | Found | What happens |
 |---|---|
-| the probe unanswered, and every switch answering without the caller | gone: the member is settled as a hang-up |
+| the probe unanswered, and every switch answering without the caller | gone: the member is settled as a hang-up -- or, when the record has an answer nothing closed, the call is told the dispatcher and closed as a call that ended |
 | the record closed, by an end or a cancel | the queue is done with them, and only the settle was lost: `PresentOver`, and the member is settled |
 | `Queue-Departed` naming this passage | the callflow has them back: settled on the branch the departure's mark names |
 | the caller bridged to a channel that is not one of their legs | a pickup or a transfer: settled as a transfer |
@@ -1434,8 +1473,8 @@ a node-wide table (`callcenter/closed`, kept an hour), and an orphan handed to
 a dispatcher that is in it is not adopted or closed -- its end is written
 again with the result and second the first close had, and nothing is
 published. That is what stops the backstop taking a call this node finished a
-moment ago, whose end was still queued in the records writer or was dropped
-on a 409, for an orphan: a second `member_result` and `agent_wrapup`, talk
+moment ago, whose end was still queued in the records writer or held there
+for the datastore to come back, for an orphan: a second `member_result` and `agent_wrapup`, talk
 time counted twice and a second wrap-up. And `records.closed` leaves a
 document that already carries an end alone.
 
@@ -1509,6 +1548,43 @@ month databases.
 Every document write goes through one writer actor per node, so the
 dispatchers never wait on a datastore and two changes to one document cannot
 interleave.
+
+A write the datastore did not take is held and tried again
+(`callcenter/records/backlog`), rather than dropped. Before, an agent's
+counter increment made during a database outage was lost for good. The
+writer's rules:
+
+- **Order.** A document's writes are made in the order they were asked
+  for. While one is held, every later write to that document waits behind
+  it.
+- **Once.** Every write carries an id, and every document the writer
+  writes carries the ids of the last eight writes that made it, in
+  `pvt_callcenter_writes`. A write tried again first reads its document,
+  and one whose id is already there is done. That is how a write whose
+  answer was lost, but which landed, is not counted twice.
+- **Pacing.** The first write the datastore does not take puts the writer
+  into holding: later writes are held without being tried, so a datastore
+  that answers only after its connect timeout does not put the writer
+  minutes behind its mailbox. The writes held are tried again after 1 s,
+  then 2, 4 and 8, and every 10 s after that. A round tries the documents
+  in turn, each document's oldest write first, and ends at the first write
+  not taken. That document goes to the back of the next round, so one
+  unreachable database never keeps the others back.
+- **Races.** A write that loses a race is read and made again at once, up
+  to three times. The race is with another node's change to the document
+  between the writer's read and its write; `callcenter/availability`
+  writes the `callcenter_agent` document too.
+- **What counts as final.** An outage is anything the datastore did not
+  answer usefully, which includes `connect_timeout`, `econnrefused` and
+  `tcp_closed`. A missing database or a 4xx answer is final, and the write
+  is given up and logged.
+- **Limits.** At most 20,000 writes are held, and none for longer than an
+  hour. Past either, the oldest is given up and logged. A node that stops
+  loses what it holds, and says how many writes it held.
+
+The log lines are `the datastore did not take a write (<reason>); holding
+writes and trying again`, `the datastore is back: N held write(s) done`
+and `could not write <type> <id>, given up: <reason>`.
 
 The queue document is read on every dispatch pass, through the data layer's
 document cache: an edit empties the cache through its `doc_edited` and is in
@@ -1593,6 +1669,7 @@ cluster-wide view of who holds what.
 | `callcenter/availability` | the `callcenter_agent` document, and the only thing that writes it |
 | `callcenter/breaks` | a break with an end: when it is over, what it goes back to, the timer of the node that started it and the sweep's end |
 | `callcenter/records` | the `queue_call` and `agent_status_change` documents and the per-login counters |
+| `callcenter/records/backlog` | the writes the record writer holds while the datastore is away: per-document order, write ids, limits |
 | `callcenter/recording` | a queue call's recording: its name and the settings `media_mgr` stores it by |
 | `callcenter/reconcile` | the sweep behind the events |
 | `callcenter/closed` | the passages this node's dispatchers closed lately, so that the sweep never closes one twice |

@@ -140,6 +140,19 @@ pub fn gone(call: String, cause: String) -> Input {
   event(call, "CHANNEL_DESTROY", [#("Hangup-Cause", doc.String(cause))])
 }
 
+/// A leg's originate done with it: the leg runs `park`.
+pub fn parked(leg: String) -> Input {
+  event(leg, "CHANNEL_EXECUTE", [#("Application-Name", doc.String("park"))])
+}
+
+/// The marks an answer puts on the caller's channel.
+pub fn answer_marks(agent_id: String, at: Int) -> core.Effect {
+  core.Mark([
+    #("Agent-ID", doc.String(agent_id)),
+    #("Queue-Answered-Timestamp", doc.Int(at)),
+  ])
+}
+
 pub fn bridged_to(leg: String) -> Input {
   event(call_id, "CHANNEL_BRIDGE", [#("Other-Leg-Call-ID", doc.String(leg))])
 }
@@ -238,6 +251,7 @@ pub fn phase_name(call: Call) -> String {
     core.Idle -> "idle"
     core.Waiting(..) -> "waiting"
     core.Offering(ring: core.Ringing(_), ..) -> "ringing"
+    core.Offering(ring: core.Parking(..), ..) -> "parking"
     core.Offering(ring: core.Connecting(..), ..) -> "connecting"
     core.Connected(..) -> "connected"
     core.Leaving(..) -> "leaving"

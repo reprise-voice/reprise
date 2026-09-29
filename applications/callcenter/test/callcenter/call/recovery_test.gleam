@@ -145,6 +145,16 @@ pub fn a_caller_on_no_switch_is_gone_test() {
     == #(Gone, [offer <> "-1"])
 }
 
+/// A caller gone whose record has an answer nothing closed: the call ended
+/// while nothing watched it, and is closed as a call.
+pub fn a_caller_gone_after_an_answer_finished_test() {
+  assert classify(Unanswered, [], True, record(Some(now - 30), None, None))
+    == #(recovery.Finished("ann", now - 30, False), [])
+  // Closed already: only gone.
+  assert classify(Unanswered, [], True, record(Some(now - 30), Some(now), None))
+    == #(Gone, [])
+}
+
 /// A switch that did not answer may be the one carrying the caller: nothing
 /// is concluded, and nothing hung up on a guess.
 pub fn a_caller_not_found_on_a_partial_answer_is_unknown_test() {

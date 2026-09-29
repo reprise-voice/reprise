@@ -41,6 +41,7 @@ pub fn new(script: List(Step), now: Int) -> cf_callcenter.Runtime {
     mark: fn(call, vars) { call.set_channel_vars(call, vars, []) },
     continue_branch: continue_branch,
     stop: fn(_call) { note("stop", "") },
+    let_go: fn(_call) { note("let_go", "") },
     branches: fn(_call) { branches() },
     handoff_id: fn() { handoff_id },
   )

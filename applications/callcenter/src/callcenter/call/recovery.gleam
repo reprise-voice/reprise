@@ -102,6 +102,10 @@ pub type Leg {
 pub type Finding {
   /// The caller's channel is on no switch.
   Gone
+  /// The caller's channel is on no switch, and the record says an agent
+  /// answered and nothing closed the call: it ended while nothing watched
+  /// it, and is closed as a call, not as a caller who left.
+  Finished(agent_id: String, answered_at: Int, pickup: Bool)
   /// The record says the passage is over, and its member came round again
   /// only because its settle was lost.
   Closed
@@ -153,7 +157,7 @@ pub fn classify(found: Found) -> #(Finding, List(String)) {
   let finding = case found.probe, caller, complete {
     // Only every switch answering without the channel, and the channel not
     // answering either, is a caller who has gone.
-    Unanswered, Error(Nil), True -> Gone
+    Unanswered, Error(Nil), True -> gone(found.survey.record)
     Unanswered, Error(Nil), False -> Unknown
     _, _, _ -> standing(found, legs, bridged(rows, caller, found.call_id))
   }
@@ -163,7 +167,14 @@ pub fn classify(found: Found) -> #(Finding, List(String)) {
     Ringing(ring) -> ring
     // Nothing is hung up on a guess.
     Unknown -> legs
-    Gone | Closed | Departed(_) | Moved | Departing(_) | Talked(..) | Waiting -> []
+    Gone
+    | Finished(..)
+    | Closed
+    | Departed(_)
+    | Moved
+    | Departing(_)
+    | Talked(..)
+    | Waiting -> []
   }
   let kept = list.map(kept, fn(leg) { leg.call_id })
   #(
@@ -173,6 +184,17 @@ pub fn classify(found: Found) -> #(Finding, List(String)) {
       |> list.filter(fn(leg) { !list.contains(kept, leg) })
       |> list.sort(string.compare),
   )
+}
+
+/// A caller whose channel is gone: a call that ended unwatched, when the
+/// record has an answer and nothing closed it.
+fn gone(record: Option(records.Passage)) -> Finding {
+  case record {
+    Some(
+      records.Passage(answered: Some(at), ended: None, cancelled: None, ..) as passage,
+    ) -> Finished(passage.agent_id |> option.unwrap(""), at, passage.picked_up)
+    _ -> Gone
+  }
 }
 
 /// A caller whose channel is up: the record, the marks and the bridge, in

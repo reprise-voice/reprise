@@ -17,11 +17,14 @@
 ////   `originate_req` for the whole offer, every device at once, each leg
 ////   named in advance (`<offer>-N`) and born with the queue's variables;
 ////   the caller hears their hold music throughout;
-//// - the first leg to answer parks, and the actor bridges the caller to it:
-////   a flush of the hold, `connect_leg` run at once, and the caller marked
-////   to park -- not hang up -- when the agent's leg goes, so that the actor
-////   and not the order of two channels' events says how the call ended
-////   (the lab of 2026-09-27, `e2e-260927-spike1`);
+//// - the first leg to answer decides the call, and the actor bridges the
+////   caller to it once its originate has parked it: a flush of the hold, and
+////   `connect_leg` run at once with both channels set to park -- not hang
+////   up -- when the other goes, so that the actor and not the order of two
+////   channels' events says how the call ended (the labs of 2026-09-27,
+////   `e2e-260927-spike1` and `e2e-260927-cca2`: a leg bridged before its
+////   originate had finished with it was taken back out of the bridge by the
+////   originate's own `park`);
 //// - an offer called off -- the caller leaving, the agent released, the
 ////   queue deleted -- has its legs hung up by name, which never touches the
 ////   caller, and any of its legs that turns up later is hung up as it does.
@@ -63,6 +66,7 @@ import callcenter/types.{
   type CancelReason, type OfferId, type OfferReply, type Presence,
 }
 import gleam/dict.{type Dict}
+import gleam/float
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -74,10 +78,25 @@ import kazoo/events
 
 // --- Waits ---------------------------------------------------------------------
 
+/// How long an answered leg is given to be parked by its originate before
+/// the caller is bridged to it all the same. The switch runs the originate's
+/// `park` within about 40 ms of the answer (the labs of 2026-09-27); neither
+/// the park's own event nor `ecallmgr`'s answer to the originate comes that
+/// soon, the second taking half a second. Every moment of the wait is a
+/// moment the agent's leg is on its own, where the switch refuses the
+/// agent's blind transfer and the agent hears nothing.
+pub const park_wait_ms = 150
+
 /// How long the bridge to an answered leg has to show on the caller's
 /// channel. `connect_leg` bridges in under 100 ms on the lab; a bridge that
 /// has not shown in this long is not coming, and the leg is hung up.
 pub const connect_ms = 5000
+
+/// How long a ring called off because its caller hung up waits, at most,
+/// before the call is decided (`Desertion`): an agent's answer that came
+/// before the hang-up is heard in this long, the legs being hung up at once
+/// and their ends following in a few hundred milliseconds.
+pub const desertion_ms = 2000
 
 /// How long the departure's barrier has to complete before the callflow is
 /// told to go on regardless: the completion proves the earlier commands ran,
@@ -249,6 +268,12 @@ pub type Offer {
 pub type Ring {
   /// The phones are ringing and the caller still hears their media.
   Ringing(media: Media)
+  /// A leg answered, and the call is its agent's: no key, clock or
+  /// call-off takes the caller away now. Its originate is still finishing
+  /// with it -- the leg runs `park` once it has -- and the caller, who still
+  /// hears their media, is bridged to it then. A leg bridged sooner is taken
+  /// back out of the bridge by that `park`.
+  Parking(leg: String, agent_id: String, answered_at: Int, until_ms: Int)
   /// A leg answered and the caller is being bridged to it: the media has
   /// been flushed, and nothing else is sent the caller until the bridge
   /// shows or does not.
@@ -325,9 +350,41 @@ pub type Phase {
 /// An offer that was called off while its legs might still ring: any of
 /// them that turns up is hung up, until the originate says it is over or
 /// the ring's own deadline passes. `tell` is what the dispatcher is told
-/// then, if anything.
+/// then, if anything, and `deserted` is set when the call-off was the
+/// caller hanging up.
 pub type Recall {
-  Recall(offer: Offer, tell: Option(OfferReply), heard: Bool)
+  Recall(
+    offer: Offer,
+    tell: Option(OfferReply),
+    heard: Bool,
+    deserted: Option(Desertion),
+  )
+}
+
+/// The caller hung up while the offer rang (`caller_gone`), and the ring was
+/// called off, but whether they left before anybody answered or hung up on
+/// an agent who just had is not known yet. The caller's end and a leg's
+/// answer are events of two channels, and nothing orders the two: the lab
+/// of 2026-09-27 (e2e-260927-cca5) had an agent answer and the caller hang
+/// up straight after, the actor heard the hang-up first, and the answer was
+/// never counted. So the call-off decides once its ring is over, or after
+/// `desertion_ms`. A leg that answered before the caller's end, by the
+/// switch's own clock, makes it an answered call that the caller ended.
+/// Otherwise the caller left the queue.
+pub type Desertion {
+  Desertion(
+    /// When the switch says the caller hung up (`Event-Timestamp`, in
+    /// microseconds), if it said.
+    at_us: Option(Int),
+    /// When the caller hung up, a calendar second.
+    at: Int,
+    /// The leg that answered before the caller hung up: the leg, its agent
+    /// and the second.
+    answer: Option(#(String, String, Int)),
+    /// The monotonic millisecond by which the call is decided, whatever has
+    /// been heard.
+    until_ms: Int,
+  )
 }
 
 pub type Call {
@@ -457,7 +514,7 @@ pub type Effect {
 /// One input, at one time: the call after it, and what to do about it, in
 /// order.
 pub fn step(call: Call, input: Input, clock: Clock) -> #(Call, List(Effect)) {
-  let #(call, recalled) = recalling(call, input)
+  let #(call, recalled) = recalling(call, input, clock)
   let #(call, effects) = case recalled {
     True -> #(call, [])
     False -> phase_step(call, input, clock)
@@ -550,8 +607,8 @@ pub fn wait_ms(call: Call, clock: Clock) -> Int {
         ),
         offer.until_ms - clock.now_ms,
       ))
-    Offering(_, _, Connecting(until_ms: until, ..)) ->
-      Some(until - clock.now_ms)
+    Offering(_, _, Connecting(until_ms: until, ..))
+    | Offering(_, _, Parking(until_ms: until, ..)) -> Some(until - clock.now_ms)
     Connected(talk: talking, until_ms: until, ..) ->
       case talking.closing {
         Some(closing) -> Some(closing.until - clock.now_ms)
@@ -568,7 +625,13 @@ pub fn wait_ms(call: Call, clock: Clock) -> Int {
       |> option.map(fn(until) { until - clock.now_ms })
   }
   let recall_wait =
-    list.map(call.recalls, fn(recall) { recall.offer.until_ms - clock.now_ms })
+    list.flat_map(call.recalls, fn(recall) {
+      case recall.deserted {
+        Some(desertion) -> [recall.offer.until_ms, desertion.until_ms]
+        None -> [recall.offer.until_ms]
+      }
+      |> list.map(fn(until) { until - clock.now_ms })
+    })
   let audit_wait = option.map(call.audit_due_ms, fn(due) { due - clock.now_ms })
   [phase_wait, audit_wait, ..list.map(recall_wait, Some)]
   |> option.values
@@ -1090,6 +1153,18 @@ fn rehydrate(
   }
   case finding {
     recovery.Gone -> settle([Left(types.Hangup)])
+    recovery.Finished(agent_id, at, pickup) ->
+      settle([
+        Present(Some(id), types.PresentConnected(agent_id, "", at, pickup)),
+        Tell(id, types.Ended(types.CallerHangup, clock.now)),
+        Log(
+          "call "
+          <> call.call_id
+          <> " was answered by "
+          <> agent_id
+          <> " and its caller is gone: its end went unwatched",
+        ),
+      ])
     recovery.Closed -> settle([Present(None, types.PresentOver)])
     recovery.Departed(branch) -> settle([Left(cancel_reason(exit_of(branch)))])
     recovery.Moved -> settle([Left(types.Transfer)])
@@ -1122,10 +1197,7 @@ fn rehydrate(
           until_ms: clock.now_ms + longest_call_ms,
         ),
         list.append(hang_up, [
-          Mark([
-            #("Agent-ID", doc.String(leg.agent_id)),
-            #("Queue-Answered-Timestamp", doc.Int(at)),
-          ]),
+          // No marks: the caller is in a bridge, which runs no `set`.
           Present(
             Some(id),
             types.PresentConnected(leg.agent_id, leg.call_id, at, leg.pickup),
@@ -1155,7 +1227,14 @@ fn rehydrate(
           ),
         )
       let #(call, bridge) = answered(call, passage, offer, leg.call_id, clock)
-      #(call, list.flatten([hang_up, [present_ring(offer, clock)], bridge]))
+      #(
+        call,
+        list.flatten([
+          hang_up,
+          [present_ring(offer, clock), answer_marks(leg.agent_id, clock.now)],
+          bridge,
+        ]),
+      )
     }
     recovery.Ringing(ring) -> {
       let offer = found_offer(id, ring, clock)
@@ -1308,10 +1387,6 @@ pub const nothing_rang = "nothing_rang"
 /// The failure an offer whose answered leg never showed bridged ends in.
 pub const bridge_failed = "bridge_failed"
 
-/// The failure an offer ends in when its agent's leg went between the answer
-/// and the bridge.
-pub const agent_left = "agent_left"
-
 /// The ring is over without an answer: the dispatcher is told how, and the
 /// caller goes back to waiting as they were, their media untouched.
 fn ring_over(
@@ -1342,6 +1417,18 @@ fn answered(
   leg: String,
   clock: Clock,
 ) -> #(Call, List(Effect)) {
+  bridge(call, passage, offer, leg, clock.now, clock)
+}
+
+/// Bridge the caller to a leg that answered at `answered_at` and is parked.
+fn bridge(
+  call: Call,
+  passage: Passage,
+  offer: Offer,
+  leg: String,
+  answered_at: Int,
+  clock: Clock,
+) -> #(Call, List(Effect)) {
   case dict.get(offer.legs, leg) {
     Error(Nil) -> stay(call)
     Ok(agent_id) ->
@@ -1353,7 +1440,7 @@ fn answered(
           Connecting(
             leg: leg,
             agent_id: agent_id,
-            answered_at: clock.now,
+            answered_at: answered_at,
             until_ms: clock.now_ms + connect_ms,
           ),
         ),
@@ -1362,9 +1449,96 @@ fn answered(
   }
 }
 
+/// A leg answered while the phones rang, and nothing had decided the call
+/// before: it is that agent's. The caller's channel is marked with the agent
+/// and the second now, while they are still on hold: a `set` is an
+/// application, and a channel in a bridge runs none, so a mark sent once
+/// they are through would wait for the end of the call. The caller is
+/// bridged to the leg once its originate has parked it (`Parking`).
+fn parking(
+  call: Call,
+  passage: Passage,
+  offer: Offer,
+  leg: String,
+  clock: Clock,
+) -> #(Call, List(Effect)) {
+  case dict.get(offer.legs, leg) {
+    Error(Nil) -> stay(call)
+    Ok(agent_id) ->
+      into(
+        call,
+        Offering(
+          passage,
+          Offer(..offer, seen: set.insert(offer.seen, leg)),
+          Parking(
+            leg: leg,
+            agent_id: agent_id,
+            answered_at: clock.now,
+            until_ms: clock.now_ms + park_wait_ms,
+          ),
+        ),
+        [answer_marks(agent_id, clock.now)],
+      )
+  }
+}
+
+/// The marks of an answer on the caller's channel: who, and when. They are
+/// on the caller's CDR, and they are what a node taking the call over dates
+/// the answer by.
+fn answer_marks(agent_id: String, at: Int) -> Effect {
+  Mark([
+    #("Agent-ID", doc.String(agent_id)),
+    #("Queue-Answered-Timestamp", doc.Int(at)),
+  ])
+}
+
+/// Whether an event is a leg starting `park`: its originate is done with
+/// it, and a bridge now stays.
+fn is_parked(event: Value) -> Bool {
+  events.event_name(event) == Some("CHANNEL_EXECUTE")
+  && doc.get_string(event, ["Application-Name"]) == Ok("park")
+}
+
+/// The agent's answered leg went before the caller was through to it. The
+/// answer decided the call, so it is an answered call that the agent ended:
+/// the dispatcher hears the answer and its end, and the caller is hung up,
+/// as a connected caller is when the agent hangs up on them.
+fn agent_hung_up(
+  call: Call,
+  offer: Offer,
+  leg: String,
+  agent_id: String,
+  answered_at: Int,
+  clock: Clock,
+) -> #(Call, List(Effect)) {
+  into(call, Done, [
+    HangUpCaller,
+    Tell(offer.id, types.Answered(agent_id, leg, answered_at)),
+    Tell(offer.id, types.Ended(types.AgentHangup, clock.now)),
+  ])
+}
+
+/// The caller hung up after an agent answered them and before they were
+/// through: an answered call that the caller ended. The agent's leg is
+/// hung up.
+fn caller_hung_up(
+  call: Call,
+  offer: Offer,
+  leg: String,
+  agent_id: String,
+  answered_at: Int,
+  clock: Clock,
+) -> #(Call, List(Effect)) {
+  into(call, Done, [
+    HangUpLegs([leg]),
+    Tell(offer.id, types.Answered(agent_id, leg, answered_at)),
+    Tell(offer.id, types.Ended(types.CallerHangup, clock.now)),
+  ])
+}
+
 /// The caller's own channel says it is through to the leg: the call is
-/// connected, and the queue's part of it -- the mark, the recording, the
-/// dispatcher's answer -- follows.
+/// connected, and the queue's part of it -- the recording, the dispatcher's
+/// answer -- follows. The marks went on at the answer.
 fn connected(
   call: Call,
   passage: Passage,
@@ -1388,15 +1562,8 @@ fn connected(
       talk: talk.Talk(caller: call.call_id, leg: Some(leg), closing: None),
       until_ms: clock.now_ms + longest_call_ms,
     ),
-    list.flatten([
-      [
-        Mark([
-          #("Agent-ID", doc.String(agent_id)),
-          #("Queue-Answered-Timestamp", doc.Int(answered_at)),
-        ]),
-      ],
-      recording,
-      [Tell(offer.id, types.Answered(agent_id, leg, answered_at))],
+    list.append(recording, [
+      Tell(offer.id, types.Answered(agent_id, leg, answered_at)),
     ]),
   )
 }
@@ -1558,11 +1725,24 @@ fn recall(
   offer: Offer,
   tell: Option(OfferReply),
 ) -> #(Call, List(Effect)) {
+  recall_deserted(call, offer, tell, None)
+}
+
+fn recall_deserted(
+  call: Call,
+  offer: Offer,
+  tell: Option(OfferReply),
+  deserted: Option(Desertion),
+) -> #(Call, List(Effect)) {
   // Every leg is hung up now, so only one seen after this is late.
   let offer = Offer(..offer, seen: offer.gone)
-  #(Call(..call, recalls: [Recall(offer, tell, heard: False), ..call.recalls]), [
-    HangUpLegs(dict.keys(offer.legs) |> list.sort(string.compare)),
-  ])
+  #(
+    Call(..call, recalls: [
+      Recall(offer, tell, heard: False, deserted: deserted),
+      ..call.recalls
+    ]),
+    [HangUpLegs(dict.keys(offer.legs) |> list.sort(string.compare))],
+  )
 }
 
 /// The dispatcher calls an offer off: the agent was released, a pickup let
@@ -1599,13 +1779,13 @@ fn queue_gone(call: Call, clock: Clock) -> #(Call, List(Effect)) {
 /// What an input does to the offers being called off, before the call's own
 /// phase sees it: a late leg of one of them is hung up as it appears, and
 /// the originate's word is noted. `True` when the input was theirs.
-fn recalling(call: Call, input: Input) -> #(Call, Bool) {
+fn recalling(call: Call, input: Input, clock: Clock) -> #(Call, Bool) {
   case input {
     Event(event) ->
       case events.call_id(event) {
         Some(leg) ->
           case find_recall(call.recalls, leg) {
-            Some(_) -> #(recall_event(call, leg, event), True)
+            Some(_) -> #(recall_event(call, leg, event, clock), True)
             None -> #(call, False)
           }
         None -> #(call, False)
@@ -1636,22 +1816,94 @@ fn find_recall(recalls: List(Recall), leg: String) -> Option(Recall) {
 }
 
 /// One event of a leg of an offer being called off.
-fn recall_event(call: Call, leg: String, event: Value) -> Call {
+fn recall_event(call: Call, leg: String, event: Value, clock: Clock) -> Call {
   let update = fn(recall: Recall) {
-    case dict.has_key(recall.offer.legs, leg) {
-      False -> recall
-      True -> {
+    case dict.get(recall.offer.legs, leg) {
+      Error(Nil) -> recall
+      Ok(agent_id) -> {
         let offer = recall.offer
         let offer = case events.event_name(event) {
           Some("CHANNEL_DESTROY") ->
             Offer(..offer, gone: set.insert(offer.gone, leg))
           _ -> Offer(..offer, seen: set.insert(offer.seen, leg))
         }
-        Recall(..recall, offer: offer)
+        Recall(
+          ..recall,
+          offer: offer,
+          deserted: option.map(recall.deserted, answered_first(
+            _,
+            leg,
+            agent_id,
+            event,
+            clock,
+          )),
+        )
       }
     }
   }
   Call(..call, recalls: list.map(call.recalls, update))
+}
+
+/// A leg of a ring its caller deserted answering. The first answer that
+/// came before the caller's end is the call's: the switch dates both, on
+/// the one clock of the caller's switch, where the legs start. An answer
+/// either event does not date is taken to have come first: the legs were
+/// hung up the moment the caller's end was heard, so it came within the
+/// time that took.
+fn answered_first(
+  desertion: Desertion,
+  leg: String,
+  agent_id: String,
+  event: Value,
+  clock: Clock,
+) -> Desertion {
+  case desertion.answer, is_answer(event) {
+    None, True ->
+      case event_us(event), desertion.at_us {
+        Some(answered), Some(left) if answered > left -> desertion
+        _, _ ->
+          Desertion(
+            ..desertion,
+            answer: Some(#(leg, agent_id, int.min(clock.now, desertion.at))),
+          )
+      }
+    _, _ -> desertion
+  }
+}
+
+/// Whether a leg's event says it answered: its answer, or the `park` its
+/// originate runs on an answered leg.
+fn is_answer(event: Value) -> Bool {
+  events.event_name(event) == Some("CHANNEL_ANSWER") || is_parked(event)
+}
+
+/// When the switch says an event happened: `Event-Timestamp`, microseconds
+/// on the switch's clock, which `mod_com_kazoo` puts on every event.
+fn event_us(event: Value) -> Option(Int) {
+  case doc.get(event, ["Event-Timestamp"]) {
+    Ok(doc.Int(us)) -> Some(us)
+    Ok(doc.Float(us)) -> Some(float.truncate(us))
+    _ -> None
+  }
+}
+
+/// What the dispatcher and the shard are told once a deserted ring is
+/// decided: an answered call the caller ended, or a caller who left.
+fn desertion_decided(offer: Offer, desertion: Desertion) -> List(Effect) {
+  case desertion.answer {
+    Some(#(leg, agent_id, at)) -> [
+      Log(
+        "call "
+        <> offer.id.call_id
+        <> ": the caller hung up as "
+        <> agent_id
+        <> " answered; an answered call the caller ended",
+      ),
+      Tell(offer.id, types.Answered(agent_id, leg, at)),
+      Tell(offer.id, types.Ended(types.CallerHangup, desertion.at)),
+    ]
+    None -> [Left(types.Hangup)]
+  }
 }
 
 /// The late legs that have to be hung up, and the offers whose recall is
@@ -1664,13 +1916,23 @@ fn settle_recalls(call: Call, clock: Clock) -> #(Call, List(Effect)) {
       let offer = recall.offer
       let up = set.difference(offer.seen, offer.gone) |> set.to_list
       let over = { recall.heard && up == [] } || clock.now_ms >= offer.until_ms
+      // A ring its caller deserted is decided once it is over, or once it
+      // has waited `desertion_ms`, and its legs are still hung up as they
+      // turn up after that.
+      let #(recall, decided) = case recall.deserted {
+        Some(desertion) if over || clock.now_ms >= desertion.until_ms -> #(
+          Recall(..recall, deserted: None),
+          desertion_decided(offer, desertion),
+        )
+        _ -> #(recall, [])
+      }
       case over {
         True -> {
           let told = case recall.tell {
             Some(reply) -> [Tell(offer.id, reply)]
             None -> []
           }
-          #(kept, list.append(effects, told))
+          #(kept, list.flatten([effects, decided, told]))
         }
         False -> {
           // Every leg seen up since the hang-up went out is hung up again:
@@ -1681,7 +1943,7 @@ fn settle_recalls(call: Call, clock: Clock) -> #(Call, List(Effect)) {
           }
           #(
             [Recall(..recall, offer: Offer(..offer, seen: offer.gone)), ..kept],
-            list.append(effects, late),
+            list.flatten([effects, decided, late]),
           )
         }
       }
@@ -1748,7 +2010,8 @@ fn heard(call: Call, event: Value, clock: Clock) -> #(Call, List(Effect)) {
   case call.phase, from(call, event), name {
     // The caller's channel is gone, whatever the call was doing.
     Connected(..), _, _ -> talking(call, event, clock)
-    _, FromCaller, Some("CHANNEL_DESTROY") -> caller_gone(call)
+    _, FromCaller, Some("CHANNEL_DESTROY") ->
+      caller_gone(call, event_us(event), clock)
 
     Waiting(passage, media), FromCaller, _ ->
       waiting_event(call, passage, media, None, event, clock)
@@ -1756,6 +2019,26 @@ fn heard(call: Call, event: Value, clock: Clock) -> #(Call, List(Effect)) {
       waiting_event(call, passage, media, Some(offer), event, clock)
     Offering(passage, offer, Ringing(media)), FromLeg(leg), _ ->
       leg_event(call, passage, offer, media, leg, event, clock)
+
+    Offering(
+      passage,
+      offer,
+      Parking(leg: leg, agent_id: agent, answered_at: at, ..),
+    ),
+      FromLeg(other),
+      _
+      if other == leg
+    ->
+      case events.event_name(event), is_parked(event) {
+        _, True -> bridge(call, passage, offer, leg, at, clock)
+        Some("CHANNEL_DESTROY"), _ ->
+          agent_hung_up(call, offer, leg, agent, at, clock)
+        _, _ -> stay(call)
+      }
+    // Somebody else bridged the caller while their agent's leg was being
+    // parked.
+    Offering(_, offer, Parking(..)), FromCaller, Some("CHANNEL_BRIDGE") ->
+      moved(call, Some(offer))
 
     Offering(passage, offer, Connecting(leg, agent_id, answered_at, _)),
       FromCaller,
@@ -1768,11 +2051,15 @@ fn heard(call: Call, event: Value, clock: Clock) -> #(Call, List(Effect)) {
         // is not this queue.
         _ -> moved(call, Some(offer))
       }
-    Offering(passage, offer, Connecting(leg: leg, ..)),
+    Offering(
+      _,
+      offer,
+      Connecting(leg: leg, agent_id: agent, answered_at: at, ..),
+    ),
       FromLeg(other),
       Some("CHANNEL_DESTROY")
       if other == leg
-    -> not_connected(call, passage, offer, leg, agent_left, clock)
+    -> agent_hung_up(call, offer, leg, agent, at, clock)
 
     Leaving(passage, exit, barrier, _), FromCaller, _ ->
       case is_noop_done(event, barrier) {
@@ -1854,9 +2141,12 @@ fn leg_event(
   event: Value,
   clock: Clock,
 ) -> #(Call, List(Effect)) {
-  case events.event_name(event) {
-    Some("CHANNEL_ANSWER") -> answered(call, passage, offer, leg, clock)
-    Some("CHANNEL_DESTROY") -> {
+  case events.event_name(event), is_parked(event) {
+    // Parked before its answer was heard -- one channel's events can come
+    // out of order -- and `park` only ever runs on an answered leg.
+    _, True -> bridge(call, passage, offer, leg, clock.now, clock)
+    Some("CHANNEL_ANSWER"), _ -> parking(call, passage, offer, leg, clock)
+    Some("CHANNEL_DESTROY"), _ -> {
       let offer =
         Offer(
           ..offer,
@@ -1878,7 +2168,7 @@ fn leg_event(
         False -> into(call, Offering(passage, offer, Ringing(media)), [])
       }
     }
-    _ ->
+    _, _ ->
       into(
         call,
         Offering(
@@ -1901,6 +2191,16 @@ fn originated(
   clock: Clock,
 ) -> #(Call, List(Effect)) {
   case call.phase {
+    // The originate has finished with its leg, which is parked: bridged
+    // now, on the second the answer was heard when it was.
+    Offering(passage, offer, Parking(leg: leg, answered_at: at, ..))
+      if offer.id == offer_id
+    ->
+      case originate_answered(reply) {
+        Some(answered) if answered == leg ->
+          bridge(call, passage, offer, leg, at, clock)
+        _ -> stay(call)
+      }
     Offering(passage, offer, Ringing(media)) if offer.id == offer_id ->
       case originate_answered(reply) {
         Some(leg) -> answered(call, passage, offer, leg, clock)
@@ -1941,18 +2241,45 @@ fn originate_cause(reply: Value) -> String {
   }
 }
 
-/// The caller's channel went. A ring going for them is called off, the
-/// shard is told -- unless the call was already on its way out, and told
-/// it then -- and nothing more is sent.
-fn caller_gone(call: Call) -> #(Call, List(Effect)) {
+/// The caller's channel went, at `at_us` on the switch's clock when its
+/// event said. A ring going for them is called off, and nothing more is
+/// sent. The shard is told they left -- unless the call was already on its
+/// way out, and told it then -- at once when nobody was rung, and once the
+/// ring called off is decided when somebody was (`Desertion`): an agent may
+/// have answered them just before. After an answer the call is the
+/// agent's, and its end is an answered call's (`caller_hung_up`).
+fn caller_gone(
+  call: Call,
+  at_us: Option(Int),
+  clock: Clock,
+) -> #(Call, List(Effect)) {
   case call.phase {
     Waiting(..) -> into(call, Done, [Left(types.Hangup)])
     Offering(_, offer, Ringing(_)) -> {
-      let #(call, effects) = recall(call, offer, None)
-      into(call, Done, list.append(effects, [Left(types.Hangup)]))
+      let #(call, effects) =
+        recall_deserted(
+          call,
+          offer,
+          None,
+          Some(Desertion(
+            at_us: at_us,
+            at: clock.now,
+            answer: None,
+            until_ms: clock.now_ms + desertion_ms,
+          )),
+        )
+      into(call, Done, effects)
     }
-    Offering(_, _, Connecting(leg: leg, ..)) ->
-      into(call, Done, [HangUpLegs([leg]), Left(types.Hangup)])
+    Offering(
+      _,
+      offer,
+      Connecting(leg: leg, agent_id: agent, answered_at: at, ..),
+    )
+    | Offering(
+        _,
+        offer,
+        Parking(leg: leg, agent_id: agent, answered_at: at, ..),
+      ) -> caller_hung_up(call, offer, leg, agent, at, clock)
     _ -> into(call, Done, [])
   }
 }
@@ -1983,30 +2310,53 @@ fn talking(call: Call, event: Value, clock: Clock) -> #(Call, List(Effect)) {
       case talk.heard(conversation, event, clock.now, clock.now_ms) {
         talk.Talking(conversation) ->
           into(call, Connected(..connection, talk: conversation), [])
-        outcome -> talked(call, offer, conversation, outcome)
+        outcome ->
+          talked(
+            call,
+            offer,
+            conversation,
+            outcome,
+            leg_moved(conversation, event),
+          )
       }
     _ -> stay(call)
   }
 }
 
-/// A connected call is over. The agent's leg is hung up unless the call
-/// was passed on -- which does nothing to a leg that has gone, and makes
-/// sure of one the switch left -- and the caller only when the agent's leg
-/// went and nothing said it was a transfer.
+/// Whether an event says the agent's leg itself is being transferred: the
+/// transfer's `CHANNEL_TRANSFEREE` on the leg, rather than on the caller.
+fn leg_moved(conversation: talk.Talk, event: Value) -> Bool {
+  events.event_name(event) == Some("CHANNEL_TRANSFEREE")
+  && option.is_some(conversation.leg)
+  && events.call_id(event) == conversation.leg
+}
+
+/// A connected call is over. The agent's leg is hung up, which does nothing
+/// to a leg that has gone and makes sure of one the switch left, and the
+/// caller only when the agent's leg went and nothing said it was a
+/// transfer.
 ///
-/// A transfer's leg is left alone: the switch's transfer events can come
-/// while it is still carrying the transfer out on that leg, and a hang-up
-/// then would cut the caller off on the way to the transfer's target.
+/// A transfer's leg is hung up too. The agent passed the caller on, and
+/// their leg has nothing more to do, but the switch does not end it: the
+/// bridge put `park_after_bridge` on both channels (`Park-After-Pickup`),
+/// so a leg whose caller was transferred away parks. The lab of 2026-09-27
+/// (e2e-260927-cca5) had an agent's leg parked for 45 minutes after a
+/// blind transfer, and the agent's phone busy with it. The hang-up cannot
+/// cut the caller off on the way to the transfer's target: the caller parks
+/// too when their bridge ends, and a transfer takes a channel from park as
+/// from anywhere. Only a leg the transfer is moving (`leg_moved`) is left
+/// alone.
 fn talked(
   call: Call,
   offer: Offer,
   conversation: talk.Talk,
   outcome: talk.Heard,
+  moved: Bool,
 ) -> #(Call, List(Effect)) {
-  let legs = case conversation.leg, outcome {
-    _, talk.Over(types.Transferred, _) -> []
-    Some(leg), _ -> [HangUpLegs([leg])]
-    None, _ -> []
+  let legs = case conversation.leg, outcome, moved {
+    Some(_), talk.Over(types.Transferred, _), True -> []
+    Some(leg), _, _ -> [HangUpLegs([leg])]
+    None, _, _ -> []
   }
   case outcome {
     talk.Talking(_) -> stay(call)
@@ -2057,6 +2407,16 @@ fn ticked(call: Call, clock: Clock) -> #(Call, List(Effect)) {
         True -> not_connected(call, passage, offer, leg, bridge_failed, clock)
         False -> stay(call)
       }
+    Offering(
+      passage,
+      offer,
+      Parking(leg: leg, answered_at: at, until_ms: until, ..),
+    ) ->
+      case clock.now_ms >= until {
+        // Parked by now, whether or not its `park` was heard.
+        True -> bridge(call, passage, offer, leg, at, clock)
+        False -> stay(call)
+      }
     Connected(offer: offer, talk: conversation, until_ms: until, ..) -> {
       // The end of the bridge waited a moment to see whether it was a
       // transfer, and nothing said it was; or the call ran past the longest
@@ -2072,6 +2432,7 @@ fn ticked(call: Call, clock: Clock) -> #(Call, List(Effect)) {
             offer,
             conversation,
             talk.silence(conversation, clock.now),
+            False,
           )
         False -> stay(call)
       }
@@ -2212,7 +2573,8 @@ pub fn steady(call: Call) -> Bool {
   && case call.phase {
     Offering(offer: offer, ring: Ringing(_), ..) ->
       set.size(offer.seen) >= dict.size(offer.legs)
-    Offering(ring: Connecting(..), ..) -> False
+    Offering(ring: Connecting(..), ..) | Offering(ring: Parking(..), ..) ->
+      False
     _ -> True
   }
 }
@@ -2226,7 +2588,8 @@ pub fn steady(call: Call) -> Bool {
 ///   waiting, with or without a ring going, or back to waiting after an
 ///   answer came to nothing;
 /// - the bridge only as a call goes from ringing to connecting;
-/// - marks, the recording and the last hang-up only while connected;
+/// - the answer's marks as a leg answers, the recording only while
+///   connected, and the last hang-up once a leg has answered;
 /// - the departure's marks and barrier only as a call starts leaving;
 /// - the probe only while a call handed over is being found out about, or
 ///   one never taken back is asked whether it was before it is resumed;
@@ -2259,13 +2622,14 @@ fn allowed_from(before: Phase, after: Phase, effect: Effect) -> Bool {
       }
     Bridge(_) ->
       case before, after {
-        Offering(ring: Ringing(_), ..), Offering(ring: Connecting(..), ..) ->
-          True
+        Offering(ring: Ringing(_), ..), Offering(ring: Connecting(..), ..)
+        | Offering(ring: Parking(..), ..), Offering(ring: Connecting(..), ..)
+        -> True
         _, _ -> False
       }
     Mark(vars) ->
       case after {
-        Connected(..) -> True
+        Connected(..) | Offering(ring: Parking(..), ..) -> True
         Leaving(..) ->
           vars
           |> list.all(fn(var) {
@@ -2285,7 +2649,9 @@ fn allowed_from(before: Phase, after: Phase, effect: Effect) -> Bool {
       }
     HangUpCaller ->
       case before {
-        Connected(..) -> True
+        Connected(..)
+        | Offering(ring: Parking(..), ..)
+        | Offering(ring: Connecting(..), ..) -> True
         _ -> False
       }
     Barrier(_) ->

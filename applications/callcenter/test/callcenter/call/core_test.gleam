@@ -12,9 +12,9 @@ import gleam/option.{None, Some}
 import kazoo/call as kcall
 import kazoo/doc
 import support/call_script.{
-  at, at_ms, bridged_to, call_id, event, fresh, gone, handoff, joining, key,
-  last, leg_of, noop_done, offer, originate_error, originate_success, phase_name,
-  ring, script, settings, t0, waiting,
+  answer_marks, at, at_ms, bridged_to, call_id, event, fresh, gone, handoff,
+  joining, key, last, leg_of, noop_done, offer, originate_error,
+  originate_success, parked, phase_name, ring, script, settings, t0, waiting,
 }
 
 // --- Joining -----------------------------------------------------------------
@@ -117,8 +117,10 @@ pub fn a_ring_that_cannot_go_out_test() {
 }
 
 /// A leg answers: the caller is bridged to it, and once their own channel
-/// says so the call is connected, marked, and the dispatcher hears the
-/// answer, dated by the leg's.
+/// says so the call is connected, and the dispatcher hears the answer,
+/// dated by the leg's. The caller is marked as the leg answers, while still
+/// on hold, and bridged once the leg's originate has parked it: a leg
+/// bridged sooner is taken back out of the bridge by that `park`.
 pub fn an_answer_connects_test() {
   let #(id, endpoints) = offer(["ann", "bob"])
   let leg = leg_of(id, 2)
@@ -126,6 +128,7 @@ pub fn an_answer_connects_test() {
     script(waiting(), [
       #(ring(id, ["ann", "bob"], endpoints, True), at(10)),
       #(event(leg, "CHANNEL_ANSWER", []), at(14)),
+      #(parked(leg), at(14)),
       #(bridged_to(leg), at(15)),
     ])
   assert done
@@ -134,17 +137,39 @@ pub fn an_answer_connects_test() {
         core.Originate(id, endpoints, 15),
         core.Tell(id, types.OfferRinging(["ann", "bob"])),
       ],
+      [answer_marks("bob", t0 + 14)],
       [core.Bridge(leg)],
       [
-        core.Mark([
-          #("Agent-ID", doc.String("bob")),
-          #("Queue-Answered-Timestamp", doc.Int(t0 + 14)),
-        ]),
         core.Record("bob", t0 + 14),
         core.Tell(id, types.Answered("bob", leg, t0 + 14)),
       ],
     ]
   assert phase_name(call) == "connected"
+}
+
+/// A leg whose `park` is never heard is taken to be parked after
+/// `park_wait_ms`, and a `park` heard before the answer is the answer.
+pub fn a_leg_parked_unheard_or_early_test() {
+  let #(id, endpoints) = offer(["ann"])
+  let leg = leg_of(id, 1)
+  let #(call, done) =
+    script(waiting(), [
+      #(ring(id, ["ann"], endpoints, False), at(10)),
+      #(event(leg, "CHANNEL_ANSWER", []), at_ms(12_000)),
+      #(core.Tick, at_ms(12_000 + core.park_wait_ms - 1)),
+      #(core.Tick, at_ms(12_000 + core.park_wait_ms)),
+    ])
+  assert list.drop(done, 2) == [[], [core.Bridge(leg)]]
+  assert phase_name(call) == "connecting"
+
+  let #(call, done) =
+    script(waiting(), [
+      #(ring(id, ["ann"], endpoints, False), at(10)),
+      #(parked(leg), at(12)),
+      #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+    ])
+  assert list.drop(done, 1) == [[core.Bridge(leg)], []]
+  assert phase_name(call) == "connecting"
 }
 
 /// ecallmgr's `originate_resp` naming the leg is the answer when it comes
@@ -173,9 +198,12 @@ pub fn an_answer_before_the_exit_key_stands_test() {
       #(event(leg, "CHANNEL_ANSWER", []), at(12)),
       #(key("#"), at(12)),
       #(core.CallOff(id), at(12)),
+      #(parked(leg), at(12)),
+      #(key("#"), at(12)),
       #(bridged_to(leg), at(12)),
     ])
-  assert list.drop(done, 1) |> list.take(3) == [[core.Bridge(leg)], [], []]
+  assert list.drop(done, 1) |> list.take(5)
+    == [[answer_marks("ann", t0 + 12)], [], [], [core.Bridge(leg)], []]
   assert phase_name(call) == "connected"
 }
 
@@ -316,7 +344,7 @@ pub fn a_call_off_after_the_answer_test() {
       #(core.CallOff(id), at(12)),
     ])
   assert last(done) == []
-  assert phase_name(call) == "connecting"
+  assert phase_name(call) == "parking"
 }
 
 /// A queue deleted while a ring goes: the caller leaves on `no_agents` with
@@ -345,25 +373,69 @@ pub fn a_queue_deleted_while_ringing_test() {
 
 // --- Connecting ------------------------------------------------------------------
 
-/// The agent's leg goes between the answer and the bridge: it is hung up
-/// anyway, the dispatcher hears `agent_left`, and the caller -- whose hold
-/// the bridge flushed -- is put back on it.
+/// The agent's leg goes between the answer and the bridge. The answer
+/// decided the call, so it is an answered call the agent ended: the
+/// dispatcher hears the answer and its end, and the caller is hung up, as a
+/// connected caller is when the agent hangs up on them. The same whether
+/// the bridge had gone out or the leg was still being parked.
 pub fn the_agent_leaves_before_the_bridge_test() {
   let #(id, endpoints) = offer(["ann"])
   let leg = leg_of(id, 1)
+  let ended = [
+    core.HangUpCaller,
+    core.Tell(id, types.Answered("ann", leg, t0 + 12)),
+    core.Tell(id, types.Ended(types.AgentHangup, t0 + 12)),
+  ]
+  let #(call, done) =
+    script(waiting(), [
+      #(ring(id, ["ann"], endpoints, False), at(10)),
+      #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+      #(parked(leg), at(12)),
+      #(gone(leg, "NORMAL_CLEARING"), at(12)),
+    ])
+  assert last(done) == ended
+  assert core.finished(call)
+
   let #(call, done) =
     script(waiting(), [
       #(ring(id, ["ann"], endpoints, False), at(10)),
       #(event(leg, "CHANNEL_ANSWER", []), at(12)),
       #(gone(leg, "NORMAL_CLEARING"), at(12)),
     ])
-  assert last(done)
-    == [
-      core.HangUpLegs([leg]),
-      core.Tell(id, types.Failed(core.agent_left)),
-      core.Hold(Some("support-hold")),
-    ]
-  assert phase_name(call) == "waiting"
+  assert last(done) == ended
+  assert core.finished(call)
+}
+
+/// The caller hangs up after the answer and before the bridge: an answered
+/// call the caller ended, and the agent's leg is hung up. Nothing is said
+/// to the shard: the dispatcher settles the member at the end, as it does
+/// every answered call's.
+pub fn the_caller_leaves_before_the_bridge_test() {
+  let #(id, endpoints) = offer(["ann"])
+  let leg = leg_of(id, 1)
+  let ended = [
+    core.HangUpLegs([leg]),
+    core.Tell(id, types.Answered("ann", leg, t0 + 12)),
+    core.Tell(id, types.Ended(types.CallerHangup, t0 + 13)),
+  ]
+  let #(call, done) =
+    script(waiting(), [
+      #(ring(id, ["ann"], endpoints, False), at(10)),
+      #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+      #(gone(call_id, "NORMAL_CLEARING"), at(13)),
+    ])
+  assert last(done) == ended
+  assert core.finished(call)
+
+  let #(call, done) =
+    script(waiting(), [
+      #(ring(id, ["ann"], endpoints, False), at(10)),
+      #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+      #(parked(leg), at(12)),
+      #(gone(call_id, "NORMAL_CLEARING"), at(13)),
+    ])
+  assert last(done) == ended
+  assert core.finished(call)
 }
 
 /// A bridge that never shows is given up at `connect_ms`.
@@ -374,10 +446,11 @@ pub fn a_bridge_that_never_shows_test() {
     script(waiting(), [
       #(ring(id, ["ann"], endpoints, False), at(10)),
       #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+      #(parked(leg), at(12)),
       #(Tick, at_ms(12_000 + core.connect_ms - 1)),
       #(Tick, at_ms(12_000 + core.connect_ms)),
     ])
-  assert list.drop(done, 2)
+  assert list.drop(done, 3)
     == [
       [],
       [
@@ -415,6 +488,7 @@ fn connected() -> #(Call, types.OfferId, String) {
     script(waiting(), [
       #(ring(id, ["ann"], endpoints, False), at(10)),
       #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+      #(parked(leg), at(12)),
       #(bridged_to(leg), at(12)),
     ])
   #(call, id, leg)
@@ -469,6 +543,41 @@ pub fn the_agent_transfers_the_caller_test() {
       #(gone(leg, "NORMAL_CLEARING"), at(100)),
       #(event(call_id, "CHANNEL_TRANSFEREE", []), at(100)),
     ])
+  assert last(done)
+    == [
+      core.HangUpLegs([leg]),
+      core.Tell(id, types.Ended(types.Transferred, t0 + 100)),
+    ]
+}
+
+/// A blind transfer from the agent's phone leaves the agent's leg parked:
+/// the bridge put `park_after_bridge` on it. The leg is hung up with the
+/// call's end, and the caller, on their way to the target, is left alone.
+pub fn the_agent_is_released_after_a_blind_transfer_test() {
+  let #(call, id, leg) = connected()
+  let #(call, done) =
+    script(call, [
+      #(event(call_id, "CHANNEL_UNBRIDGE", []), at(100)),
+      #(event(leg, "CHANNEL_TRANSFEROR", []), at(100)),
+    ])
+  assert done
+    == [
+      [],
+      [
+        core.HangUpLegs([leg]),
+        core.Tell(id, types.Ended(types.Transferred, t0 + 100)),
+      ],
+    ]
+  assert !list.contains(list.flatten(done), core.HangUpCaller)
+  assert core.finished(call)
+}
+
+/// A transfer that moves the agent's leg itself -- its `CHANNEL_TRANSFEREE`
+/// -- leaves it alone: the transfer is carrying it somewhere.
+pub fn a_leg_being_transferred_is_left_alone_test() {
+  let #(call, id, leg) = connected()
+  let #(_call, done) =
+    script(call, [#(event(leg, "CHANNEL_TRANSFEREE", []), at(100))])
   assert last(done) == [core.Tell(id, types.Ended(types.Transferred, t0 + 100))]
 }
 
@@ -623,8 +732,9 @@ pub fn a_queue_deleted_while_waiting_test() {
     ]
 }
 
-/// The caller hangs up while they wait: the shard is told, and a ring going
-/// is called off -- and followed until its originate is over.
+/// The caller hangs up while they wait: the shard is told. A ring going is
+/// called off, and followed until its originate is over, and the shard is
+/// told then: an agent may have answered first (`Desertion`).
 pub fn the_caller_hangs_up_while_waiting_test() {
   let #(call, done) =
     script(waiting(), [#(gone(call_id, "NORMAL_CLEARING"), at(10))])
@@ -637,12 +747,94 @@ pub fn the_caller_hangs_up_while_waiting_test() {
       #(ring(id, ["ann"], endpoints, False), at(10)),
       #(gone(call_id, "NORMAL_CLEARING"), at(11)),
     ])
-  assert last(done)
-    == [core.HangUpLegs([leg_of(id, 1)]), core.Left(types.Hangup)]
+  assert last(done) == [core.HangUpLegs([leg_of(id, 1)])]
   assert !core.finished(call)
-  let #(call, _) =
+  let #(call, done) =
     script(call, [#(originate_error(id, "ORIGINATOR_CANCEL"), at(11))])
+  assert done == [[core.Left(types.Hangup)]]
   assert core.finished(call)
+}
+
+fn stamped(input: core.Input, us: Int) -> core.Input {
+  case input {
+    core.Event(event) ->
+      core.Event(doc.set(event, ["Event-Timestamp"], doc.Int(us)))
+    other -> other
+  }
+}
+
+/// The agent answers and the caller hangs up straight after, and the
+/// actor hears the hang-up first: the two are events of two channels, and
+/// nothing orders them. The switch dates the answer first, so it is an
+/// answered call that the caller ended, and the agent's leg is hung up.
+pub fn the_caller_hangs_up_as_the_agent_answers_test() {
+  let #(id, endpoints) = offer(["ann"])
+  let leg = leg_of(id, 1)
+  let #(call, done) =
+    script(waiting(), [
+      #(ring(id, ["ann"], endpoints, False), at(10)),
+      #(stamped(gone(call_id, "NORMAL_CLEARING"), 5_000_100), at(12)),
+      #(stamped(event(leg, "CHANNEL_ANSWER", []), 5_000_040), at(12)),
+      #(originate_error(id, "ORIGINATOR_CANCEL"), at(12)),
+      #(gone(leg, "NORMAL_CLEARING"), at(12)),
+    ])
+  assert list.drop(done, 1)
+    == [
+      [core.HangUpLegs([leg])],
+      // Answered and up: hung up again, as a leg of a ring called off is.
+      [core.HangUpLegs([leg])],
+      // The originate is over, and so is the ring.
+      [
+        core.Log(
+          "call "
+          <> call_id
+          <> ": the caller hung up as ann answered; an answered call the caller ended",
+        ),
+        core.Tell(id, types.Answered("ann", leg, t0 + 12)),
+        core.Tell(id, types.Ended(types.CallerHangup, t0 + 12)),
+      ],
+      [],
+    ]
+  assert core.finished(call)
+}
+
+/// An agent who picks up after the caller hung up -- the call-off still on
+/// its way to the phone -- took no call: the caller left the queue.
+pub fn an_answer_after_the_caller_left_is_no_call_test() {
+  let #(id, endpoints) = offer(["ann"])
+  let leg = leg_of(id, 1)
+  let #(call, done) =
+    script(waiting(), [
+      #(ring(id, ["ann"], endpoints, False), at(10)),
+      #(stamped(gone(call_id, "NORMAL_CLEARING"), 5_000_100), at(12)),
+      #(stamped(event(leg, "CHANNEL_ANSWER", []), 5_000_300), at(12)),
+      #(gone(leg, "NORMAL_CLEARING"), at(12)),
+      #(originate_error(id, "ORIGINATOR_CANCEL"), at(12)),
+    ])
+  assert last(done) == [core.Left(types.Hangup)]
+  assert !list.any(list.flatten(done), fn(effect) {
+    case effect {
+      core.Tell(_, types.Answered(..)) -> True
+      _ -> False
+    }
+  })
+  assert core.finished(call)
+}
+
+/// A deserted ring whose originate never says it is over is decided at
+/// `desertion_ms` all the same, and its legs are still followed.
+pub fn a_deserted_ring_is_decided_in_time_test() {
+  let #(id, endpoints) = offer(["ann"])
+  let #(call, done) =
+    script(waiting(), [
+      #(ring(id, ["ann"], endpoints, False), at(10)),
+      #(gone(call_id, "NORMAL_CLEARING"), at(11)),
+      #(Tick, at_ms(11_000 + core.desertion_ms - 1)),
+      #(Tick, at_ms(11_000 + core.desertion_ms)),
+    ])
+  assert list.drop(done, 2) == [[], [core.Left(types.Hangup)]]
+  assert !core.finished(call)
+  assert core.wait_ms(call, at_ms(11_000 + core.desertion_ms)) >= 1
 }
 
 /// The next queue: a caller the callflow takes on into another queue of
@@ -744,6 +936,7 @@ pub fn a_connected_call_is_audited_test() {
     script(waiting(), [
       #(ring(id, ["ann"], endpoints, False), at(10)),
       #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+      #(parked(leg), at(12)),
       #(bridged_to(leg), at(12)),
     ])
   let #(call, done) =
@@ -804,8 +997,10 @@ pub fn what_is_steady_test() {
     script(one_seen, [#(event(leg_of(id, 2), "CHANNEL_CREATE", []), at(10))])
   assert core.steady(both_seen)
 
-  let #(connecting, _) =
+  let #(parking, _) =
     script(both_seen, [#(event(leg_of(id, 1), "CHANNEL_ANSWER", []), at(12))])
+  assert !core.steady(parking)
+  let #(connecting, _) = script(parking, [#(parked(leg_of(id, 1)), at(12))])
   assert !core.steady(connecting)
   let #(connected, _) =
     script(connecting, [#(bridged_to(leg_of(id, 1)), at(12))])

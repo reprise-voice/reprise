@@ -685,12 +685,18 @@ pub fn perform(
 }
 
 /// Bridge the caller to a leg that answered and is parked, on the caller's
-/// control queue, as the lab of 2026-09-27 settled it: flush what the caller
-/// hears; `connect_leg` run at once, so it does not wait behind anything and
-/// nothing waits behind it, with no `Park-After-Pickup`, which `ecallmgr`
-/// would write on the agent's leg as well; then the caller alone marked to
-/// park when the bridge ends, after the `connect_leg`, which overwrites the
-/// mark.
+/// control queue: flush what the caller hears, then `connect_leg` run at
+/// once, so that it does not wait behind anything and nothing waits behind
+/// it.
+///
+/// `Park-After-Pickup` is what makes the caller park -- not hang up -- when
+/// the agent's leg goes, so that the actor says how the call ended. It is
+/// set by `ecallmgr` on both channels through the switch's API before the
+/// bridge, which is the only time it can be: a `set` of the caller's
+/// variable sent after the bridge is an application, and a channel in a
+/// bridge runs none (the lab of 2026-09-27, `e2e-260927-cca2`). The agent's
+/// leg parks too when the caller hangs up, and the actor hangs it up then,
+/// as it does at the end of every call.
 fn bridge(context: Context, caller: Call, leg: String) -> Nil {
   command(context, caller, noop("callcenter-flush-" <> leg, "flush"))
   command(
@@ -702,15 +708,10 @@ fn bridge(context: Context, caller: Call, leg: String) -> Nil {
       #("Insert-At", doc.String("now")),
       #("Continue-On-Fail", doc.Bool(True)),
       #("Continue-On-Cancel", doc.Bool(True)),
-      #("Park-After-Pickup", doc.Bool(False)),
+      #("Park-After-Pickup", doc.Bool(True)),
       #("Hangup-After-Pickup", doc.Bool(False)),
       #("Publish-Usurp", doc.Bool(False)),
     ]),
-  )
-  command(
-    context,
-    caller,
-    set_now([#("park_after_bridge", doc.String("true"))]),
   )
 }
 
@@ -832,7 +833,15 @@ fn hang_up_leg(context: Context, leg: String) -> Nil {
         ),
         #("Call-ID", Some(doc.String(leg))),
         #("FreeSWITCH-Node", option.map(node, doc.String)),
-        #("Server-ID", option.map(context.address, doc.String)),
+        // `kz_api` refuses a command with no `Server-ID`, and a node that
+        // is shutting down may have no address left: the hangup goes all the
+        // same, and its answer nowhere.
+        #(
+          "Server-ID",
+          Some(
+            doc.String(option.unwrap(context.address, "callcenter-no-reply")),
+          ),
+        ),
       ]),
     )
   case amqp.publish(module: "switch", function: "fs_command", payload:) {

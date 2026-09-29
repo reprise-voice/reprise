@@ -20,12 +20,16 @@
 ////   lose one of the changes. Serialising them on one process is the cheapest
 ////   version of that which does not need a conflict loop.
 ////
-//// A node that cannot reach the datastore drops what it could not write and
-//// says so; dispatch carries on, which is requirement 0.5's "database
-//// unavailable" row.
+//// A write the datastore did not take is held and tried again
+//// (`callcenter/records/backlog`): in order per document, once however
+//// often it is tried, for up to an hour. Dispatch carries on meanwhile,
+//// which is requirement 0.5's "database unavailable" row. A write that lost
+//// a race with another node's -- the `callcenter_agent` document is also
+//// written by `callcenter/availability` -- is read and made again at once.
 
 import callcenter/ask
 import callcenter/call/originate
+import callcenter/records/backlog.{type Backlog, type Failure, Pending, Refused}
 import callcenter/system
 import callcenter/types.{
   type CancelReason, type EndResult, type Member, type OfferId, AgentHangup,
@@ -40,7 +44,7 @@ import gleam/otp/actor
 import gleam/otp/supervision
 import gleam/result
 import kazoo/doc.{type Value}
-import kazoo/kazoo.{type Kazoo}
+import kazoo/kazoo.{type Error, type Kazoo, Invalid, NotFound}
 import kazoo/listener
 import kazoo/modb
 import kazoo/util
@@ -62,8 +66,8 @@ pub type Where {
   Month(account_id: String, at: Int)
 }
 
-pub type Message {
-  /// Read a document, change it, write it back.
+/// One change to one document: read it, change it, write it back.
+pub type Edit {
   Change(
     where: Where,
     doc_id: String,
@@ -78,14 +82,56 @@ pub type Message {
     legacy: Bool,
     update: fn(Option(Value)) -> Value,
   )
-  /// Answer once everything sent before this has been written, which is what
-  /// a test and `sup` need and nothing on the call path does.
+}
+
+pub type Message {
+  Write(Edit)
+  /// Try the writes held again.
+  Retry
+  /// Answer once everything sent before this has been written, or is held
+  /// for the datastore to come back: what a test and `sup` need and nothing
+  /// on the call path does.
   Flush(done: Subject(Nil))
   Stop(done: Subject(Nil))
 }
 
-type State {
-  State(kz: Kazoo)
+/// What the writer reads and writes through: the datastore on a node, a
+/// map with faults in the tests.
+pub type Store {
+  Store(
+    /// One document, by where and id.
+    read: fn(Where, String) -> Result(Value, Error),
+    /// One document, by where, id and `pvt_type`. The document carries its
+    /// `_id`, and its `_rev` when it replaces one.
+    save: fn(Where, String, String, Value) -> Result(Nil, Error),
+  )
+}
+
+/// The datastore a node writes to.
+pub fn live_store(kz: Kazoo) -> Store {
+  Store(
+    read: fn(where, doc_id) {
+      case where {
+        Account(account_id) ->
+          kz.datamgr.open_doc(kazoo.account_db(account_id), doc_id)
+        Month(account_id, at) -> modb.open_doc(account_id, doc_id, at: Some(at))
+      }
+    },
+    save: fn(where, _doc_id, kind, document) {
+      case where {
+        Account(account_id) ->
+          kz.datamgr.save_doc(
+            kazoo.account_db(account_id),
+            document
+              |> doc.set(["pvt_type"], doc.String(kind))
+              |> doc.set(["pvt_account_id"], doc.String(account_id)),
+          )
+        Month(account_id, at) ->
+          modb.save_doc(account_id, document, kind: kind, at: Some(at))
+      }
+      |> result.replace(Nil)
+    },
+  )
 }
 
 pub fn name() -> Name(Message) {
@@ -103,14 +149,15 @@ fn running() -> Bool {
   }
 }
 
-fn send(message: Message) -> Nil {
+fn send(edit: Edit) -> Nil {
   case running() {
     False -> Nil
-    True -> process.send(subject(), message)
+    True -> process.send(subject(), Write(edit))
   }
 }
 
-/// Wait until everything asked for so far has been written.
+/// Wait until everything asked for so far has been written, or is held for
+/// the datastore to come back.
 ///
 /// Through `callcenter/ask`: a writer that is stuck on a datastore, or that
 /// is restarting, is logged and waited for no longer, rather than being the
@@ -131,6 +178,16 @@ pub fn flush() -> Nil {
 
 // --- The actor -------------------------------------------------------------
 
+type State {
+  State(
+    self: Subject(Message),
+    writer: Writer,
+    now_ms: fn() -> Int,
+    /// A `Retry` is on its way.
+    retrying: Bool,
+  )
+}
+
 pub fn supervised(kz: Kazoo) -> supervision.ChildSpecification(Nil) {
   supervision.worker(fn() { start(kz) })
   |> supervision.map_data(fn(_started) { Nil })
@@ -139,95 +196,340 @@ pub fn supervised(kz: Kazoo) -> supervision.ChildSpecification(Nil) {
 pub fn start(
   kz: Kazoo,
 ) -> Result(actor.Started(Subject(Message)), actor.StartError) {
-  actor.new(State(kz: kz))
-  |> actor.on_message(handle)
-  |> actor.named(name())
+  // The ids of this writer's writes: unique to it among every writer that
+  // ever wrote a document, so that a document never shows another's write
+  // as this one's.
+  start_with(Some(name()), live_store(kz), kz.random(12) <> "-", monotonic_ms)
+}
+
+/// Start one: named on a node, anonymous over a test's store and clock.
+pub fn start_with(
+  name: Option(Name(Message)),
+  store: Store,
+  prefix: String,
+  now_ms: fn() -> Int,
+) -> Result(actor.Started(Subject(Message)), actor.StartError) {
+  let builder =
+    actor.new_with_initialiser(1000, fn(self) {
+      actor.initialised(State(
+        self: self,
+        writer: writer(store, prefix),
+        now_ms: now_ms,
+        retrying: False,
+      ))
+      |> actor.returning(self)
+      |> Ok
+    })
+    |> actor.on_message(handle)
+  case name {
+    Some(name) -> actor.named(builder, name)
+    None -> builder
+  }
   |> actor.start
 }
 
 fn handle(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
-    Change(where, doc_id, kind, update) -> {
-      write(state.kz, where, doc_id, kind, update)
-      actor.continue(state)
-    }
-    ChangePassage(member, legacy, update) -> {
-      write_passage(state.kz, member, legacy, update)
-      actor.continue(state)
-    }
+    Write(edit) ->
+      State(..state, writer: write(state.writer, edit, state.now_ms()))
+      |> scheduled
+      |> actor.continue
+    Retry ->
+      State(
+        ..state,
+        retrying: False,
+        writer: retry(state.writer, state.now_ms()),
+      )
+      |> scheduled
+      |> actor.continue
     Flush(done) -> {
       process.send(done, Nil)
       actor.continue(state)
     }
     Stop(done) -> {
+      case held(state.writer) {
+        0 -> Nil
+        count ->
+          system.log_error(
+            "the record writer stopped holding "
+            <> int.to_string(count)
+            <> " write(s) the datastore never took; they are lost",
+          )
+      }
       process.send(done, Nil)
       actor.stop()
     }
   }
 }
 
-fn write(
-  kz: Kazoo,
+/// A `Retry` sent after the writer's wait, when it holds writes and none is
+/// on its way.
+fn scheduled(state: State) -> State {
+  case state.retrying, retry_in(state.writer) {
+    False, Some(wait_ms) -> {
+      process.send_after(state.self, wait_ms, Retry)
+      State(..state, retrying: True)
+    }
+    _, _ -> state
+  }
+}
+
+// --- The writer ------------------------------------------------------------
+
+/// The writer's state, apart from its process: what it writes through, the
+/// writes it holds and how long it waits before trying them again. A test
+/// drives it directly, with a clock of its own.
+pub opaque type Writer {
+  Writer(
+    store: Store,
+    /// Every write's id is this and a number.
+    prefix: String,
+    serial: Int,
+    held: Backlog(Edit),
+    /// The last write tried did not reach the datastore. Until one does,
+    /// a new write is held without being tried: a writer that tried each
+    /// one against a datastore that answers in its connect timeout would
+    /// fall minutes behind its mailbox.
+    away: Bool,
+    wait_ms: Int,
+  )
+}
+
+pub fn writer(store: Store, prefix: String) -> Writer {
+  Writer(
+    store: store,
+    prefix: prefix,
+    serial: 0,
+    held: backlog.new(),
+    away: False,
+    wait_ms: backlog.first_retry_ms,
+  )
+}
+
+/// How many writes are held.
+pub fn held(writer: Writer) -> Int {
+  backlog.size(writer.held)
+}
+
+/// How long until the writes held are tried again; `None` when none is.
+pub fn retry_in(writer: Writer) -> Option(Int) {
+  case backlog.size(writer.held) {
+    0 -> None
+    _held -> Some(writer.wait_ms)
+  }
+}
+
+/// Write one change: now, or -- when the datastore is away, or the document
+/// has a write held that it must follow -- once the writes held are tried
+/// again.
+pub fn write(writer: Writer, edit: Edit, now_ms: Int) -> Writer {
+  let id = writer.prefix <> int.to_string(writer.serial)
+  let writer = Writer(..writer, serial: writer.serial + 1)
+  let key = key_of(edit)
+  let pending = Pending(id: id, write: edit, since_ms: now_ms)
+  case writer.away || backlog.holds(writer.held, key) {
+    True -> hold(writer, key, pending)
+    False ->
+      case attempt(writer.store, id, edit) {
+        Ok(Nil) -> writer
+        Error(#(Refused, reason)) -> {
+          given_up(edit, reason)
+          writer
+        }
+        Error(#(_away, reason)) -> {
+          system.log_error(
+            "the datastore did not take a write ("
+            <> reason
+            <> "); holding writes and trying again",
+          )
+          hold(Writer(..writer, away: True), key, pending)
+        }
+      }
+  }
+}
+
+fn hold(writer: Writer, key: String, pending: backlog.Pending(Edit)) -> Writer {
+  let #(held, dropped) = backlog.add(writer.held, key, pending, backlog.most)
+  list.each(dropped, fn(pending) {
+    given_up(pending.write, "more than the most writes held")
+  })
+  Writer(..writer, held: held)
+}
+
+/// Try the writes held: every document's in turn, each document's oldest
+/// first, until the datastore does not take one. That document goes to
+/// the back, and the round is over.
+pub fn retry(writer: Writer, now_ms: Int) -> Writer {
+  let #(held, expired) = backlog.expire(writer.held, now_ms, backlog.oldest_ms)
+  list.each(expired, fn(pending) {
+    given_up(pending.write, "held longer than the longest a write is held")
+  })
+  round(Writer(..writer, held: held), backlog.size(held))
+}
+
+fn round(writer: Writer, before: Int) -> Writer {
+  case backlog.next(writer.held) {
+    None -> {
+      // Nothing left, and nothing tried when every write held had expired:
+      // the next write finds out whether the datastore is back.
+      case writer.away, before {
+        True, tried if tried > 0 ->
+          system.log(
+            "the datastore is back: "
+            <> int.to_string(tried)
+            <> " held write(s) done",
+          )
+        _, _ -> Nil
+      }
+      Writer(..writer, away: False, wait_ms: backlog.first_retry_ms)
+    }
+    Some(#(key, pending)) ->
+      case attempt(writer.store, pending.id, pending.write) {
+        Ok(Nil) ->
+          round(Writer(..writer, held: backlog.done(writer.held, key)), before)
+        Error(#(Refused, reason)) -> {
+          given_up(pending.write, reason)
+          round(Writer(..writer, held: backlog.done(writer.held, key)), before)
+        }
+        Error(#(_away, _reason)) ->
+          Writer(
+            ..writer,
+            held: backlog.later(writer.held, key),
+            away: True,
+            wait_ms: backlog.backoff(writer.wait_ms),
+          )
+      }
+  }
+}
+
+fn given_up(edit: Edit, reason: String) -> Nil {
+  let #(kind, doc_id) = case edit {
+    Change(_where, doc_id, kind, _update) -> #(kind, doc_id)
+    ChangePassage(member, _legacy, _update) -> #(
+      queue_call_type,
+      passage_id(member),
+    )
+  }
+  system.log_error(
+    "could not write " <> kind <> " " <> doc_id <> ", given up: " <> reason,
+  )
+}
+
+/// The document a change is to, for keeping changes to one document in
+/// order.
+fn key_of(edit: Edit) -> String {
+  case edit {
+    Change(Account(account_id), doc_id, _kind, _update) ->
+      "account/" <> account_id <> "/" <> doc_id
+    Change(Month(account_id, _at), doc_id, _kind, _update) ->
+      "month/" <> account_id <> "/" <> doc_id
+    ChangePassage(member, _legacy, _update) ->
+      "passage/" <> member.account_id <> "/" <> passage_id(member)
+  }
+}
+
+/// One write, read again and made again at once when it lost a race, up to
+/// `backlog.races` times; a write that keeps losing waits with the rest.
+fn attempt(
+  store: Store,
+  id: String,
+  edit: Edit,
+) -> Result(Nil, #(Failure, String)) {
+  attempt_racing(store, id, edit, backlog.races)
+}
+
+fn attempt_racing(
+  store: Store,
+  id: String,
+  edit: Edit,
+  left: Int,
+) -> Result(Nil, #(Failure, String)) {
+  case try_once(store, id, edit) {
+    Error(#(backlog.Raced, _reason)) if left > 1 ->
+      attempt_racing(store, id, edit, left - 1)
+    Error(#(backlog.Raced, reason)) -> Error(#(backlog.Away, reason))
+    tried -> tried
+  }
+}
+
+/// Read the document, and write the change unless it is already there.
+///
+/// The written document replaces the one read: it carries its `_rev`,
+/// whether or not the change kept it, so a change that builds its document
+/// afresh (`status_change`) replaces one written twice rather than failing
+/// on it for ever.
+fn try_once(
+  store: Store,
+  id: String,
+  edit: Edit,
+) -> Result(Nil, #(Failure, String)) {
+  use #(where, doc_id, kind, existing) <- result.try(found(store, edit))
+  case backlog.stamped(existing, id) {
+    True -> Ok(Nil)
+    False -> {
+      let document =
+        update_of(edit)(existing)
+        |> backlog.stamp(existing, id)
+        |> doc.set(["_id"], doc.String(doc_id))
+      let document = case
+        option.then(existing, fn(existing) {
+          doc.get_string(existing, ["_rev"]) |> option.from_result
+        })
+      {
+        Some(rev) -> doc.set(document, ["_rev"], doc.String(rev))
+        None -> document
+      }
+      store.save(where, doc_id, kind, document)
+      |> result.map_error(failed)
+    }
+  }
+}
+
+/// Where the change's document is, its id, its `pvt_type`, and what it
+/// holds now.
+fn found(
+  store: Store,
+  edit: Edit,
+) -> Result(#(Where, String, String, Option(Value)), #(Failure, String)) {
+  case edit {
+    Change(where, doc_id, kind, _update) -> {
+      use existing <- result.map(read_through(store, where, doc_id))
+      #(where, doc_id, kind, existing)
+    }
+    ChangePassage(member, legacy, _update) -> {
+      let where = Month(member.account_id, member.joined)
+      use #(doc_id, existing) <- result.map(
+        locate_through(member, legacy, read_through(store, where, _)),
+      )
+      #(where, doc_id, queue_call_type, existing)
+    }
+  }
+}
+
+fn update_of(edit: Edit) -> fn(Option(Value)) -> Value {
+  case edit {
+    Change(update: update, ..) -> update
+    ChangePassage(update: update, ..) -> update
+  }
+}
+
+/// One document, `None` when it is not there. A read over a database that
+/// is not there -- a month nothing was written to yet -- is a document that
+/// is not there; the write makes it.
+fn read_through(
+  store: Store,
   where: Where,
   doc_id: String,
-  kind: String,
-  update: fn(Option(Value)) -> Value,
-) -> Nil {
-  save(kz, where, doc_id, kind, update(stored(kz, where, doc_id)))
-}
-
-/// A caller's passage, written back to whichever document `locate` found.
-fn write_passage(
-  kz: Kazoo,
-  member: Member,
-  legacy: Bool,
-  update: fn(Option(Value)) -> Value,
-) -> Nil {
-  let where = Month(member.account_id, member.joined)
-  let #(doc_id, existing) = locate(member, legacy, stored(kz, where, _))
-  save(kz, where, doc_id, queue_call_type, update(existing))
-}
-
-fn save(
-  kz: Kazoo,
-  where: Where,
-  doc_id: String,
-  kind: String,
-  document: Value,
-) -> Nil {
-  let document = doc.set(document, ["_id"], doc.String(doc_id))
-  let written = case where {
-    Account(account_id) ->
-      kz.datamgr.save_doc(
-        kazoo.account_db(account_id),
-        document
-          |> doc.set(["pvt_type"], doc.String(kind))
-          |> doc.set(["pvt_account_id"], doc.String(account_id)),
-      )
-      |> result.map(fn(_saved) { Nil })
-      |> result.map_error(kazoo.error_to_string)
-    Month(account_id, at) ->
-      modb.save_doc(account_id, document, kind: kind, at: Some(at))
-      |> result.map(fn(_saved) { Nil })
-      |> result.map_error(kazoo.error_to_string)
-  }
-  case written {
-    Ok(_) -> Nil
-    Error(reason) ->
-      system.log_error(
-        "could not write " <> kind <> " " <> doc_id <> ": " <> reason,
-      )
+) -> Result(Option(Value), #(Failure, String)) {
+  case store.read(where, doc_id) {
+    Ok(document) -> Ok(Some(document))
+    Error(NotFound) | Error(Invalid("db_not_found")) -> Ok(None)
+    Error(error) -> Error(failed(error))
   }
 }
 
-fn stored(kz: Kazoo, where: Where, doc_id: String) -> Option(Value) {
-  case where {
-    Account(account_id) ->
-      kz.datamgr.open_doc(kazoo.account_db(account_id), doc_id)
-      |> option.from_result
-    Month(account_id, at) ->
-      modb.open_doc(account_id, doc_id, at: Some(at)) |> option.from_result
-  }
+fn failed(error: Error) -> #(Failure, String) {
+  #(backlog.failure(error), kazoo.error_to_string(error))
 }
 
 // --- The caller's passage through a queue ----------------------------------
@@ -269,12 +571,27 @@ pub fn locate(
   legacy: Bool,
   lookup: fn(String) -> Option(Value),
 ) -> #(String, Option(Value)) {
+  let found: Result(#(String, Option(Value)), Nil) =
+    locate_through(member, legacy, fn(doc_id) { Ok(lookup(doc_id)) })
+  result.unwrap(found, #(passage_id(member), None))
+}
+
+/// `locate` over a `lookup` that can fail, failing with it: the writer's,
+/// which must not take a datastore that did not answer for a passage with
+/// no document yet.
+pub fn locate_through(
+  member: Member,
+  legacy: Bool,
+  lookup: fn(String) -> Result(Option(Value), e),
+) -> Result(#(String, Option(Value)), e) {
   let id = passage_id(member)
-  case lookup(id), legacy {
-    Some(document), _ -> #(id, Some(document))
-    None, False -> #(id, None)
-    None, True ->
-      case lookup(member.call_id) {
+  use own <- result.try(lookup(id))
+  case own, legacy {
+    Some(document), _ -> Ok(#(id, Some(document)))
+    None, False -> Ok(#(id, None))
+    None, True -> {
+      use earlier <- result.map(lookup(member.call_id))
+      case earlier {
         Some(document) ->
           case of_passage(document, member) {
             True -> #(member.call_id, Some(document))
@@ -282,6 +599,7 @@ pub fn locate(
           }
         None -> #(id, None)
       }
+    }
   }
 }
 
@@ -763,27 +1081,34 @@ fn count(
   agent_id: String,
   apply: fn(Counters) -> Counters,
 ) -> Nil {
-  send(
-    Change(
-      Account(account_id),
-      agent_document_id(agent_id),
-      agent_type,
-      fn(existing) {
-        let document = case existing {
-          Some(document) -> document
-          None ->
-            doc.object([
-              #("agent_id", doc.String(agent_id)),
-              #("availability", doc.String("logged_out")),
-            ])
-        }
-        doc.set(
-          document,
-          ["counters"],
-          counters_to_value(apply(counters(document))),
-        )
-      },
-    ),
+  send(counting(account_id, agent_id, apply))
+}
+
+/// The change to an agent's counters `apply` makes, as the writer takes it.
+pub fn counting(
+  account_id: String,
+  agent_id: String,
+  apply: fn(Counters) -> Counters,
+) -> Edit {
+  Change(
+    Account(account_id),
+    agent_document_id(agent_id),
+    agent_type,
+    fn(existing) {
+      let document = case existing {
+        Some(document) -> document
+        None ->
+          doc.object([
+            #("agent_id", doc.String(agent_id)),
+            #("availability", doc.String("logged_out")),
+          ])
+      }
+      doc.set(
+        document,
+        ["counters"],
+        counters_to_value(apply(counters(document))),
+      )
+    },
   )
 }
 
@@ -842,3 +1167,6 @@ pub fn reason_from_string(name: String) -> CancelReason {
     _hangup -> Hangup
   }
 }
+
+@external(erlang, "callcenter_ffi", "monotonic_ms")
+fn monotonic_ms() -> Int

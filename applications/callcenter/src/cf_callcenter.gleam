@@ -218,6 +218,9 @@ pub type Runtime {
     mark: fn(Call, List(#(String, Value))) -> Nil,
     continue_branch: fn(Call, String) -> Nil,
     stop: fn(Call) -> Nil,
+    /// End the callflow and leave the channel as it is: somebody else has
+    /// the caller now.
+    let_go: fn(Call) -> Nil,
     /// The flows the callflow would go on into, by branch.
     branches: fn(Call) -> Value,
     /// A new passage's own id: what the actor's `member_continue` carries,
@@ -257,6 +260,7 @@ fn live() -> Runtime {
     mark: fn(call, vars) { call.set_channel_vars(call, vars, []) },
     continue_branch: callflow.continue_branch,
     stop: callflow.stop,
+    let_go: callflow.control_usurped,
     branches: fn(call) {
       doc.from_dynamic(callflow_branches(call, branch_keys))
       |> bounded
@@ -535,6 +539,7 @@ fn wait(joining: Joining, until: Int) -> Nil {
           case handed_back(joining, event) {
             Continue(branch, reply_to) -> continued(joining, branch, reply_to)
             Gone -> runtime.stop(joining.call)
+            Through -> let_go(joining)
             Nothing -> wait(joining, until)
           }
       }
@@ -548,6 +553,9 @@ pub type Heard {
   Continue(branch: String, reply_to: Option(String))
   /// The caller's channel is gone.
   Gone
+  /// The caller's channel is bridged: to an agent the queue rang, or to
+  /// whoever picked the caller up. Nothing is handed back after that.
+  Through
   /// Anything else: an event of the channel that is the actor's to act on,
   /// or a hand-back of another passage.
   Nothing
@@ -569,8 +577,30 @@ pub fn heard(event: Value, call_id: String, handoff_id: String) -> Heard {
         _other -> Nothing
       }
     Ok("call_event"), Some("CHANNEL_DESTROY") if ours -> Gone
+    Ok("call_event"), Some("CHANNEL_BRIDGE") if ours -> Through
     _, _ -> Nothing
   }
+}
+
+/// The caller is through to somebody, and the queue will not hand them
+/// back: the callflow ends here, and leaves the channel alone.
+///
+/// Waiting on would keep the callflow's executor up for the whole
+/// conversation, and an executor that stops -- its node shut down, or
+/// restarted in a rollout -- hangs its channel up on the way out. For a
+/// caller on hold that hangup waits behind the hold, which never ends; for a
+/// caller in a conversation it runs at once, and the call is dropped. What
+/// is left of the call is the actor's: the end of the conversation, and the
+/// caller's own hangup after it.
+fn let_go(joining: Joining) -> Nil {
+  system.log(
+    "call "
+    <> joining.call_id
+    <> " is through in queue "
+    <> joining.queue_id
+    <> ": the callflow lets it go",
+  )
+  joining.runtime.let_go(joining.call)
 }
 
 fn handed_back(joining: Joining, event: Value) -> Heard {

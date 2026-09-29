@@ -13,8 +13,9 @@ import gleam/option.{type Option, None, Some}
 import kazoo/doc.{type Value}
 import kazoo/events
 import support/call_script.{
-  at, at_ms, bridged_to, call_id, event, fresh, gone, handoff, key, last,
-  noop_done, offer, phase_name, ring, script, settings, t0, waiting,
+  answer_marks, at, at_ms, bridged_to, call_id, event, fresh, gone, handoff, key,
+  last, noop_done, offer, parked, phase_name, ring, script, settings, t0,
+  waiting,
 }
 
 const prefix = "0a1b2c3d4e5f6a7b8c9d0e1f"
@@ -239,6 +240,24 @@ pub fn a_caller_found_gone_test() {
   assert core.finished(call)
 }
 
+/// Gone after an answer nothing closed: the dispatcher hears the call and
+/// its end, so that the record is closed as the call it was and the agent
+/// gets their wrap-up, not as a caller who left.
+pub fn a_caller_found_gone_after_an_answer_test() {
+  let id = found_as()
+  let #(call, done) =
+    script(fresh(), [
+      #(rejoin("h1", id), at(0)),
+      #(surveyed([], answered_record(t0 - 30)), at(1)),
+      #(core.Tick, at_ms(1000 + core.probe_ms)),
+    ])
+  let assert [present, ended, core.Log(_)] = last(done)
+  assert present
+    == core.Present(Some(id), types.PresentConnected("ann", "", t0 - 30, False))
+  assert ended == core.Tell(id, types.Ended(types.CallerHangup, t0 + 4))
+  assert core.finished(call)
+}
+
 /// A ring with time left is taken on: the dispatcher holds its agents under
 /// the offer it is told, and the ring goes on to be answered and bridged
 /// like any other.
@@ -255,9 +274,11 @@ pub fn a_ring_found_is_taken_on_test() {
   let #(call, done) =
     script(call, [
       #(event(leg("1"), "CHANNEL_ANSWER", []), at(4)),
+      #(parked(leg("1")), at(4)),
       #(bridged_to(leg("1")), at(4)),
     ])
-  assert list.first(done) == Ok([core.Bridge(leg("1"))])
+  assert list.take(done, 2)
+    == [[answer_marks("ann", t0 + 4)], [core.Bridge(leg("1"))]]
   assert list.contains(
     last(done),
     core.Tell(id, types.Answered("ann", leg("1"), t0 + 4)),
@@ -265,20 +286,23 @@ pub fn a_ring_found_is_taken_on_test() {
   assert phase_name(call) == "connected"
 }
 
-/// A leg found answered and parked is bridged at once.
+/// A leg found answered is long parked, and the caller is marked and
+/// bridged at once.
 pub fn a_parked_leg_found_is_bridged_test() {
   let rows = [caller_row(None), leg_row("1", "ann", True, Some(leg("1")))]
   let #(call, done, id) = recovered(rows, None, [])
   assert last(done)
     == [
       core.Present(Some(id), types.PresentRinging(["ann"], t0 + 13, False)),
+      answer_marks("ann", t0 + 1),
       core.Bridge(leg("1")),
     ]
   assert phase_name(call) == "connecting"
 }
 
-/// A call found connected is watched to its end, marked again, and the
-/// dispatcher told who is talking.
+/// A call found connected is watched to its end, and the dispatcher told
+/// who is talking. The caller is not marked again: a channel in a bridge
+/// runs no `set`.
 pub fn a_call_found_connected_test() {
   let rows = [
     caller_row(Some(leg("1"))),
@@ -287,10 +311,6 @@ pub fn a_call_found_connected_test() {
   let #(call, done, id) = recovered(rows, answered_record(t0 - 30), [])
   assert last(done)
     == [
-      core.Mark([
-        #("Agent-ID", doc.String("ann")),
-        #("Queue-Answered-Timestamp", doc.Int(t0 - 30)),
-      ]),
       core.Present(
         Some(id),
         types.PresentConnected("ann", leg("1"), t0 - 30, False),

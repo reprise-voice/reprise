@@ -317,7 +317,7 @@ fn a_leg_event(world: World) -> #(Input, World) {
       let #(n, rng) = rng.below(rng, offer.1)
       let leg = leg_of(offer.0, n + 1)
       let #(what, rng) =
-        rng.pick(rng, ["create", "answer", "answer", "gone", "blind"])
+        rng.pick(rng, ["create", "answer", "answer", "park", "gone", "blind"])
       let #(cause, rng) =
         rng.pick(rng, [
           "NO_ANSWER", "LOSE_RACE", "ORIGINATOR_CANCEL", "NORMAL_CLEARING",
@@ -326,6 +326,7 @@ fn a_leg_event(world: World) -> #(Input, World) {
       let input = case what {
         "create" -> event(leg, "CHANNEL_CREATE", [])
         "answer" -> event(leg, "CHANNEL_ANSWER", [])
+        "park" -> call_script.parked(leg)
         "blind" -> gone(leg, "BLIND_TRANSFER")
         _ -> gone(leg, cause)
       }
@@ -388,6 +389,11 @@ type Seen {
     /// call out of the offer's ring also told the shard the caller left, so
     /// the dispatcher gave the offer up with the caller.
     left_ringing: List(String),
+    /// The offers whose ring the caller deserted -- hung up while it rang --
+    /// and that are not decided yet (`core.Desertion`): the step that
+    /// decides one tells the shard the caller left, or the dispatcher that
+    /// the offer was answered and ended.
+    deserted: List(String),
     /// Barriers sent, by handoff.
     barriers: Dict(String, Int),
     /// Continues sent, by handoff: the branches, in order.
@@ -417,6 +423,7 @@ fn run(seed: Int) -> #(Call, Seen) {
       replies: dict.new(),
       lefts: [],
       left_ringing: [],
+      deserted: [],
       barriers: dict.new(),
       continues: dict.new(),
       resumes: dict.new(),
@@ -489,17 +496,36 @@ fn released(
         _ -> False
       }
     })
+  // A deserted ring decided in this step: the shard is told the caller
+  // left in it, or the offer's end is among its replies.
+  let seen =
+    list.fold(seen.deserted, Seen(..seen, deserted: []), fn(seen, key) {
+      case is_deserted(after, key), left {
+        True, _ -> Seen(..seen, deserted: [key, ..seen.deserted])
+        False, True -> Seen(..seen, left_ringing: [key, ..seen.left_ringing])
+        False, False -> seen
+      }
+    })
   list.fold(list.append(rung, found), seen, fn(seen, id) {
     let still = case after.phase {
       core.Offering(offer: other, ..) | core.Connected(offer: other, ..) ->
         other.id == id
       _ -> False
     }
-    case still, left {
-      False, True ->
+    case still, left, is_deserted(after, offer_key(id)) {
+      False, True, _ ->
         Seen(..seen, left_ringing: [offer_key(id), ..seen.left_ringing])
-      _, _ -> seen
+      False, False, True ->
+        Seen(..seen, deserted: [offer_key(id), ..seen.deserted])
+      _, _, _ -> seen
     }
+  })
+}
+
+/// Whether the call holds the offer's ring as deserted and undecided.
+fn is_deserted(call: Call, key: String) -> Bool {
+  list.any(call.recalls, fn(recall) {
+    offer_key(recall.offer.id) == key && option.is_some(recall.deserted)
   })
 }
 
@@ -706,6 +732,11 @@ fn at_the_end(call: Call, seen: Seen) -> Seen {
     True -> seen
     False -> problem(seen, "not finished: " <> call_script.phase_name(call))
   }
+  let seen = case seen.deserted {
+    [] -> seen
+    keys ->
+      problem(seen, "deserted and never decided: " <> string.join(keys, ", "))
+  }
   let seen = case list.length(seen.lefts) <= seen.passages {
     True -> seen
     False -> problem(seen, "left more often than it joined")
@@ -768,8 +799,8 @@ pub fn the_scripts_reach_every_phase_test() {
     |> list.unique
   list.each(
     [
-      "waiting", "ringing", "connecting", "connected", "leaving", "departed",
-      "recovering", "resuming", "done",
+      "waiting", "ringing", "parking", "connecting", "connected", "leaving",
+      "departed", "recovering", "resuming", "done",
     ],
     fn(name) {
       case list.contains(reached, name) {
