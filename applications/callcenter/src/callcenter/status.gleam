@@ -232,13 +232,6 @@ pub fn response(
         "On-Queue-Call",
         Some(doc.List(list.map(on_queue_call_of(view), doc.String))),
       ),
-      // This node's dispatchers send a waiting caller's messages to the
-      // caller's controller queue. An action reading an answer without it
-      // -- from a node of the release before, whose dispatcher publishes
-      // only on the exchange -- listens on the exchange as it used to
-      // (`cf_callcenter.Delivery`). Every answer says it, the empty ones
-      // too: a dispatcher starts on the account's first caller.
-      #("Caller-Delivery", Some(doc.String(caller_delivery))),
       // The request's own identifier, echoed. `kz_amqp_worker`
       // collects only the answers whose `Msg-ID` is the one it asked
       // with; without this the answer arrives on the requester's
@@ -247,10 +240,6 @@ pub fn response(
     ]),
   )
 }
-
-/// How this release's dispatchers deliver to a waiting caller:
-/// `cf_callcenter.controller_delivery`, which reads it.
-pub const caller_delivery = "controller"
 
 fn msg_id(request: Value) -> Option(String) {
   fields.some_string(request, ["Msg-ID"])

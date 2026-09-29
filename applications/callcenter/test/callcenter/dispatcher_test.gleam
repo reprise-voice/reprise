@@ -2,11 +2,12 @@
 
 import callcenter/activity
 import callcenter/dispatcher
+import callcenter/dispatcher/arrival
 import callcenter/dispatcher/offers
 import callcenter/status_query
 import callcenter/types.{
-  Answered, Busy, CallerGone, CallerHangup, Completed, Ended, ExitKey, Failed,
-  Hangup, OfferNoAnswer, OfferRinging, OnCall, Rejected, Timeout, Transferred,
+  Answered, Busy, CallerHangup, Completed, Ended, ExitKey, Failed, Hangup,
+  OfferNoAnswer, OfferRinging, OnCall, Rejected, Timeout, Transferred,
 }
 import cf_callcenter
 import gleam/erlang/process
@@ -18,8 +19,8 @@ import kazoo/doc
 import kazoo/kazoo
 import support/cluster
 import support/fake_activity
+import support/fake_calls
 import support/fake_offer
-import support/fake_watch
 
 // --- Queue and user documents ----------------------------------------------
 
@@ -348,7 +349,11 @@ pub fn the_next_caller_is_offered_when_the_agent_is_free_test() {
 
 // --- Answering -------------------------------------------------------------
 
-pub fn an_answer_settles_the_caller_test() {
+/// An answered caller is out of the queue, and their member is kept on the
+/// broker until the call ends: a node that dies meanwhile leaves it for the
+/// next holder, whose caller's actor takes the call over. Exactly one
+/// settlement happens, at the end.
+pub fn an_answered_call_is_settled_when_it_ends_test() {
   let c = two_agent_queue()
   cluster.arrive(c, "call-one", "support", 0, 0)
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
@@ -357,22 +362,22 @@ pub fn an_answer_settles_the_caller_test() {
     "call-one",
     Answered("ann", "agent-leg", cluster.start_of_time),
   )
-
-  // The caller has an agent, so the broker may forget them, and exactly one
-  // settlement happened.
-  assert cluster.settled(c) == ["call-one"]
+  assert cluster.settled(c) == []
   assert cluster.waiting(c) == []
   // The agent is still held until the call ends.
   assert cluster.all_ringing(c) == ["ann"]
+
+  cluster.reply(c, "call-one", Ended(Completed, cluster.start_of_time + 60))
+  assert cluster.settled(c) == ["call-one"]
 }
 
 /// The caller delivered again while their phone rings -- the shard hands on
 /// a redelivery of the same passage, and the one held before it is settled
-/// there -- is settled on the answer by the delivery held now. The shard
-/// settles only the delivery it holds, so the one the offer was made from
-/// would settle nothing, and the one held would come back at the next
-/// failover and ring a second agent for a caller already talking.
-pub fn an_answer_settles_the_delivery_held_now_test() {
+/// there -- is settled at the end of the call by the delivery held at the
+/// answer. The shard settles only the delivery it holds, so the one the
+/// offer was made from would settle nothing, and the one held would come
+/// back at the next failover as a call over long ago.
+pub fn a_call_is_settled_by_the_delivery_held_at_the_answer_test() {
   let c = two_agent_queue()
   cluster.arrive(c, "call-one", "support", 0, 0)
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
@@ -384,15 +389,16 @@ pub fn an_answer_settles_the_delivery_held_now_test() {
     "call-one",
     Answered("ann", "agent-leg", cluster.start_of_time),
   )
-
-  assert cluster.settled_deliveries(c) == ["call-one again"]
+  assert cluster.settled_deliveries(c) == []
   assert cluster.waiting(c) == []
+  cluster.reply(c, "call-one", Ended(Completed, cluster.start_of_time + 60))
+  assert cluster.settled_deliveries(c) == ["call-one again"]
 }
 
 /// The same for a caller whose member for another queue reached this node
-/// while the first queue's phones rang for them: the answer settles the
-/// member held for them, which is the second queue's.
-pub fn an_answer_settles_a_superseding_member_test() {
+/// while the first queue's phones rang for them: the end settles the
+/// member held for them at the answer, which is the second queue's.
+pub fn a_call_is_settled_by_a_superseding_member_test() {
   let c =
     cluster.new(
       [
@@ -412,9 +418,9 @@ pub fn an_answer_settles_a_superseding_member_test() {
     "call-one",
     Answered("ann", "agent-leg", cluster.start_of_time + 31),
   )
-
-  assert cluster.settled_deliveries(c) == ["call-one again"]
   assert cluster.waiting(c) == []
+  cluster.reply(c, "call-one", Ended(Completed, cluster.start_of_time + 90))
+  assert cluster.settled_deliveries(c) == ["call-one again"]
 }
 
 /// Ring-all: the losers go free the moment somebody answers, and only the
@@ -690,7 +696,7 @@ pub fn a_caller_who_hangs_up_during_the_ring_leaves_test() {
   let c = two_agent_queue()
   cluster.arrive(c, "call-one", "support", 0, 0)
   assert cluster.ringing(c, "call-one") == ["ann"]
-  cluster.reply(c, "call-one", CallerGone)
+  cluster.left(c, "call-one", Hangup)
 
   assert cluster.settled(c) == ["call-one"]
   assert cluster.waiting(c) == []
@@ -701,7 +707,7 @@ pub fn a_caller_who_hangs_up_during_the_ring_leaves_test() {
   cluster.arrive(c, "call-two", "support", 0, 0)
   assert cluster.ringing(c, "call-two") == ["ann"]
 
-  // The action's own cancel, arriving after, has nothing left to settle.
+  // A second word of the caller leaving has nothing left to settle.
   assert !cluster.cancel(c, "call-one", Hangup)
   assert cluster.settled(c) == ["call-one"]
 
@@ -759,28 +765,29 @@ pub fn an_offer_has_a_ceiling_test() {
   assert cluster.ringing(c, "call-one") == ["bob"]
 }
 
-/// The other half of the ceiling, and the reason it needs one: an offer
-/// whose process is still there has not finished, whatever the clock says.
-///
-/// A reply names the caller and not the offer, so an offer taken back while
-/// it was still running would reply afterwards and be read as the reply of
-/// the offer that had replaced it -- charging the wrong agent a miss and
-/// cancelling a ring that was live. Seen on a node, where the offer's own
-/// grace and this ceiling were two different numbers and an agent was moved
-/// to a break after one unanswered call instead of two.
-pub fn an_offer_still_running_is_not_taken_back_test() {
+/// The other half of the ceiling: an offer whose caller's actor is still
+/// there has not finished at its ceiling -- the actor gives up on a ring at
+/// the same ceiling, and its word may be on its way -- and is given a
+/// minute more. Past that the actor has lost it: the offer is taken back as
+/// a failure, nobody's miss, and a word that comes after names an offer
+/// this dispatcher no longer holds.
+pub fn an_offer_still_running_is_given_a_minute_past_its_ceiling_test() {
   let c = two_agent_queue()
   cluster.arrive(c, "call-one", "support", 0, 0)
   assert cluster.ringing(c, "call-one") == ["ann"]
 
-  cluster.at(c, 600)
+  cluster.at(c, 60)
   cluster.tick(c)
   assert cluster.ringing(c, "call-one") == ["ann"]
   assert fake_offer.count(c.offers) == 1
 
-  // It ends without a word, and only then is the agent released.
-  fake_offer.died(c.offers)
+  cluster.at(c, 600)
   cluster.tick(c)
+  assert cluster.ringing(c, "call-one") == ["bob"]
+  // Ann's ring's word, late, is not about Bob's.
+  let assert Ok(first) = fake_offer.requests(c.offers) |> list.first
+  fake_offer.reply(first, OfferNoAnswer(["ann"]))
+  cluster.sync(c)
   assert cluster.ringing(c, "call-one") == ["bob"]
 }
 
@@ -810,10 +817,11 @@ pub fn an_offer_that_crashes_before_an_answer_fails_test() {
   assert fake_offer.count(c.offers) == 2
 }
 
-/// After an answer the process is what watches the call, and one that ends
-/// without saying the call did leaves nothing to say it. The call is closed
-/// here, as a call whose end was lost, and the agent goes to their wrap-up
-/// like after any other call instead of staying busy for ever.
+/// After an answer the caller's actor is what watches the call, and one
+/// that ends without saying the call did leaves nothing to say it. The call
+/// is closed here, as a call whose end was lost, and settled, and the agent
+/// goes to their wrap-up like after any other call instead of staying busy
+/// for ever.
 pub fn an_offer_that_crashes_after_an_answer_is_ended_test() {
   let c = two_agent_queue()
   cluster.arrive(c, "call-one", "support", 0, 0)
@@ -822,7 +830,7 @@ pub fn an_offer_that_crashes_after_an_answer_is_ended_test() {
     "call-one",
     Answered("ann", "ann-leg", cluster.start_of_time + 2),
   )
-  assert cluster.settled(c) == ["call-one"]
+  assert cluster.settled(c) == []
   assert cluster.ringing(c, "call-one") == ["ann"]
 
   cluster.at(c, 60)
@@ -830,7 +838,7 @@ pub fn an_offer_that_crashes_after_an_answer_is_ended_test() {
   cluster.sync(c)
   assert cluster.alive(c)
   assert cluster.report(c).offers == []
-  // Settled once, on the answer, and not again.
+  // Settled once, at the end, and not again.
   assert cluster.settled(c) == ["call-one"]
 
   // Free once the queue's ten seconds of wrap-up are over.
@@ -927,7 +935,7 @@ pub fn the_wait_for_the_switches_has_a_ceiling_test() {
   assert cluster.ringing(c, "call-one") == ["ann"]
 }
 
-/// The node's activity actor restarts under its
+/// The review's finding: the node's activity actor restarts under its
 /// supervisor, and the new one watches nothing -- no channel events for the
 /// account, an empty table, every agent idle. A dispatcher that was synced
 /// used to go on believing it, and offered Ann while she was on a call of
@@ -1792,175 +1800,151 @@ pub fn a_redelivery_is_not_a_new_caller_test() {
 
 // --- Taking a caller over --------------------------------------------------
 
-/// The caller's record as the node that died left it: an offer to `ann`
-/// that never came back.
-fn ringing_elsewhere() -> doc.Value {
-  cluster.record("call-one", "support", 0, [#("ann", 0, None)], None)
+/// A caller the broker has handed out before joins their actor resumed, and
+/// nobody is rung for them until the actor says where they stand: phones
+/// may be ringing for them already, on a switch that outlived the node
+/// which rang them. Past `present_wait_s` without a word they are rung like
+/// anybody else.
+pub fn a_redelivered_caller_waits_for_their_actors_word_test() {
+  let c = two_agent_queue()
+  fake_calls.will_say_nothing(c.calls, "call-one")
+  cluster.redelivered(c, "call-one", "support", 0, 0)
+
+  assert cluster.joined(c) == [#("call-one", True)]
+  assert fake_offer.count(c.offers) == 0
+  assert cluster.waiting(c) == ["call-one"]
+
+  cluster.at(c, arrival.present_wait_s - 1)
+  cluster.tick(c)
+  assert fake_offer.count(c.offers) == 0
+  cluster.at(c, arrival.present_wait_s)
+  cluster.tick(c)
+  assert fake_offer.count(c.offers) == 1
 }
 
-/// A member the broker has handed out before may already have a phone
-/// ringing, and the ringing is on a switch that outlived the node which
-/// started it. The caller's own record says so, so nobody is rung again:
-/// the outcome of the ring that is already happening is watched for.
-pub fn a_redelivered_caller_is_not_rung_again_test() {
+/// Found waiting: rung at once.
+pub fn a_caller_found_waiting_is_rung_test() {
   let c = two_agent_queue()
-  cluster.put_record(c, 0, ringing_elsewhere())
+  cluster.redelivered(c, "call-one", "support", 0, 0)
+
+  assert fake_offer.count(c.offers) == 1
+  assert cluster.ringing(c, "call-one") == ["ann"]
+}
+
+/// A first delivery is a caller nobody has done anything about yet: their
+/// actor greets them and they are rung at once, nothing asked.
+pub fn a_first_delivery_is_not_found_out_about_test() {
+  let c = two_agent_queue()
+  cluster.arrive(c, "call-one", "support", 0, 0)
+
+  assert cluster.joined(c) == [#("call-one", False)]
+  assert fake_calls.presented(c.calls) == []
+  assert fake_offer.count(c.offers) == 1
+}
+
+/// Found with a phone ringing: its agent is held under the actor's offer,
+/// nobody is rung over it, and nobody else is offered the agent.
+pub fn a_ring_found_holds_its_agent_test() {
+  let c = two_agent_queue()
+  cluster.presents(
+    c,
+    "call-one",
+    types.PresentRinging(["ann"], cluster.start_of_time + 25, False),
+  )
   cluster.redelivered(c, "call-one", "support", 0, 0)
 
   assert fake_offer.count(c.offers) == 0
-  assert cluster.watching(c, "call-one") == ["ann"]
-  // The agent is held all the same: their phone is ringing and no other
-  // caller may be sent to them.
   assert cluster.ringing(c, "call-one") == ["ann"]
   assert cluster.waiting(c) == ["call-one"]
+
+  cluster.arrive(c, "call-two", "support", 0, 1)
+  assert cluster.ringing(c, "call-two") == ["bob"]
 }
 
-/// The agent picks up. Everything an answer does is done from the reply, so
-/// the caller is settled and stops waiting exactly as they would have.
-pub fn a_taken_over_caller_who_is_answered_test() {
+/// The ring found goes on to end as any ring does, told by the actor under
+/// its offer: a no-answer is the agent's miss, and the caller is offered
+/// again.
+pub fn a_ring_found_ends_as_any_ring_test() {
   let c = two_agent_queue()
-  cluster.put_record(c, 0, ringing_elsewhere())
-  cluster.redelivered(c, "call-one", "support", 0, 0)
-  cluster.watch_reply(
+  cluster.presents(
     c,
     "call-one",
-    Answered("ann", "agent-leg", cluster.start_of_time + 3),
+    types.PresentRinging(["ann"], cluster.start_of_time + 25, False),
   )
+  cluster.redelivered(c, "call-one", "support", 0, 0)
+  cluster.present_reply(c, "call-one", OfferNoAnswer(["ann"]))
 
-  assert cluster.settled(c) == ["call-one"]
-  assert cluster.waiting(c) == []
-  assert cluster.ringing(c, "call-one") == ["ann"]
+  assert fake_offer.count(c.offers) == 1
+  assert cluster.ringing(c, "call-one") == ["bob"]
 }
 
-/// The caller hangs up while that phone is ringing. The callflow action that
-/// would publish the cancel is on a node this one cannot hear from, so the
-/// watcher's word for it is what takes them out of the queue.
-pub fn a_taken_over_caller_who_hangs_up_test() {
+/// The caller hangs up while that phone is ringing: out of the queue, and
+/// the agent let go.
+pub fn a_caller_found_ringing_who_hangs_up_test() {
   let c = two_agent_queue()
-  cluster.put_record(c, 0, ringing_elsewhere())
+  cluster.presents(
+    c,
+    "call-one",
+    types.PresentRinging(["ann"], cluster.start_of_time + 25, False),
+  )
   cluster.redelivered(c, "call-one", "support", 0, 0)
-  cluster.watch_reply(c, "call-one", CallerGone)
+  assert cluster.cancel(c, "call-one", Hangup)
 
   assert cluster.settled(c) == ["call-one"]
   assert cluster.waiting(c) == []
   assert cluster.all_ringing(c) == []
 }
 
-/// Nobody picked up before the offer on the record ran out. That is a miss
-/// for the agent it names, and the caller is offered again from here --
-/// properly this time, because there is nothing left ringing.
-pub fn a_taken_over_offer_that_runs_out_test() {
+/// Found talking to an agent, whose member stays on the broker until the
+/// call ends: nobody rings over them, the agent is held, and the end the
+/// actor tells settles them.
+pub fn a_caller_found_talking_test() {
   let c = two_agent_queue()
-  cluster.put_record(c, 0, ringing_elsewhere())
-  cluster.redelivered(c, "call-one", "support", 0, 0)
-  assert fake_offer.count(c.offers) == 0
-
-  cluster.watch_reply(c, "call-one", OfferNoAnswer(["ann"]))
-  assert fake_offer.count(c.offers) == 1
-  assert cluster.ringing(c, "call-one") == ["bob"]
-  assert cluster.waiting(c) == ["call-one"]
-}
-
-/// An offer that ran out before this node ever saw the caller is nothing to
-/// wait for: whatever was ringing has stopped.
-pub fn a_stale_offer_on_the_record_is_ignored_test() {
-  let c = two_agent_queue()
-  cluster.put_record(c, 0, ringing_elsewhere())
-  // The queue rings for twenty seconds and the grace is five.
-  cluster.at(c, 40)
-  cluster.redelivered(c, "call-one", "support", 0, 0)
-
-  assert cluster.watching(c, "call-one") == []
-  assert fake_offer.count(c.offers) == 1
-  assert cluster.ringing(c, "call-one") == ["ann"]
-}
-
-/// A caller whose record shows no offer at all was never rung, whoever was
-/// holding them. They are offered like anybody else.
-pub fn a_caller_nobody_had_offered_test() {
-  let c = two_agent_queue()
-  cluster.put_record(c, 0, cluster.record("call-one", "support", 0, [], None))
-  cluster.redelivered(c, "call-one", "support", 0, 0)
-
-  assert cluster.watching(c, "call-one") == []
-  assert fake_offer.count(c.offers) == 1
-  assert cluster.ringing(c, "call-one") == ["ann"]
-}
-
-/// An offer that came back is over, whatever it did: the entry on the record
-/// carries an outcome and there is nothing in flight to watch.
-pub fn an_offer_that_already_came_back_test() {
-  let c = two_agent_queue()
-  cluster.put_record(
+  cluster.presents(
     c,
-    0,
-    cluster.record(
-      "call-one",
-      "support",
-      0,
-      [#("ann", 0, Some("no_answer"))],
-      None,
-    ),
-  )
-  cluster.redelivered(c, "call-one", "support", 0, 0)
-
-  assert cluster.watching(c, "call-one") == []
-  assert fake_offer.count(c.offers) == 1
-}
-
-/// A first delivery is a caller nobody has done anything about yet, so the
-/// record is not read and a stale one cannot stop them being rung. The read
-/// is the price of a failover, not of a call.
-pub fn a_first_delivery_reads_no_record_test() {
-  let c = two_agent_queue()
-  cluster.put_record(c, 0, ringing_elsewhere())
-  cluster.arrive(c, "call-one", "support", 0, 0)
-
-  assert cluster.watching(c, "call-one") == []
-  assert fake_offer.count(c.offers) == 1
-  assert cluster.ringing(c, "call-one") == ["ann"]
-}
-
-/// A record that says somebody answered and never closed is a caller in the
-/// middle of a conversation: the answer that should have settled their
-/// message did not reach the broker. They are settled here, nobody rings
-/// over them, and the call is watched for its end.
-pub fn a_redelivered_caller_who_is_already_talking_test() {
-  let c = two_agent_queue()
-  cluster.put_record(
-    c,
-    0,
-    cluster.record(
-      "call-one",
-      "support",
-      0,
-      [#("ann", 0, Some("answered"))],
-      Some(#("ann", "agent-leg", 3)),
-    ),
+    "call-one",
+    types.PresentConnected("ann", "agent-leg", cluster.start_of_time + 3, False),
   )
   cluster.redelivered(c, "call-one", "support", 0, 0)
 
   assert fake_offer.count(c.offers) == 0
-  assert cluster.watching(c, "call-one") == ["ann"]
-  assert cluster.settled(c) == ["call-one"]
+  assert cluster.settled(c) == []
   assert cluster.waiting(c) == []
   assert cluster.ringing(c, "call-one") == ["ann"]
+
+  cluster.present_reply(
+    c,
+    "call-one",
+    Ended(Completed, cluster.start_of_time + 9),
+  )
+  assert cluster.settled(c) == ["call-one"]
 }
 
-/// A record that was closed belongs to a passage that finished. This caller
-/// came back -- a transfer, a callflow run again -- and is offered from the
-/// beginning.
-pub fn a_closed_record_is_a_new_passage_test() {
+/// Found after the queue was done with them -- their passage closed, or on
+/// their way out -- they are settled and not rung.
+pub fn a_caller_found_over_is_settled_test() {
   let c = two_agent_queue()
-  cluster.put_record(
+  cluster.presents(c, "call-one", types.PresentOver)
+  cluster.redelivered(c, "call-one", "support", 0, 0)
+
+  assert cluster.settled(c) == ["call-one"]
+  assert cluster.waiting(c) == []
+  assert fake_offer.count(c.offers) == 0
+}
+
+/// A word about a caller the dispatcher already knows the state of -- the
+/// same member delivered again while its offer is out -- changes nothing.
+pub fn a_word_about_a_caller_already_known_test() {
+  let c = two_agent_queue()
+  cluster.arrive(c, "call-one", "support", 0, 0)
+  cluster.presents(
     c,
-    0,
-    cluster.record("call-one", "support", 0, [#("ann", 0, None)], None)
-      |> doc.set(["ended"], doc.Int(cluster.start_of_time + 1)),
+    "call-one",
+    types.PresentRinging(["bob"], cluster.start_of_time + 25, False),
   )
   cluster.redelivered(c, "call-one", "support", 0, 0)
 
-  assert cluster.watching(c, "call-one") == []
+  assert cluster.ringing(c, "call-one") == ["ann"]
   assert fake_offer.count(c.offers) == 1
 }
 
@@ -2019,7 +2003,7 @@ pub fn an_orphaned_call_is_adopted_once_test() {
   cluster.orphaned(c, "call-one", "support", "ann", 3, None)
   cluster.orphaned(c, "call-one", "support", "ann", 3, None)
 
-  assert list.length(fake_watch.requests(c.watches)) == 1
+  assert list.length(fake_calls.adoptions(c.calls)) == 1
 }
 
 // --- The end of an account -------------------------------------------------
@@ -2093,12 +2077,12 @@ pub fn releasing_a_ringing_agent_calls_off_the_ring_test() {
   assert cluster.ringing(c, "call-one") == ["ann"]
 }
 
-/// An answer the call-off crossed is not an answer: the unbridge sent with
-/// the call-off parks the caller and cuts the bridge. The caller is not
-/// settled or connected; the offer's own word that the answer does not
-/// stand (`offer.overtaken`) gives the ring up with no miss, and the caller,
-/// still waiting, is offered again.
-pub fn an_answer_the_call_off_crossed_does_not_connect_test() {
+/// An answer the caller's actor handled before the call-off stands: it
+/// bridged the caller to the agent, and the call-off found nothing ringing.
+/// The caller is connected, out of the queue, and settled when the call
+/// ends. One the call-off came before ends the ring with nobody's answer,
+/// no miss, and the caller is offered again.
+pub fn an_answer_before_the_call_off_stands_test() {
   let c = two_agent_queue()
   cluster.agent_is(c, "bob", "logged_out")
   cluster.arrive(c, "call-one", "support", 0, 0)
@@ -2110,10 +2094,16 @@ pub fn an_answer_the_call_off_crossed_does_not_connect_test() {
     "call-one",
     Answered("ann", "ann-leg", cluster.start_of_time + 1),
   )
-  assert cluster.settled(c) == []
-  assert cluster.waiting(c) == ["call-one"]
-  assert fake_offer.count(c.offers) == 1
+  assert cluster.waiting(c) == []
+  assert cluster.ringing(c, "call-one") == ["ann"]
+  cluster.reply(c, "call-one", Ended(Completed, cluster.start_of_time + 40))
+  assert cluster.settled(c) == ["call-one"]
 
+  let c = two_agent_queue()
+  cluster.agent_is(c, "bob", "logged_out")
+  cluster.arrive(c, "call-one", "support", 0, 0)
+  cluster.reply(c, "call-one", OfferRinging(["ann"]))
+  assert release(c, "ann")
   cluster.reply(c, "call-one", Failed("called_off"))
   assert cluster.settled(c) == []
   assert cluster.waiting(c) == ["call-one"]
@@ -2121,14 +2111,14 @@ pub fn an_answer_the_call_off_crossed_does_not_connect_test() {
   assert cluster.ringing(c, "call-one") == ["ann"]
 }
 
-/// A ring released before the switch had it is called off the moment the
-/// offer says it is ringing, and not before: before, there is no bridge on
-/// the caller's channel to end.
-pub fn a_ring_released_before_it_went_out_is_called_off_when_it_does_test() {
+/// A ring released before the actor said it was out is called off at once:
+/// the actor handles the ring first, since the two were sent in that order,
+/// and nothing more is sent when it says the ring is out.
+pub fn a_ring_released_before_it_went_out_is_called_off_at_once_test() {
   let c = two_agent_queue()
   cluster.arrive(c, "call-one", "support", 0, 0)
   assert release(c, "ann")
-  assert cluster.called_off(c) == []
+  assert cluster.called_off(c) == ["call-one"]
 
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
   assert cluster.called_off(c) == ["call-one"]
@@ -2157,8 +2147,8 @@ pub fn releasing_an_agent_twice_calls_the_ring_off_once_test() {
   assert cluster.called_off(c) == ["call-one", "call-one"]
 }
 
-/// An agent released after their caller's queue was deleted, while the ring
-/// the deletion called off is still ending: nothing more is sent.
+/// An agent released after their caller's queue was deleted: the deletion
+/// let the caller and the agent go, and nothing more is sent.
 pub fn releasing_after_a_queue_delete_calls_nothing_off_again_test() {
   let c = two_agent_queue()
   cluster.agent_is(c, "bob", "logged_out")
@@ -2168,7 +2158,7 @@ pub fn releasing_after_a_queue_delete_calls_nothing_off_again_test() {
   cluster.sync(c)
   assert cluster.called_off(c) == ["call-one"]
 
-  assert release(c, "ann")
+  assert !release(c, "ann")
   assert cluster.called_off(c) == ["call-one"]
 
   // And the other way round.
@@ -2182,122 +2172,70 @@ pub fn releasing_after_a_queue_delete_calls_nothing_off_again_test() {
   assert cluster.called_off(c) == ["call-one"]
 }
 
-/// An offer whose process crashed while its bridge rang left that bridge
-/// ringing with nobody to hear an answer. It is called off with the offer,
-/// so that the caller is not put through to an agent who has been let go;
-/// one that crashed before its ring went out has nothing to call off.
-pub fn a_crashed_offer_has_its_ring_called_off_test() {
+/// A caller's actor that crashed while its offer rang left the legs to
+/// their own ring timeout and `park_timeout`: there is nothing left to call
+/// off, and the offer fails, nobody's miss, and the caller is offered again.
+pub fn a_crashed_actors_offer_fails_test() {
   let c = two_agent_queue()
   cluster.arrive(c, "call-one", "support", 0, 0)
   fake_offer.died(c.offers)
   cluster.sync(c)
   assert cluster.called_off(c) == []
 
-  // Offered again, to Bob, whose ring goes out before its process goes.
+  // Offered again, to Bob, whose ring goes out before its actor goes.
   assert cluster.ringing(c, "call-one") == ["bob"]
   cluster.reply(c, "call-one", OfferRinging(["bob"]))
   fake_offer.died(c.offers)
   cluster.sync(c)
-  assert cluster.called_off(c) == ["call-one"]
+  assert cluster.called_off(c) == []
 }
 
-/// A call-off is a command on the caller's channel,
-/// sent to the `Control-Queue` in their call. A callflow run again while
-/// the phones rang (plan 4.4) delivers the caller again with a new one, and
-/// the offer's own member still names the control queue of the callflow
-/// that died: an unbridge sent there reached nobody and the ring went on.
-/// Every call-off goes through the member held for the caller now -- a
-/// release, one before the ring was out, a caller leaving and an offer
-/// whose process died.
-pub fn a_call_off_goes_to_the_callers_control_queue_now_test() {
-  let first = cluster.member("call-one", "support", 0, cluster.start_of_time)
-  let rerun = fn(c) {
-    cluster.arrive_as(c, cluster.with_control_queue(first, "cq-now"))
-    assert fake_offer.count(c.offers) == 1
-  }
-
+/// Every call-off goes to the caller's actor, which is the one process that
+/// can hang its legs up: a release, one before the ring was out, and a
+/// caller leaving for a reason the actor did not decide itself. A caller
+/// whose channel went has no ring left to call off.
+pub fn a_call_off_goes_to_the_callers_actor_test() {
   // Released while ringing.
   let c = two_agent_queue()
   cluster.agent_is(c, "bob", "logged_out")
-  cluster.arrive_as(c, cluster.with_control_queue(first, "cq-dead"))
+  cluster.arrive(c, "call-one", "support", 0, 0)
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
-  rerun(c)
   assert release(c, "ann")
-  assert cluster.called_off_through(c) == ["cq-now"]
+  assert cluster.called_off(c) == ["call-one"]
 
-  // Released before the ring was out, called off when it is.
+  // Released before the ring was out: the actor calls it off as it goes
+  // out, and nothing more is sent when it does.
   let c = two_agent_queue()
   cluster.agent_is(c, "bob", "logged_out")
-  cluster.arrive_as(c, cluster.with_control_queue(first, "cq-dead"))
+  cluster.arrive(c, "call-one", "support", 0, 0)
   assert release(c, "ann")
-  rerun(c)
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
-  assert cluster.called_off_through(c) == ["cq-now"]
+  assert cluster.called_off(c) == ["call-one"]
 
-  // The caller leaving while it rings: the offer unbridges, through the
-  // queue it is handed.
+  // The caller taken out while it rings.
   let c = two_agent_queue()
   cluster.agent_is(c, "bob", "logged_out")
-  cluster.arrive_as(c, cluster.with_control_queue(first, "cq-dead"))
+  cluster.arrive(c, "call-one", "support", 0, 0)
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
-  rerun(c)
   let _held = cluster.cancel(c, "call-one", ExitKey)
-  assert cluster.called_off_through(c) == []
-  assert cluster.stopped_through(c) == ["cq-now"]
+  assert cluster.called_off(c) == ["call-one"]
 
-  // The offer's process dying while it rings.
+  // The caller hanging up while it rings.
   let c = two_agent_queue()
   cluster.agent_is(c, "bob", "logged_out")
-  cluster.arrive_as(c, cluster.with_control_queue(first, "cq-dead"))
+  cluster.arrive(c, "call-one", "support", 0, 0)
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
-  rerun(c)
-  fake_offer.died(c.offers)
-  cluster.sync(c)
-  assert cluster.called_off_through(c) == ["cq-now"]
-}
-
-/// The same for the unbridge an offer's process sends itself: when the
-/// dispatcher leaves it to the offer -- a caller leaving, before the ring is
-/// out or while it rings -- or when the dispatcher's own missed the bridge. The
-/// offer was started with the member of the callflow that died, and is
-/// handed the one held now with the call-off.
-pub fn an_offer_called_off_is_handed_the_callers_control_queue_now_test() {
-  let first = cluster.member("call-one", "support", 0, cluster.start_of_time)
-  let rerun = fn(c) {
-    cluster.arrive_as(c, cluster.with_control_queue(first, "cq-now"))
-    assert fake_offer.count(c.offers) == 1
-  }
-
-  // The caller leaving before the ring is out: the offer unbridges.
-  let c = two_agent_queue()
-  cluster.agent_is(c, "bob", "logged_out")
-  cluster.arrive_as(c, cluster.with_control_queue(first, "cq-dead"))
-  rerun(c)
-  let _held = cluster.cancel(c, "call-one", ExitKey)
-  assert cluster.stopped(c) == ["call-one to unbridge"]
-  assert cluster.stopped_through(c) == ["cq-now"]
-  assert cluster.called_off_through(c) == []
-
-  // Released while ringing: the dispatcher unbridges, and the offer checks.
-  let c = two_agent_queue()
-  cluster.agent_is(c, "bob", "logged_out")
-  cluster.arrive_as(c, cluster.with_control_queue(first, "cq-dead"))
-  cluster.reply(c, "call-one", OfferRinging(["ann"]))
-  rerun(c)
-  assert release(c, "ann")
-  assert cluster.stopped(c) == ["call-one unbridged"]
-  assert cluster.stopped_through(c) == ["cq-now"]
+  let _held = cluster.cancel(c, "call-one", Hangup)
+  assert cluster.called_off(c) == []
 }
 
 // --- A call adopted from a node that died ----------------------------------
 
-/// A call answered on a node that died is watched for its end, and a watch
-/// that could not be started is tried once more before anything else.
-pub fn an_adopted_call_is_watched_on_the_second_try_test() {
+/// A call answered on a node that died is adopted by the caller's actor,
+/// which watches it to its end, and its agent is held on it meanwhile.
+pub fn an_adopted_call_is_watched_by_the_callers_actor_test() {
   let c = two_agent_queue()
-  fake_watch.failing_once(c.watches, "no events")
   cluster.orphaned(c, "talking", "support", "ann", 0, None)
-  assert fake_watch.attempts(c.watches) == 2
   assert cluster.watching(c, "talking") == ["ann"]
   assert cluster.ringing(c, "talking") == ["ann"]
 }
@@ -2309,9 +2247,8 @@ pub fn an_adopted_call_is_watched_on_the_second_try_test() {
 pub fn an_adopted_call_nothing_can_watch_is_closed_test() {
   let c = two_agent_queue()
   cluster.agent_is(c, "bob", "logged_out")
-  fake_watch.failing(c.watches, "no events")
+  fake_calls.failing(c.calls, "no actors")
   cluster.orphaned(c, "talking", "support", "ann", 0, None)
-  assert fake_watch.attempts(c.watches) == 2
   assert cluster.report(c).offers == []
 
   cluster.at(c, 11)
@@ -2329,7 +2266,7 @@ pub fn an_adopted_call_whose_watch_died_is_closed_test() {
   cluster.orphaned(c, "talking", "support", "ann", 0, None)
   assert cluster.ringing(c, "talking") == ["ann"]
 
-  fake_watch.died(c.watches)
+  fake_calls.died(c.calls)
   cluster.sync(c)
   assert cluster.report(c).offers == []
   cluster.at(c, 11)
@@ -2424,7 +2361,7 @@ pub fn a_caller_hanging_up_is_not_a_miss_test() {
   let c = strict_queue(1)
   cluster.arrive(c, "call-one", "support", 0, 0)
   assert cluster.ringing(c, "call-one") == ["ann"]
-  cluster.reply(c, "call-one", CallerGone)
+  cluster.left(c, "call-one", Hangup)
 
   assert cluster.availability_becomes(c, "ann", "logged_out") == "available"
 }
@@ -2510,7 +2447,7 @@ pub fn a_stand_down_nobody_heard_lapses_test() {
   assert cluster.ringing(c, "call-one") == ["ann"]
 }
 
-/// The miss is counted from the availability read
+/// The review's finding: the miss is counted from the availability read
 /// when the offer comes back, and the stand-down is written after, from a
 /// process of its own. An agent who logged out in between used to be
 /// written to the no-answer status all the same -- a break by default,
@@ -2678,38 +2615,26 @@ pub fn a_queue_gone_altogether_is_deleted_test() {
   assert cluster.waiting(c) == ["call-two"]
 }
 
-/// A caller being rung for when their queue is deleted has the ring called
-/// off first, on their own channel, and leaves when the offer says it is
-/// over: leaving at once would let the ring run on into whatever the
-/// callflow does next. The agent is freed without a miss -- Ann, one miss
-/// from being stood down, is still available.
-pub fn a_deleted_queue_calls_off_a_ring_first_test() {
+/// A caller being rung for when their queue is deleted is taken out of it
+/// at once: their actor is told, calls the ring off and leaves on
+/// `no_agents` once its commands are through, which is the actor's to
+/// sequence. The agent is freed without a miss -- Ann, one miss from being
+/// stood down, is still available -- and a late word of the ring is about
+/// an offer this dispatcher no longer holds.
+pub fn a_deleted_queue_takes_its_callers_out_at_once_test() {
   let c = strict_queue(1)
   cluster.arrive(c, "call-one", "support", 0, 0)
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
 
   process.send(c.dispatcher, dispatcher.QueueDeleted("support"))
   cluster.sync(c)
+  assert cluster.queue_gone(c) == ["call-one"]
   assert cluster.called_off(c) == ["call-one"]
-  assert cluster.waiting(c) == ["call-one"]
-  assert cluster.ringing(c, "call-one") == ["ann"]
-  assert cluster.settled(c) == []
-
-  // The document says so too, and the pass that reads it asks nothing more
-  // of a caller whose ring is already being called off.
-  cluster.put_queue(
-    c,
-    "support",
-    deleted(queue("longest_idle", [#("ann", 1, 1)])),
-  )
-  cluster.tick(c)
-  assert cluster.called_off(c) == ["call-one"]
-  assert fake_offer.count(c.offers) == 1
-
-  cluster.reply(c, "call-one", Failed("originator_cancel"))
   assert cluster.waiting(c) == []
-  assert cluster.settled(c) == ["call-one"]
   assert cluster.all_ringing(c) == []
+  assert cluster.settled(c) == ["call-one"]
+
+  cluster.reply(c, "call-one", Failed("called_off"))
   assert fake_offer.count(c.offers) == 1
   assert cluster.availability_becomes(c, "ann", "logged_out") == "available"
 }
@@ -2727,47 +2652,46 @@ pub fn a_ring_that_runs_out_as_its_queue_goes_is_no_miss_test() {
   assert cluster.availability_becomes(c, "ann", "logged_out") == "available"
 }
 
-/// An agent who picked up in the instant the ring was called off does not
-/// have the caller: the unbridge cuts the bridge, and the answer is not
-/// taken. The caller leaves the deleted queue once the offer says so.
-pub fn an_answer_a_deleted_queue_crossed_does_not_connect_test() {
+/// An agent who picked up before the caller's actor heard of the deletion
+/// has the caller: the actor bridged them, and the call goes on outside the
+/// queue that is gone. The dispatcher, which let the caller go with the
+/// queue, takes nothing of it.
+pub fn an_answer_before_a_deletion_goes_on_outside_the_queue_test() {
   let c = two_agent_queue()
   cluster.agent_is(c, "bob", "logged_out")
   cluster.arrive(c, "call-one", "support", 0, 0)
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
   process.send(c.dispatcher, dispatcher.QueueDeleted("support"))
   cluster.sync(c)
+  assert cluster.settled(c) == ["call-one"]
+  assert cluster.waiting(c) == []
 
   cluster.reply(
     c,
     "call-one",
     Answered("ann", "ann-leg", cluster.start_of_time + 1),
   )
-  assert cluster.settled(c) == []
-  assert cluster.waiting(c) == ["call-one"]
-
-  cluster.reply(c, "call-one", Failed("called_off"))
-  assert cluster.settled(c) == ["call-one"]
   assert cluster.waiting(c) == []
-  assert cluster.availability_becomes(c, "ann", "logged_out") == "available"
+  assert cluster.all_ringing(c) == []
+  assert cluster.settled(c) == ["call-one"]
 }
 
-/// A ring not yet out when the queue went is called off the moment it is,
-/// and the caller leaves once it is over.
-pub fn a_ring_not_yet_out_is_called_off_when_it_goes_out_test() {
+/// A ring not yet out when the queue went is called off with the rest: the
+/// actor handles the ring first, and the caller has left at once.
+pub fn a_ring_not_yet_out_is_called_off_with_the_queue_test() {
   let c = two_agent_queue()
   cluster.agent_is(c, "bob", "logged_out")
   cluster.arrive(c, "call-one", "support", 0, 0)
   process.send(c.dispatcher, dispatcher.QueueDeleted("support"))
   cluster.sync(c)
-  assert cluster.called_off(c) == []
-  assert cluster.waiting(c) == ["call-one"]
+  assert cluster.called_off(c) == ["call-one"]
+  assert cluster.waiting(c) == []
+  assert cluster.settled(c) == ["call-one"]
 
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
-  assert cluster.called_off(c) == ["call-one"]
-  cluster.reply(c, "call-one", Failed("originator_cancel"))
+  cluster.reply(c, "call-one", Failed("called_off"))
   assert cluster.settled(c) == ["call-one"]
-  assert cluster.waiting(c) == []
+  assert cluster.all_ringing(c) == []
 }
 
 /// A caller who arrives in a queue already deleted -- the member published
@@ -2875,4 +2799,36 @@ pub fn an_agent_disabled_mid_ring_is_not_charged_a_miss_test() {
   cluster.reply(c, "call-one", OfferNoAnswer(["ann"]))
   assert cluster.availability_becomes(c, "ann", "on_break") == "available"
   assert cluster.ringing(c, "call-one") == ["bob"]
+}
+
+// --- A caller's actor ending while they wait ------------------------------
+
+/// A caller joins their actor on arrival, and one delivered again joins it
+/// again, resumed.
+pub fn a_caller_joins_their_actor_test() {
+  let c = two_agent_queue()
+  cluster.arrive(c, "call-one", "support", 0, 0)
+  cluster.redelivered(c, "call-one", "support", 0, 0)
+  assert cluster.joined(c) == [#("call-one", False), #("call-one", True)]
+}
+
+/// The actor of a waiting caller ends -- it crashed, or finished the passage
+/// before just as this one's member reached it -- and the caller is joined
+/// to a new one, resumed, so that something commands them.
+pub fn a_waiting_callers_lost_actor_is_replaced_test() {
+  let c = two_agent_queue()
+  cluster.agent_is(c, "ann", "logged_out")
+  cluster.agent_is(c, "bob", "logged_out")
+  cluster.arrive(c, "call-one", "support", 0, 0)
+  assert cluster.joined(c) == [#("call-one", False)]
+
+  fake_calls.actor_died(c.calls)
+  cluster.sync(c)
+  assert cluster.joined(c) == [#("call-one", False), #("call-one", True)]
+
+  // Nobody waiting any more: nothing to replace.
+  assert cluster.cancel(c, "call-one", Hangup)
+  fake_calls.actor_died(c.calls)
+  cluster.sync(c)
+  assert list.length(cluster.joined(c)) == 2
 }

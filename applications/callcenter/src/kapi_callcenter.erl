@@ -50,17 +50,13 @@
 %%% family matches.
 %%%
 %%% The callflow action that put the caller in the queue does not bind that
-%%% key. The same four messages -- `member_offer', `member_position',
-%%% `member_connected', `member_result' -- go to it a second time, straight
-%%% to the callflow's own queue: `publish_caller_event/2', with the
-%%% `Controller-Queue' the caller's call carries as its target. That queue is
-%%% the one the route win came in on, and `cf_exe' already hands whatever
-%%% arrives there for the call to the running action, so a waiting caller
-%%% costs the broker no queue, binding or consumer of its own. Each of the
-%%% four carries the `Joined-Timestamp' of the passage it is about, optional
-%%% because a dispatcher of an earlier release does not send it: a caller
-%%% sent from a queue straight back into it is the same call in the same
-%%% queue, and the action tells the two passages apart by it.
+%%% key: it hears nothing from the queue until the caller is handed back.
+%%% `member_continue' goes to it straight, at the `Controller-Queue' the
+%%% caller's call carries (`publish_member_continue/2'): the queue the route
+%%% win came in on, where `cf_exe' already hands whatever arrives for the
+%%% call to the running action, so a waiting caller costs the broker no
+%%% queue, binding or consumer of its own. Its answer, `member_continuing',
+%%% goes to the caller's actor the same way (`publish_member_continuing/2').
 %%%
 %%% A status answer does not go back on that key. It is published to the
 %%% requester's own queue, because the requester collects with
@@ -87,6 +83,8 @@
         ,member_connected/1, member_connected_v/1
         ,member_result/1, member_result_v/1
         ,member_position/1, member_position_v/1
+        ,member_continue/1, member_continue_v/1
+        ,member_continuing/1, member_continuing_v/1
         ,agent_availability/1, agent_availability_v/1
         ,agent_activity/1, agent_activity_v/1
         ,agent_offer/1, agent_offer_v/1
@@ -106,7 +104,8 @@
         ,publish_member_connected/1, publish_member_connected/2
         ,publish_member_result/1, publish_member_result/2
         ,publish_member_position/1, publish_member_position/2
-        ,publish_caller_event/2, publish_caller_event/3
+        ,publish_member_continue/2, publish_member_continue/3
+        ,publish_member_continuing/2, publish_member_continuing/3
         ,publish_agent_availability/1, publish_agent_availability/2
         ,publish_agent_activity/1, publish_agent_activity/2
         ,publish_agent_offer/1, publish_agent_offer/2
@@ -179,6 +178,7 @@
                         ,<<"queue_full">>
                         ,<<"transfer">>
                         ,<<"queue_deleted">>
+                        ,<<"quarantined">>
                         ]).
 
 -define(RESULTS, [<<"completed">>
@@ -214,6 +214,8 @@ api_definitions() ->
     ,member_connected_definition()
     ,member_result_definition()
     ,member_position_definition()
+    ,member_continue_definition()
+    ,member_continuing_definition()
     ,agent_availability_definition()
     ,agent_activity_definition()
     ,agent_offer_definition()
@@ -240,6 +242,8 @@ api_definition(<<"member_offer">>) -> member_offer_definition();
 api_definition(<<"member_connected">>) -> member_connected_definition();
 api_definition(<<"member_result">>) -> member_result_definition();
 api_definition(<<"member_position">>) -> member_position_definition();
+api_definition(<<"member_continue">>) -> member_continue_definition();
+api_definition(<<"member_continuing">>) -> member_continuing_definition();
 api_definition(<<"agent_availability">>) -> agent_availability_definition();
 api_definition(<<"agent_activity">>) -> agent_activity_definition();
 api_definition(<<"agent_offer">>) -> agent_offer_definition();
@@ -259,6 +263,13 @@ api_definition(<<"pickup_resp">>) -> pickup_resp_definition().
 %% on redelivery has no other way back to them. `Callflow-Node' is the node
 %% running the caller's callflow, so that a dispatcher can tell when the
 %% branch the caller would have taken on timeout has died with it.
+%%
+%% `Handoff-ID' names this passage of the caller through the queue: the
+%% callflow action waits for a `member_continue' carrying it, and nothing
+%% else. `Branches' is the flows the callflow could go on into when the
+%% caller leaves -- `_', `exit_key', `timeout', `no_agents',
+%% `no_agent_timeout' -- which is what the caller is resumed at on another
+%% callflow node when the action's own node has gone.
 %% @end
 %%------------------------------------------------------------------------------
 -spec member_call_definition() -> kapi_definition:api().
@@ -279,8 +290,10 @@ member_call_definition() ->
                                                             ,<<"Callflow-Node">>
                                                             ,<<"Joined-Timestamp">>
                                                             ]}
-              ,{fun kapi_definition:set_optional_headers/2, [<<"Caller-ID-Name">>
+              ,{fun kapi_definition:set_optional_headers/2, [<<"Branches">>
+                                                            ,<<"Caller-ID-Name">>
                                                             ,<<"Caller-ID-Number">>
+                                                            ,<<"Handoff-ID">>
                                                             ,<<"Priority">>
                                                             ,<<"Shard-Count">>
                                                             ]}
@@ -290,6 +303,8 @@ member_call_definition() ->
               ,{fun kapi_definition:set_types/2, [{?KEY_ACCOUNT_ID, fun is_binary/1}
                                                  ,{?KEY_QUEUE_ID, fun is_binary/1}
                                                  ,{<<"Call">>, fun kz_json:is_json_object/1}
+                                                 ,{<<"Branches">>, fun kz_json:is_json_object/1}
+                                                 ,{<<"Handoff-ID">>, fun is_binary/1}
                                                  ,{<<"Caller-ID-Name">>, fun is_binary/1}
                                                  ,{<<"Caller-ID-Number">>, fun is_binary/1}
                                                  ,{<<"Callflow-Node">>, fun is_binary/1}
@@ -541,6 +556,82 @@ member_position_definition() ->
                                                  ,{<<"Joined-Timestamp">>, fun is_integer/1}
                                                  ,{<<"Media-Node">>, fun is_binary/1}
                                                  ,{<<"Offered">>, fun is_boolean/1}
+                                                 ]}
+              ],
+    kapi_definition:setters(Setters).
+
+%%------------------------------------------------------------------------------
+%% @doc The call centre is done with a caller and hands them back to the
+%% callflow action that sent them, which goes on into the flow `Branch'
+%% names.
+%%
+%% Sent by the caller's own actor on the node holding the account's shard,
+%% straight to the action's Controller-Queue (`publish_member_continue/2'),
+%% only once the channel has run every command the actor sent it. The
+%% action answers `member_continuing' to `Reply-To'; an actor that hears
+%% nothing asks again, and after that resumes the caller elsewhere.
+%% `Handoff-ID' is the passage's own, from its `member_call', and the action
+%% takes a continue for no other.
+%% @end
+%%------------------------------------------------------------------------------
+-spec member_continue_definition() -> kapi_definition:api().
+member_continue_definition() ->
+    EventName = <<"member_continue">>,
+    Setters = [{fun kapi_definition:set_name/2, EventName}
+              ,{fun kapi_definition:set_friendly_name/2, <<"Queue Member Continue">>}
+              ,{fun kapi_definition:set_description/2
+               ,<<"A caller the queue is done with, handed back to their callflow on a branch">>
+               }
+              ,{fun kapi_definition:set_category/2, ?CATEGORY}
+              ,{fun kapi_definition:set_build_fun/2, fun member_continue/1}
+              ,{fun kapi_definition:set_validate_fun/2, fun member_continue_v/1}
+              ,{fun kapi_definition:set_publish_fun/2, fun publish_member_continue/2}
+              ,{fun kapi_definition:set_required_headers/2, [?KEY_ACCOUNT_ID
+                                                            ,?KEY_QUEUE_ID
+                                                            ,?KEY_CALL_ID
+                                                            ,<<"Handoff-ID">>
+                                                            ,<<"Branch">>
+                                                            ]}
+              ,{fun kapi_definition:set_optional_headers/2, [<<"Reply-To">>]}
+              ,{fun kapi_definition:set_values/2
+               ,kapi_definition:event_type_headers(?CATEGORY, EventName)
+               }
+              ,{fun kapi_definition:set_types/2, [{?KEY_ACCOUNT_ID, fun is_binary/1}
+                                                 ,{?KEY_QUEUE_ID, fun is_binary/1}
+                                                 ,{?KEY_CALL_ID, fun is_binary/1}
+                                                 ,{<<"Handoff-ID">>, fun is_binary/1}
+                                                 ,{<<"Branch">>, fun is_binary/1}
+                                                 ,{<<"Reply-To">>, fun is_binary/1}
+                                                 ]}
+              ],
+    kapi_definition:setters(Setters).
+
+%%------------------------------------------------------------------------------
+%% @doc The callflow action has the caller back: its answer to a
+%% `member_continue', to that message's `Reply-To'.
+%% @end
+%%------------------------------------------------------------------------------
+-spec member_continuing_definition() -> kapi_definition:api().
+member_continuing_definition() ->
+    EventName = <<"member_continuing">>,
+    Setters = [{fun kapi_definition:set_name/2, EventName}
+              ,{fun kapi_definition:set_friendly_name/2, <<"Queue Member Continuing">>}
+              ,{fun kapi_definition:set_description/2
+               ,<<"The callflow has a caller the queue handed back">>
+               }
+              ,{fun kapi_definition:set_category/2, ?CATEGORY}
+              ,{fun kapi_definition:set_build_fun/2, fun member_continuing/1}
+              ,{fun kapi_definition:set_validate_fun/2, fun member_continuing_v/1}
+              ,{fun kapi_definition:set_publish_fun/2, fun publish_member_continuing/2}
+              ,{fun kapi_definition:set_required_headers/2, [?KEY_CALL_ID
+                                                            ,<<"Handoff-ID">>
+                                                            ]}
+              ,{fun kapi_definition:set_optional_headers/2, []}
+              ,{fun kapi_definition:set_values/2
+               ,kapi_definition:event_type_headers(?CATEGORY, EventName)
+               }
+              ,{fun kapi_definition:set_types/2, [{?KEY_CALL_ID, fun is_binary/1}
+                                                 ,{<<"Handoff-ID">>, fun is_binary/1}
                                                  ]}
               ],
     kapi_definition:setters(Setters).
@@ -823,13 +914,6 @@ status_req_definition() ->
 %% `On-Queue-Call' lists the agents on a queue call in the account, whichever
 %% queue it came from: what a login lamp probe answered on another node needs
 %% to show `early'.
-%%
-%% `Caller-Delivery' says how the answering node's dispatchers reach a
-%% waiting caller: `controller', at the caller's controller queue. A callflow
-%% action reading an answer without it -- from a node of the release before,
-%% whose dispatchers publish only on the exchange -- listens on the caller's
-%% `callcenter.call.<account>.<call>' key as it used to. Additive, for one
-%% release: once every node sends it, nothing reads its absence.
 %% @end
 %%------------------------------------------------------------------------------
 -spec status_resp_definition() -> kapi_definition:api().
@@ -847,8 +931,7 @@ status_resp_definition() ->
               ,{fun kapi_definition:set_required_headers/2, [?KEY_ACCOUNT_ID
                                                             ,<<"Queues">>
                                                             ]}
-              ,{fun kapi_definition:set_optional_headers/2, [<<"Caller-Delivery">>
-                                                            ,<<"Node">>
+              ,{fun kapi_definition:set_optional_headers/2, [<<"Node">>
                                                             ,<<"On-Queue-Call">>
                                                             ,<<"Shard">>
                                                             ]}
@@ -856,7 +939,6 @@ status_resp_definition() ->
                ,kapi_definition:event_type_headers(?CATEGORY, EventName)
                }
               ,{fun kapi_definition:set_types/2, [{?KEY_ACCOUNT_ID, fun is_binary/1}
-                                                 ,{<<"Caller-Delivery">>, fun is_binary/1}
                                                  ,{<<"Node">>, fun is_binary/1}
                                                  ,{<<"On-Queue-Call">>, fun is_list/1}
                                                  ,{<<"Shard">>, fun is_integer/1}
@@ -1001,6 +1083,18 @@ member_position(Req) -> kapi_definition:build_message(Req, member_position_defin
 
 -spec member_position_v(kz_term:api_terms()) -> boolean().
 member_position_v(Req) -> kapi_definition:validate(Req, member_position_definition()).
+
+-spec member_continue(kz_term:api_terms()) -> kz_api:api_formatter_return().
+member_continue(Req) -> kapi_definition:build_message(Req, member_continue_definition()).
+
+-spec member_continue_v(kz_term:api_terms()) -> boolean().
+member_continue_v(Req) -> kapi_definition:validate(Req, member_continue_definition()).
+
+-spec member_continuing(kz_term:api_terms()) -> kz_api:api_formatter_return().
+member_continuing(Req) -> kapi_definition:build_message(Req, member_continuing_definition()).
+
+-spec member_continuing_v(kz_term:api_terms()) -> boolean().
+member_continuing_v(Req) -> kapi_definition:validate(Req, member_continuing_definition()).
 
 -spec agent_availability(kz_term:api_terms()) -> kz_api:api_formatter_return().
 agent_availability(Req) -> kapi_definition:build_message(Req, agent_availability_definition()).
@@ -1280,45 +1374,38 @@ publish_member_position(Req, ContentType) ->
     publish_to_exchange(RoutingKey, Req, member_position_definition(), ContentType).
 
 %%------------------------------------------------------------------------------
-%% @doc One of the dispatcher's four messages about a waiting caller, sent to
-%% the callflow that holds the caller rather than to the exchange.
-%%
-%% `ControllerQ' is the call's `Controller-Queue': `pid://<cf_exe>/<queue>',
-%% the queue of the node's callflow listener and the executor running the
-%% call. `kz_amqp_util:basic_publish/5' turns that into the queue's name as
-%% the routing key and a `Deliver-To-PID' header, the listener hands the
-%% message to the executor, and the executor relays a message about its own
-%% call to the action it is running. It is how the route win reaches the
-%% callflow, on the same exchange.
-%%
-%% Not `mandatory'. A callflow node that has gone took its queue with it
-%% (the queue is `auto_delete'), and a message for a caller it held is
-%% dropped by the broker with nothing returned and nothing logged: the
-%% caller it was for has gone too.
-%%
-%% Anything but those four is refused: this is not a way to reach a callflow
-%% with an arbitrary message.
+%% @doc Hand a caller back to the callflow action at its Controller-Queue:
+%% `pid://<cf_exe>/<queue>', as the other messages to the action go.
 %% @end
 %%------------------------------------------------------------------------------
--spec publish_caller_event(kz_term:ne_binary(), kz_term:api_terms()) -> 'ok'.
-publish_caller_event(ControllerQ, Req) ->
-    publish_caller_event(ControllerQ, Req, ?CONTENT_TYPE).
+-spec publish_member_continue(kz_term:ne_binary(), kz_term:api_terms()) -> 'ok'.
+publish_member_continue(ControllerQ, Req) ->
+    publish_member_continue(ControllerQ, Req, ?CONTENT_TYPE).
 
--spec publish_caller_event(kz_term:ne_binary(), kz_term:api_terms(), kz_term:ne_binary()) -> 'ok'.
-publish_caller_event(ControllerQ, Req, ContentType) ->
-    Definition = caller_event_definition(event_name(Req)),
+-spec publish_member_continue(kz_term:ne_binary(), kz_term:api_terms(), kz_term:ne_binary()) -> 'ok'.
+publish_member_continue(ControllerQ, Req, ContentType) ->
+    publish_targeted(ControllerQ, Req, member_continue_definition(), ContentType).
+
+%%------------------------------------------------------------------------------
+%% @doc The action's answer to a `member_continue', to the actor that sent
+%% it: `pid://<actor>/<queue>', the node's call reply queue.
+%% @end
+%%------------------------------------------------------------------------------
+-spec publish_member_continuing(kz_term:ne_binary(), kz_term:api_terms()) -> 'ok'.
+publish_member_continuing(ReplyTo, Req) ->
+    publish_member_continuing(ReplyTo, Req, ?CONTENT_TYPE).
+
+-spec publish_member_continuing(kz_term:ne_binary(), kz_term:api_terms(), kz_term:ne_binary()) -> 'ok'.
+publish_member_continuing(ReplyTo, Req, ContentType) ->
+    publish_targeted(ReplyTo, Req, member_continuing_definition(), ContentType).
+
+-spec publish_targeted(kz_term:ne_binary(), kz_term:api_terms(), kapi_definition:api(), kz_term:ne_binary()) -> 'ok'.
+publish_targeted(Queue, Req, Definition, ContentType) ->
     {'ok', Payload} = kz_api:prepare_api_payload(Req
                                                 ,kapi_definition:values(Definition)
                                                 ,kapi_definition:build_fun(Definition)
                                                 ),
-    kz_amqp_util:targeted_publish(ControllerQ, Payload, ContentType).
-
--spec caller_event_definition(kz_term:api_binary()) -> kapi_definition:api().
-caller_event_definition(<<"member_offer">>) -> member_offer_definition();
-caller_event_definition(<<"member_position">>) -> member_position_definition();
-caller_event_definition(<<"member_connected">>) -> member_connected_definition();
-caller_event_definition(<<"member_result">>) -> member_result_definition();
-caller_event_definition(Name) -> erlang:error({'not_a_caller_event', Name}).
+    kz_amqp_util:targeted_publish(Queue, Payload, ContentType).
 
 -spec publish_agent_availability(kz_term:api_terms()) -> 'ok'.
 publish_agent_availability(Req) -> publish_agent_availability(Req, ?CONTENT_TYPE).
@@ -1572,6 +1659,3 @@ agent_id(JObj) -> kz_json:get_ne_binary_value(?KEY_AGENT_ID, JObj).
 call_id(Props) when is_list(Props) -> props:get_value(?KEY_CALL_ID, Props);
 call_id(JObj) -> kz_json:get_ne_binary_value(?KEY_CALL_ID, JObj).
 
--spec event_name(kz_term:api_terms()) -> kz_term:api_ne_binary().
-event_name(Props) when is_list(Props) -> props:get_value(<<"Event-Name">>, Props);
-event_name(JObj) -> kz_json:get_ne_binary_value(<<"Event-Name">>, JObj).

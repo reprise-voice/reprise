@@ -7,6 +7,10 @@
             "description": "Account the event belongs to",
             "type": "string"
         },
+        "Branches": {
+            "description": "The flows the caller's callflow goes on into when they leave the queue, by branch: _, exit_key, timeout, no_agents, no_agent_timeout. What the caller is resumed at on another callflow node if the action's own node has gone",
+            "type": "object"
+        },
         "Call": {
             "description": "The caller's kapps_call JSON, including the control queue and Resource-Type",
             "type": "object"
@@ -33,6 +37,10 @@
             "enum": [
                 "member_call"
             ],
+            "type": "string"
+        },
+        "Handoff-ID": {
+            "description": "Names this passage of the caller through the queue; the callflow action takes a member_continue carrying it and no other",
             "type": "string"
         },
         "Joined-Timestamp": {

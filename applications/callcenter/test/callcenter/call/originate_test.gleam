@@ -252,3 +252,84 @@ fn an_offer(rng: rng.Rng) -> #(List(doc.Value), rng.Rng) {
   })
   |> fn(made) { #(list.flatten(made.0), made.1) }
 }
+
+// --- The originate -------------------------------------------------------------
+
+fn ring(
+  switch: option.Option(String),
+  name: option.Option(String),
+) -> originate.Ring {
+  originate.Ring(
+    account_id: "acct",
+    queue_id: "support",
+    call_id: caller_leg,
+    switch: switch,
+    joined: 63_800_000_000,
+    prefix: "0123456789abcdef01234567",
+    ring_timeout_s: 15,
+    deadline: 63_800_000_020,
+    owner: "kazoo_apps@one",
+    pickup: False,
+    caller_id_name: name,
+    caller_id_number: Some("5551234"),
+    cid_prefix: Some("Support: "),
+    server_id: Some("pid://<0.1.0>/call_replies"),
+  )
+}
+
+/// One originate for the offer: its legs on the caller's switch, parked on
+/// answer with no control process, every device at once, the caller as the
+/// queue presents them, the prefix naming the request, and the answer sent
+/// to the actor.
+pub fn the_originate_rings_every_leg_beside_the_caller_test() {
+  let endpoints = [
+    doc.object([#("Outbound-Call-ID", doc.String("p-1"))]),
+    doc.object([#("Outbound-Call-ID", doc.String("p-2"))]),
+  ]
+  let request =
+    originate.request(ring(Some("freeswitch@fs1"), Some("Ada")), endpoints)
+  assert doc.get_string(request, ["Application-Name"]) == Ok("park")
+  assert doc.get_string(request, ["Existing-Call-ID"]) == Ok(caller_leg)
+  assert doc.get_string(request, ["Switch-Nodename"]) == Ok("freeswitch@fs1")
+  assert doc.get_bool(request, ["Start-Control-Process"]) == Ok(False)
+  assert doc.get_bool(request, ["Ignore-Early-Media"]) == Ok(True)
+  assert doc.get_string(request, ["Dial-Endpoint-Method"]) == Ok("simultaneous")
+  assert doc.get_int(request, ["Timeout"]) == Ok(15)
+  assert doc.get_string(request, ["Caller-ID-Name"]) == Ok("Support: Ada")
+  assert doc.get_string(request, ["Caller-ID-Number"]) == Ok("5551234")
+  assert doc.get_string(request, ["Msg-ID"]) == Ok("0123456789abcdef01234567")
+  assert doc.get_string(request, ["Server-ID"])
+    == Ok("pid://<0.1.0>/call_replies")
+  assert doc.get_list(request, ["Endpoints"]) == Ok(endpoints)
+
+  // A lone endpoint rings alone, and a switch nobody knows is not said.
+  let lone =
+    originate.request(ring(None, None), [
+      doc.object([#("Outbound-Call-ID", doc.String("p-1"))]),
+    ])
+  assert doc.get_string(lone, ["Dial-Endpoint-Method"]) == Ok("single")
+  assert doc.get(lone, ["Switch-Nodename"]) == Error(Nil)
+  assert doc.get_string(lone, ["Caller-ID-Name"]) == Ok("Support: ")
+}
+
+/// Every leg is born with the queue's variables, which come back on its
+/// events and in the channel table, and exported so the switch keeps them;
+/// and with a `park_timeout`, written raw, so an answered leg nobody bridges
+/// hangs itself up.
+pub fn every_leg_carries_the_queue_and_a_park_timeout_test() {
+  let request = originate.request(ring(Some("freeswitch@fs1"), None), [])
+  assert doc.get_string(request, ["Custom-Channel-Vars", "Queue-Call-ID"])
+    == Ok(caller_leg)
+  assert doc.get_string(request, ["Custom-Channel-Vars", "Queue-Offer-ID"])
+    == Ok("0123456789abcdef01234567")
+  assert doc.get_bool(request, ["Custom-Channel-Vars", "Queue-Pickup"])
+    == Ok(False)
+  assert doc.get_string(request, [
+      "Custom-Channel-Vars", "Media-Control", "park_timeout",
+    ])
+    == Ok("10")
+  let exported = doc.strings(request, ["Export-Custom-Channel-Vars"])
+  assert list.contains(exported, "Queue-Call-ID")
+  assert list.contains(exported, "Queue-Offer-ID")
+  assert !list.contains(exported, "Media-Control")
+}

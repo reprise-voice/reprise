@@ -11,8 +11,10 @@
 //// 3. A node takes the shards assigned to it when nobody consumes them, and
 ////    asks every other member for the ones somebody does (`members.want`).
 //// 4. A node gives a shard up only when the member it is assigned to, as
-////    this node sees the members, has asked for it -- and not while an agent
-////    is being rung on it, for up to `patience_ms`.
+////    this node sees the members, has asked for it. The shard agrees once
+////    its callers' actors are steady, three seconds at most; one that does
+////    not answer in time is asked again, and released anyway after
+////    `patience_ms`.
 //// 5. A shard nobody has consumed for `orphan_ms` is taken by whoever sees
 ////    it, assigned or not: a caller waiting in a shard nobody dispatches is
 ////    worse than a shard on the wrong node.
@@ -135,10 +137,11 @@ const jitter_ms = 2000
 /// never raced for it.
 pub const orphan_ms = 30_000
 
-/// How long a handover waits for the agents being rung on the shard. Past
-/// it the shard is handed over ringing, and the node taking it watches the
-/// ring from the caller's record (`callcenter/takeover`); without it a shard
-/// that always has somebody ringing, on a busy account, would never move.
+/// How long a handover waits for a shard that does not answer being given
+/// up. A shard agrees to every give-up (`shard.give_up`) once its callers'
+/// actors are steady, so one that does not answer is one too busy to: past
+/// this it is released all the same, and the node taking it finds its
+/// callers where they stand on the switch (*Takeover*).
 pub const patience_ms = 120_000
 
 type State {
@@ -589,7 +592,7 @@ fn gave_up(state: State, shard_id: Int, to: String, agreed: Bool) -> State {
     }
     // Refused, and its tree has ended since: nothing left to hand over.
     False, False -> let_go(state, shard_id)
-    // Refused: an agent is being rung on it.
+    // No answer in time: the shard is too busy to say.
     False, True -> {
       let now = state.hooks.now_ms()
       let since = dict.get(state.refused, shard_id) |> result.unwrap(now)
@@ -602,11 +605,11 @@ fn gave_up(state: State, shard_id: Int, to: String, agreed: Bool) -> State {
             <> int.to_string(shard_id)
             <> " handed over to "
             <> to
-            <> " with an agent still ringing on it after "
+            <> " after it did not answer being given up for "
             <> int.to_string({ now - since } / 1000)
             <> " s: "
             <> to
-            <> " watches the ring from the caller's record",
+            <> " finds its callers where they stand",
           )
           let release = state.hooks.release
           let _ = process.spawn_unlinked(fn() { release(shard_id) })

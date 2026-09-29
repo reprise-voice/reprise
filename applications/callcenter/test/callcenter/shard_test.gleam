@@ -27,6 +27,7 @@ import gleam/result
 import gleam/string
 import kazoo/doc
 import kazoo/listener.{type Delivery}
+import support/cluster
 
 const account_id = "4b1f0c2d7e8a9b0c1d2e3f4051627384"
 
@@ -70,8 +71,7 @@ type OnArrival {
   PassCrashes
   /// Never start at all.
   NeverStarts
-  /// Hold the caller, and say an agent is being rung for every caller it
-  /// holds.
+  /// Hold the caller, as a dispatcher ringing an agent for them does.
   Rings
 }
 
@@ -161,13 +161,6 @@ fn fake_dispatcher(fake: Fake) -> Result(Subject(dispatcher.Message), String) {
           Crashes, _ -> panic as "the dispatcher could not digest the cancel"
           _, _ -> actor.continue(state)
         }
-      }
-      dispatcher.Offers(done) -> {
-        process.send(done, case state.on_arrival {
-          Rings -> dict.size(state.members)
-          _ -> 0
-        })
-        actor.continue(state)
       }
       dispatcher.Stop(done) ->
         case state.on_stop {
@@ -273,6 +266,7 @@ fn take_poisoned(
   let hooks =
     shard.Hooks(
       start_offer: shard.no_offers,
+      calls: shard.no_calls,
       start_dispatcher: fn(account_id, settle) {
         process.send(starts, account_id)
         case process.call(arrivals, 1000, Next) {
@@ -359,6 +353,8 @@ fn arrive_joined(
         caller_id_name: None,
         caller_id_number: None,
         shards: None,
+        handoff_id: "handoff-1",
+        branches: doc.object([]),
       ),
     )
   arrive_message(harness, message, delivery)
@@ -561,6 +557,7 @@ pub fn a_shard_is_not_held_until_its_listener_consumes_test() {
   let hooks =
     shard.Hooks(
       start_offer: shard.no_offers,
+      calls: shard.no_calls,
       start_dispatcher: fn(_account_id, _settle) {
         process.send(asked, Nil)
         Error("not in this test")
@@ -1112,6 +1109,7 @@ pub fn a_listener_that_ends_ends_the_tree_test() {
   let hooks =
     shard.Hooks(
       start_offer: shard.no_offers,
+      calls: shard.no_calls,
       start_dispatcher: fn(_account_id, _settle) { Error("not in this test") },
       consumer: fn(_shard, _to) {
         Some(
@@ -1564,19 +1562,15 @@ pub fn a_shard_with_a_caller_waiting_is_given_up_test() {
   assert drain(h.acks) == []
 }
 
-/// An agent being rung is the one thing that keeps a shard where it is: the
-/// node taking it could only watch the ring.
-pub fn a_shard_with_an_agent_ringing_is_not_given_up_test() {
+/// An agent being rung no longer keeps a shard where it is: the node taking
+/// it finds the ring on the switch and takes it on, so the shard goes with
+/// the caller's member unsettled, as a waiting caller's does.
+pub fn a_shard_with_an_agent_ringing_is_given_up_test() {
   let h = take(83, [Rings], Settles, Stops)
   arrive(h, "call-one")
-  assert shard.give_up(83) == False
-  assert shard.holds(83) == True
-  assert holding(h) == ["call-one"]
-  assert drain(h.acks) == []
-
-  assert cancel(h, "call-one") == True
   assert shard.give_up(83) == True
   assert process.is_alive(h.tree) == False
+  assert drain(h.acks) == []
 }
 
 fn member_call(account_id: String, call_id: String) -> doc.Value {
@@ -1596,6 +1590,8 @@ fn member_call(account_id: String, call_id: String) -> doc.Value {
       caller_id_name: None,
       caller_id_number: None,
       shards: None,
+      handoff_id: "handoff-1",
+      branches: doc.object([]),
     ),
   )
 }
@@ -1610,4 +1606,38 @@ fn gone_within(pid: Pid, attempts: Int) -> Bool {
       gone_within(pid, attempts - 1)
     }
   }
+}
+
+// --- A caller's actor saying they left -------------------------------------
+
+/// A caller's actor says the caller left a queue: the shard settles their
+/// member as their cancel did, and tells their dispatcher, once. A word for
+/// a passage earlier than the one held settles nothing.
+pub fn a_caller_who_left_is_settled_by_the_shard_test() {
+  let h = take(88, [], Settles, Stops)
+  arrive(h, "call-one")
+  let _ = drain(h.starts)
+
+  let left =
+    types.Member(
+      ..cluster.member("call-one", queue_id, 0, 63_900_000_000),
+      account_id: account_id,
+    )
+  process.send(h.to, shard.CallerLeft(left, types.ExitKey))
+  assert list.length(drain(h.acks)) == 1
+  assert drain(h.lefts) == [#(account_id, "call-one")]
+  assert holding(h) == []
+
+  // The member of a later passage is not settled by a word about an
+  // earlier one.
+  arrive_joined(h, account_id, "call-two", delivery(), 63_900_000_100)
+  let earlier =
+    types.Member(
+      ..cluster.member("call-two", queue_id, 0, 63_900_000_000),
+      account_id: account_id,
+    )
+  process.send(h.to, shard.CallerLeft(earlier, types.Timeout))
+  assert drain(h.acks) == []
+  assert holding(h) == ["call-two"]
+  finish(h)
 }

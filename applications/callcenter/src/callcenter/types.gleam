@@ -1,7 +1,7 @@
 //// The types the call center's parts agree on.
 ////
 //// One module, imported by all of them and owned by none: the dispatcher
-//// decides who is offered a caller, the offer process rings them, the agent
+//// decides who is offered a caller, the caller's actor rings them, the agent
 //// control writes availability, and the three only meet here. Nothing in
 //// this module does anything -- there are no functions -- so that changing
 //// behaviour never means changing this file.
@@ -26,6 +26,13 @@ pub type Member {
     callflow_node: String,
     caller_id_name: Option(String),
     caller_id_number: Option(String),
+    /// The passage's own id, which the callflow action waits for back in
+    /// `member_continue`: the member's `Handoff-ID`, or the call id and
+    /// the join from a sender that did not say.
+    handoff_id: String,
+    /// The flows the callflow goes on into when the caller leaves, by
+    /// branch: the member's `Branches`, an empty object when it has none.
+    branches: Value,
     /// Acked by the dispatcher only.
     delivery: Delivery,
   )
@@ -127,20 +134,15 @@ pub type OfferSettings {
   )
 }
 
-/// The answer to one offer, in order: at most one of `Answered`,
-/// `OfferNoAnswer`, `Busy`, `Rejected`, `Failed` and `CallerGone`, then
-/// `Ended` if `Answered` was sent -- or `Failed` with the offer's
-/// `called_off`, when the dispatcher called the ring off as it was answered
-/// and the answer does not stand.
-///
-/// `CallerGone` is the caller's channel going before anybody took them, and
-/// means the same thing a `hangup` cancel means: the caller has left the
-/// queue. An offer sends it when the caller hangs up while the phones ring,
-/// so that the dispatcher does not count that ring as the agents' miss, does
-/// not put them on a delay, and does not offer somebody who has gone to the
-/// next agent while the action's own `member_cancel` is on its way. A
-/// takeover sends it because a node died, and the caller's channel going is
-/// the whole of what this node will hear about it.
+/// What a caller's actor says to the dispatcher, naming the offer it is
+/// about: for each offer, `OfferRinging` once the ring is out, then at
+/// most one of `Answered`, `OfferNoAnswer`, `Busy`, `Rejected` and
+/// `Failed`, then `Ended` if `Answered` was sent -- or `Failed` with
+/// `called_off`, when the dispatcher called the ring off before anybody
+/// answered. A caller who leaves of their own accord is not said here: the
+/// actor tells the shard (`CallerLeft`), which settles them and tells the
+/// dispatcher. `Present` is about no offer the dispatcher made: see
+/// `Presence`.
 ///
 /// `OfferRinging` and `OfferNoAnswer` carry the `Offer` prefix because a
 /// Gleam module has one namespace for constructors, and `Activity` and
@@ -156,7 +158,35 @@ pub type OfferReply {
   Rejected(agent_id: String)
   Failed(reason: String)
   Ended(result: EndResult, at: Int)
-  CallerGone
+  /// Not about an offer the dispatcher made: where a caller it did not see
+  /// join stands. See `Presence`.
+  Present(presence: Presence)
+}
+
+/// What a caller's actor says of a caller the dispatcher was handed without
+/// seeing them join: one the broker handed out again because the node
+/// holding them died, one whose actor ended and was replaced, one whose
+/// dispatcher ended. The actor finds out where they stand
+/// (`callcenter/call/recovery`), and until it says, nobody is rung for
+/// them. The offer the reply names is the one anything found going on for
+/// the caller is held under from now on.
+pub type Presence {
+  /// Waiting, nobody being rung.
+  PresentWaiting
+  /// Phones ringing for them until the Gregorian second `ceiling`: a
+  /// supervisor's when `pickup`.
+  PresentRinging(agents: List(String), ceiling: Int, pickup: Bool)
+  /// Through to `agent_id` on `leg` since `answered_at`: a supervisor who
+  /// picked them up when `pickup`.
+  PresentConnected(
+    agent_id: String,
+    leg: String,
+    answered_at: Int,
+    pickup: Bool,
+  )
+  /// The queue is done with them -- their passage was closed, or they were
+  /// on their way out -- and their member is settled.
+  PresentOver
 }
 
 pub type EndResult {
@@ -175,7 +205,7 @@ pub type EndResult {
 /// The call id alone does not say. A caller who times out of one queue into
 /// another in the same account is the same call id with a second offer, and
 /// the first offer may still be resolving when the second starts; an agent
-/// taken out of an offer by hand leaves the offer's process running. Either
+/// taken out of an offer by hand leaves its ring to end as it ends. Either
 /// one's reply, read by call id, would be applied to whatever offer holds the
 /// caller now. Every reply carries this instead, and the dispatcher drops one
 /// that does not name the offer it is holding.
@@ -213,4 +243,8 @@ pub type CancelReason {
   /// the dispatcher gives rather than the caller's action: the dispatcher
   /// takes them out and tells the action, which leaves on `no_agents`.
   QueueDeleted
+  /// The caller's actor kept crashing on this call, and the one after it
+  /// handed the caller back on `no_agents` rather than try again
+  /// (`callcenter/call/calls`).
+  Quarantined
 }

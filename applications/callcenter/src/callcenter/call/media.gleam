@@ -117,32 +117,25 @@ pub fn overdue_cue(media: Media, now: Int) -> #(Media, Cue) {
 }
 
 /// What one of the channel's own events means for the media: where it
-/// leaves it, and what to send.
-///
-/// The end of an offer's bridge is the one event that does not follow from
-/// the state. The bridge interrupted whatever was running and threw away
-/// whatever was queued, and now nothing is: the caller goes back on hold
-/// from wherever they were. Only a channel not yet confirmed up is left
-/// alone, because its answer is still owed and brings the greeting or the
-/// hold with it.
+/// leaves it, and what to send. Nothing but the queue's own media runs on
+/// the caller's channel while they wait -- the agents ring on legs of their
+/// own -- so the end of a play is the only end there is to hear.
 pub fn on_event(media: Media, event: Value, now: Int) -> #(Media, Cue) {
   case events.event_name(event) {
     Some("CHANNEL_ANSWER") -> up(media, now)
     Some("CHANNEL_EXECUTE_COMPLETE") ->
-      case is_offer_over(event), media {
-        True, Answering(..) -> #(media, Nothing)
-        True, _ -> #(Held, Hold)
-        False, Answering(..) ->
+      case media {
+        Answering(..) ->
           case is_answered(event) {
             True -> up(media, now)
             False -> #(media, Nothing)
           }
-        False, Playing(..) ->
+        Playing(..) ->
           case announce.is_finished(event) {
             True -> #(Held, Hold)
             False -> #(media, Nothing)
           }
-        False, Held -> #(media, Nothing)
+        Held -> #(media, Nothing)
       }
     _other -> #(media, Nothing)
   }
@@ -159,15 +152,6 @@ pub fn up(media: Media, now: Int) -> #(Media, Cue) {
     Answering(_since, None) -> #(Held, Hold)
     _already_up -> #(media, Nothing)
   }
-}
-
-/// Whether an event is the end of an offer's bridge on the caller's channel:
-/// the switch has finished ringing the agents, and the caller is still here
-/// to hear it. A bridge that was answered ends after the caller is gone and
-/// is never seen by the loop that reads this.
-pub fn is_offer_over(event: Value) -> Bool {
-  events.event_name(event) == Some("CHANNEL_EXECUTE_COMPLETE")
-  && doc.get_string(event, ["Application-Name"]) == Ok("bridge")
 }
 
 /// Whether an event is the switch saying the channel is up.

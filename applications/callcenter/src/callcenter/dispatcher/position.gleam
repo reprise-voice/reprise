@@ -1,6 +1,8 @@
 //// Where every caller stands, told to them and to the bus: `member_position`
 //// on every change of position and on the announcement interval, and
-//// `queue_stats` whenever a queue's shape changes, emptying included.
+//// `queue_stats` whenever a queue's shape changes, emptying included. The
+//// caller hears it through their actor (`callcenter/call/actor`), which
+//// says it in their announcements; the bus hears it as an event.
 
 import callcenter/dispatcher/publish
 import callcenter/dispatcher/settings.{type QueueSettings}
@@ -59,6 +61,12 @@ pub fn announce(
       {
         False -> state
         True -> {
+          state.config.calls.positioned(
+            wait.member,
+            position,
+            waiting,
+            available,
+          )
           publish.position(
             state.config.account_id,
             wait.member,

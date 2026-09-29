@@ -89,14 +89,6 @@ fn play_over() -> doc.Value {
   ])
 }
 
-/// The offer's bridge on the caller's channel came to nothing.
-fn offer_over() -> doc.Value {
-  an_event("CHANNEL_EXECUTE_COMPLETE", [
-    #("Application-Name", doc.String("bridge")),
-    #("Application-Response", doc.String("NO_ANSWER")),
-  ])
-}
-
 /// What the media does for a script of events: every cue in order, and
 /// where it ends up.
 fn cued(
@@ -120,54 +112,6 @@ fn cueing(
   }
 }
 
-/// The hold landed first and the bridge broke it, which is the order the lab
-/// of 2026-09-14 saw: the caller was on hold, the offer's bridge interrupted
-/// it, and nobody answered. The bridge threw the queue away, so the caller
-/// is silent until this puts them back on hold.
-pub fn hold_then_bridge_test() {
-  assert cued(media.Held, [#(120, offer_over())]) == #(media.Held, [media.Hold])
-}
-
-/// The bridge landed first, while the channel was still being answered. The
-/// answer's own event queues the hold behind the ringing bridge, where it
-/// waits and runs when the ring comes to nothing; the hold queued at the
-/// end of the ring is behind that one and never runs, which is harmless
-/// where a caller left in silence is not.
-pub fn bridge_then_hold_test() {
-  assert cued(media.Answering(since: 100, greeting: None), [
-      #(100, answered()),
-      #(112, offer_over()),
-    ])
-    == #(media.Held, [media.Hold, media.Hold])
-}
-
-/// The bridge cut the greeting short. The greeting's end never comes -- the
-/// bridge threw it away -- so the end of the ring is what puts the caller
-/// on hold, and a late end-of-play is not a second hold.
-pub fn the_bridge_cuts_the_greeting_test() {
-  assert cued(media.Answering(since: 100, greeting: Some(greeting)), [
-      #(100, answered()),
-      #(103, offer_over()),
-      #(104, play_over()),
-    ])
-    == #(media.Held, [
-      media.PlayGreeting(greeting),
-      media.Hold,
-      media.Nothing,
-    ])
-}
-
-/// The bridge came and went before the switch had said the channel was up.
-/// Nothing is owed until it does: the answer brings the greeting or the
-/// hold with it.
-pub fn a_ring_over_before_the_channel_is_up_test() {
-  assert cued(media.Answering(since: 100, greeting: None), [
-      #(101, offer_over()),
-      #(102, answered()),
-    ])
-    == #(media.Held, [media.Nothing, media.Hold])
-}
-
 /// The greeting plays to its end and hold follows it, as it always did; an
 /// announcement ends the same way.
 pub fn hold_follows_the_greeting_test() {
@@ -181,23 +125,6 @@ pub fn hold_follows_the_greeting_test() {
     ])
   assert cued(media.Playing(since: 130), [#(140, play_over())])
     == #(media.Held, [media.Hold])
-}
-
-/// The end of an offer is the end of a `bridge` on the caller's channel and
-/// nothing else: not the greeting's end, not the answer, and not the bridge
-/// beginning.
-pub fn the_end_of_an_offer_test() {
-  assert media.is_offer_over(offer_over())
-  assert !media.is_offer_over(play_over())
-  assert !media.is_offer_over(
-    an_event("CHANNEL_EXECUTE_COMPLETE", [
-      #("Application-Name", doc.String("answer")),
-      #("Channel-Answer-State", doc.String("answered")),
-    ]),
-  )
-  assert !media.is_offer_over(
-    an_event("CHANNEL_BRIDGE", [#("Application-Name", doc.String("bridge"))]),
-  )
 }
 
 /// Missing answer confirmation never starts media; only playback has a fallback.
@@ -271,15 +198,4 @@ pub fn hold_follows_the_announcement_test() {
   let #(media, _cue) =
     media.announcement_cue(media.Held, position_only(), Some(3), "en-us", 130)
   assert cued(media, [#(138, play_over())]) == #(media.Held, [media.Hold])
-}
-
-/// The offer's bridge cut the announcement short. Its end never comes, so
-/// the end of the ring is what puts the caller back on hold, and a late
-/// end-of-play is not a second hold. The next announcement falls due at
-/// once, which `caller` decides.
-pub fn the_bridge_cuts_the_announcement_test() {
-  let #(media, _cue) =
-    media.announcement_cue(media.Held, position_only(), Some(3), "en-us", 130)
-  assert cued(media, [#(145, offer_over()), #(146, play_over())])
-    == #(media.Held, [media.Hold, media.Nothing])
 }

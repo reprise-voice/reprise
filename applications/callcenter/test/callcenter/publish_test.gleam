@@ -1,6 +1,6 @@
 //// Where the dispatcher's events about one caller go.
 
-import callcenter/dispatcher/publish.{Caller, Exchange}
+import callcenter/dispatcher/publish
 import callcenter/member
 import callcenter/types.{type Member, Member}
 import gleam/option.{None, Some}
@@ -19,6 +19,8 @@ fn waiting_with(call: doc.Value) -> Member {
     callflow_node: "kazoo_apps@one",
     caller_id_name: None,
     caller_id_number: None,
+    handoff_id: "call-one-63900000000",
+    branches: doc.object([]),
     delivery: member.no_delivery(),
   )
 }
@@ -30,35 +32,14 @@ fn routed_call() -> doc.Value {
   ])
 }
 
-/// A caller whose call says where its callflow is hears the dispatcher
-/// there, and the exchange carries the same event for whoever watches.
-pub fn a_caller_is_told_at_their_controller_queue_test() {
-  assert publish.call_targets(waiting_with(routed_call()))
-    == [Exchange, Caller(controller_queue)]
-}
-
-/// A call that does not say -- a stub, or a caller rebuilt from their
-/// record -- is published on the exchange alone.
-pub fn a_call_with_no_controller_queue_is_only_published_test() {
-  assert publish.call_targets(waiting_with(member.stub_call("call-one", "fs1")))
-    == [Exchange]
-  let empty =
-    doc.object([
-      #("Call-ID", doc.String("call-one")),
-      #("Controller-Queue", doc.String("")),
-    ])
-  assert publish.call_targets(waiting_with(empty)) == [Exchange]
-}
-
 pub fn the_controller_queue_is_read_off_the_call_test() {
   assert member.controller_queue(routed_call()) == Some(controller_queue)
   assert member.controller_queue(doc.object([])) == None
 }
 
 /// Without a broker every publish is refused, and the dispatcher carries on:
-/// an event that could not reach a callflow node that has gone is not an
-/// error anybody acts on.
-pub fn publishing_to_a_caller_with_no_broker_does_not_fail_test() {
+/// an event nobody could hear is not an error anybody acts on.
+pub fn publishing_with_no_broker_does_not_fail_test() {
   assert publish.call("account", "member_offer", waiting_with(routed_call()), [
       #("Agent-IDs", doc.List([doc.String("agent-a")])),
       #("Offer-Timeout", doc.Int(20)),
@@ -69,8 +50,8 @@ pub fn publishing_to_a_caller_with_no_broker_does_not_fail_test() {
 /// The dispatcher's own publish goes through `kapi_callcenter`, so the key
 /// its events go out under is the one every binding is built from: a SIP
 /// Call-ID's dots and `@` are escaped into one word of it. The caller's
-/// callflow hears the same event at its controller queue, which takes no
-/// key at all.
+/// callflow hears none of it: its controller queue is told only that the
+/// caller is handed back, by the caller's actor.
 pub fn a_dispatcher_event_goes_out_under_the_escaped_key_test() {
   let sip_call_id = "3c2a1f.9e@pbx.example.com"
   let member =
@@ -109,7 +90,7 @@ pub fn a_dispatcher_event_goes_out_under_the_escaped_key_test() {
     ]
   assert published
     == [#("callcenter", call_routing_key(member.account_id, sip_call_id))]
-  assert targeted == [controller_queue]
+  assert targeted == []
 }
 
 type Platform

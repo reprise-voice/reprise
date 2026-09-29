@@ -224,3 +224,124 @@ fn set_some(value: Value, path: List(String), to: Option(String)) -> Value {
 pub fn is_external(endpoint: Value) -> Bool {
   doc.get_string(endpoint, ["Invite-Format"]) != Ok("endpoint")
 }
+
+// --- The originate -------------------------------------------------------------
+
+/// How long an answered leg waits, parked, for the caller to be bridged to
+/// it before the switch hangs it up: long enough for the actor to hear the
+/// answer and bridge it, short enough that a leg whose actor died is not an
+/// agent left in silence. Written raw on every leg (`Media-Control`), which
+/// `park` consumes.
+pub const park_timeout_s = 10
+
+/// Everything an offer's `originate_req` says besides the endpoints.
+pub type Ring {
+  Ring(
+    account_id: String,
+    queue_id: String,
+    /// The caller's call id: the legs start on the caller's own switch
+    /// (`Existing-Call-ID`), and each carries it as `Queue-Call-ID`.
+    call_id: String,
+    /// The caller's switch, which the request is sent to.
+    switch: Option(String),
+    joined: Int,
+    /// The offer's leg prefix, which names the legs and the request.
+    prefix: String,
+    ring_timeout_s: Int,
+    /// The Gregorian second past which the offer is given up on.
+    deadline: Int,
+    /// The node the caller's actor runs on.
+    owner: String,
+    /// A supervisor's pickup, not an agent's offer.
+    pickup: Bool,
+    caller_id_name: Option(String),
+    caller_id_number: Option(String),
+    cid_prefix: Option(String),
+    /// Where `ecallmgr` answers: the actor's own address.
+    server_id: Option(String),
+  )
+}
+
+/// The variables every leg of an offer is born with, which come back on
+/// its events, in `ecallmgr`'s channel table and on its CDR: what a node
+/// taking the caller over finds its legs by.
+pub fn leg_vars(ring: Ring) -> List(#(String, Value)) {
+  [
+    #("Account-ID", doc.String(ring.account_id)),
+    #("Queue-ID", doc.String(ring.queue_id)),
+    #("Queue-Call-ID", doc.String(ring.call_id)),
+    #("Queue-Joined-Timestamp", doc.Int(ring.joined)),
+    #("Queue-Offer-ID", doc.String(ring.prefix)),
+    #("Queue-Offer-Deadline", doc.Int(ring.deadline)),
+    #("Queue-Owner", doc.String(ring.owner)),
+    #("Queue-Pickup", doc.Bool(ring.pickup)),
+  ]
+}
+
+/// One `originate_req` for a whole offer.
+///
+/// - `Existing-Call-ID` and `Switch-Nodename` put every leg on the caller's
+///   own switch, where the bridge can reach it.
+/// - `park` is what an answered leg runs: it waits there, for the actor to
+///   bridge the caller to it, or for its `park_timeout`.
+/// - No control process: nothing but the actor commands a leg, and it does
+///   that by name.
+/// - `Ignore-Early-Media`, or a phone's 183 would complete the originate as
+///   an answer.
+/// - Every endpoint rings at once (`strategy`).
+///
+/// `Msg-ID` is the leg prefix, which `ecallmgr` echoes on its answer, so
+/// the answer names its offer.
+pub fn request(ring: Ring, endpoints: List(Value)) -> Value {
+  let name = case ring.caller_id_name {
+    Some(name) -> Some(option.unwrap(ring.cid_prefix, "") <> name)
+    None -> ring.cid_prefix
+  }
+  let vars = leg_vars(ring)
+  doc.object_some([
+    #("Application-Name", Some(doc.String("park"))),
+    #("Endpoints", Some(doc.List(endpoints))),
+    #(
+      "Dial-Endpoint-Method",
+      Some(
+        doc.String(case strategy(endpoints) {
+          call.Single -> "single"
+          call.Simultaneous -> "simultaneous"
+        }),
+      ),
+    ),
+    #("Existing-Call-ID", Some(doc.String(ring.call_id))),
+    #("Switch-Nodename", option.map(ring.switch, doc.String)),
+    #("Start-Control-Process", Some(doc.Bool(False))),
+    #("Originate-Immediate", Some(doc.Bool(True))),
+    #("Timeout", Some(doc.Int(ring.ring_timeout_s))),
+    #("Ignore-Early-Media", Some(doc.Bool(True))),
+    #("Caller-ID-Name", option.map(name, doc.String)),
+    #("Caller-ID-Number", option.map(ring.caller_id_number, doc.String)),
+    #("Outbound-Caller-ID-Name", option.map(name, doc.String)),
+    #(
+      "Outbound-Caller-ID-Number",
+      option.map(ring.caller_id_number, doc.String),
+    ),
+    #(
+      "Custom-Channel-Vars",
+      Some(
+        doc.object([
+          #(
+            "Media-Control",
+            doc.object([
+              #("park_timeout", doc.String(int.to_string(park_timeout_s))),
+            ]),
+          ),
+          ..vars
+        ]),
+      ),
+    ),
+    #(
+      "Export-Custom-Channel-Vars",
+      Some(doc.List(list.map(vars, fn(var) { doc.String(var.0) }))),
+    ),
+    #("Msg-ID", Some(doc.String(ring.prefix))),
+    #("Server-ID", option.map(ring.server_id, doc.String)),
+  ])
+}

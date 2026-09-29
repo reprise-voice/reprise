@@ -11,8 +11,7 @@ import callcenter/dispatcher/config.{type Config}
 import callcenter/presence
 import callcenter/strategy
 import callcenter/types.{
-  type Activity, type CancelReason, type Member, type OfferId, type OfferReply,
-  type OfferRequest,
+  type Activity, type Member, type OfferId, type OfferReply, type OfferRequest,
 }
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Pid, type Subject}
@@ -28,8 +27,6 @@ pub type Wait {
     position: Int,
     /// When a position was last published, for the announcement interval.
     announced_at: Int,
-    /// Whether the callflow re-run of plan 4.4 has already been asked for.
-    rerun: Bool,
     /// Everybody this passage has rung so far. A caller works down the
     /// list: an agent who has already had them is passed over until
     /// everybody who could take them has, and only then does the list start
@@ -58,36 +55,23 @@ pub type Offer {
     /// Set when the offer has been answered, so the reply after it is an
     /// end and not a miss.
     connected: Option(#(String, String, Int)),
-    /// The process doing the ringing, while it is doing it.
+    /// The caller's actor, which rings the offer and says how it went
+    /// (`callcenter/call/actor`). `None` for a ring a node that died left
+    /// going, which nothing here can hear.
     ///
-    /// The ceiling does not take back an offer whose process is still alive:
+    /// The ceiling does not take back an offer whose actor is still alive:
     /// its phones may still be ringing, and a reply that would have been
     /// its own is dropped once the offer is gone.
     pid: Option(Pid),
-    /// Whether the ring is out on the switch: the offer said `OfferRinging`,
-    /// or it is a ring a node that died left going. Before it there is no
-    /// bridge on the caller's channel to call off.
+    /// Whether the ring is out on the switch: the actor said `OfferRinging`,
+    /// or it is a ring a node that died left going.
     rung: Bool,
-    /// Whether the ring has been called off, because the agent was released
-    /// by hand while it rang. The offer is held until it replies, as any
-    /// other is, but whatever it says short of an answer is nobody's miss.
+    /// Whether the ring has been called off: the agent was released by hand
+    /// while it rang. The offer is held until the actor says the ring is
+    /// over, as any other is, and whatever it says short of an answer is
+    /// nobody's miss. An answer that came first stands: the actor bridged
+    /// the caller before the call-off reached it.
     called_off: Bool,
-  )
-}
-
-/// A waiting caller this dispatcher is taking out of the queue, once the
-/// ring going on for them is over.
-///
-/// The mark is the passage's and not the caller's: a caller who moves on to
-/// another queue while the ring is called off -- a timeout into an overflow,
-/// the member of which overtook the deletion -- is a new passage, and it is
-/// not the one being taken out. See `offers.leave_if_leaving`.
-@internal
-pub type Leaving {
-  Leaving(
-    /// The passage the mark was set for (`records.passage_id`).
-    passage: String,
-    reason: CancelReason,
   )
 }
 
@@ -155,14 +139,17 @@ pub type State {
     waiting: Dict(String, Wait),
     /// Call id to the offer in flight for that caller.
     offers: Dict(String, Offer),
+    /// Call id to the actor commanding a waiting caller, watched: one that
+    /// ends while the caller waits is replaced (`arrival.actor_down`).
+    actors: Dict(String, Pid),
+    /// Call id to the Gregorian second until which nobody is rung for a
+    /// caller handed over without being seen to join: their actor is finding
+    /// out where they stand, and says so with a `Present`
+    /// (`arrival.present`). Past it they are rung like anybody else.
+    presenting: Dict(String, Int),
     /// Call id to the supervisor's pickup among `offers`, for the offers
     /// that are one. Its replies are `dispatcher/pickup`'s, not `offers`'.
     pickups: Dict(String, Pickup),
-    /// Call id to why a waiting caller is being taken out of the queue by
-    /// this dispatcher, while the ring going on for them is called off. They
-    /// leave when the offer says the ring is over, unless it says an agent
-    /// answered first: see `offers.queue_deleted`.
-    leaving: Dict(String, Leaving),
     /// Agent id to the offer they are in. One at a time, always: this is the
     /// dictionary that makes that true. The entry is the offer's own, and
     /// only that offer's end lets the agent go (`offers.hold`,

@@ -5,14 +5,9 @@
 //// message carries are empty here and the payloads are exactly the fields
 //// this module puts on them, which is what these check.
 
-import callcenter/caller
-import callcenter/status as holder
-import callcenter/types
 import cf_callcenter
-import gleam/list
 import gleam/option.{None, Some}
 import gleam/result
-import gleam/string
 import kazoo/call
 import kazoo/doc
 import kazoo/kazoo
@@ -183,23 +178,6 @@ pub fn a_node_with_nothing_to_say_is_skipped_test() {
   assert cf_callcenter.status_of(queue_id, []) == None
 }
 
-/// Every answer a shard holder of this release gives says its dispatchers
-/// send to the controller queue -- the empty ones too, since a dispatcher
-/// starts on the account's first caller -- and that is what the action
-/// reads as needing no listener. A node that does not hold the shard gives
-/// no answer.
-pub fn a_holder_says_how_it_reaches_a_caller_test() {
-  let assert Some(quiet) =
-    holder.response(doc.object([]), "acct", 3, holder.Quiet)
-  let assert Some(busy) =
-    holder.response(doc.object([]), "acct", 3, holder.Busy)
-  assert doc.get_string(quiet, ["Caller-Delivery"])
-    == Ok(cf_callcenter.controller_delivery)
-  assert cf_callcenter.delivery_of([quiet]) == cf_callcenter.ToController
-  assert cf_callcenter.delivery_of([busy]) == cf_callcenter.ToController
-  assert holder.response(doc.object([]), "acct", 3, holder.Elsewhere) == None
-}
-
 //
 // --- The caller's media ----------------------------------------------------
 //
@@ -230,6 +208,8 @@ pub fn a_member_call_test() {
       caller_id_name: Some("Ada Lovelace"),
       caller_id_number: Some("2125550143"),
       shards: Some(64),
+      handoff_id: "handoff-1",
+      branches: doc.object([]),
     )
   assert doc.get_string(message, ["Account-ID"]) == Ok(account_id)
   assert doc.get_string(message, ["Queue-ID"]) == Ok(queue_id)
@@ -259,6 +239,8 @@ pub fn the_member_call_carries_the_whole_call_test() {
       caller_id_name: None,
       caller_id_number: None,
       shards: None,
+      handoff_id: "handoff-1",
+      branches: doc.object([]),
     )
   assert doc.get_string(message, ["Call", "Resource-Type"]) == Ok("audio")
   assert doc.get_string(message, ["Call", "Control-Queue"])
@@ -280,40 +262,12 @@ pub fn a_member_call_without_a_caller_id_test() {
       caller_id_name: None,
       caller_id_number: None,
       shards: None,
+      handoff_id: "handoff-1",
+      branches: doc.object([]),
     )
   assert doc.get(message, ["Caller-ID-Name"]) == Error(Nil)
   assert doc.get(message, ["Caller-ID-Number"]) == Error(Nil)
   assert doc.get(message, ["Shard-Count"]) == Error(Nil)
-}
-
-pub fn a_member_cancel_test() {
-  let message =
-    cf_callcenter.member_cancel(
-      account_id: account_id,
-      queue_id: queue_id,
-      call_id: call_id,
-      reason: types.ExitKey,
-      joined: 63_900_000_002,
-      cancelled_at: 63_900_000_042,
-    )
-  assert doc.get_int(message, ["Joined-Timestamp"]) == Ok(63_900_000_002)
-  assert doc.get_int(message, ["Cancelled-Timestamp"]) == Ok(63_900_000_042)
-  assert doc.get_string(message, ["Account-ID"]) == Ok(account_id)
-  assert doc.get_string(message, ["Queue-ID"]) == Ok(queue_id)
-  assert doc.get_string(message, ["Call-ID"]) == Ok(call_id)
-  assert doc.get_string(message, ["Reason"]) == Ok("exit_key")
-}
-
-/// The reasons are the enum `kapi_callcenter` validates `member_cancel`
-/// against; a name that is not in it is a message the broker side rejects.
-pub fn every_cancel_reason_test() {
-  assert cf_callcenter.reason_name(types.Hangup) == "hangup"
-  assert cf_callcenter.reason_name(types.Timeout) == "timeout"
-  assert cf_callcenter.reason_name(types.NoAgentTimeout) == "no_agent_timeout"
-  assert cf_callcenter.reason_name(types.ExitKey) == "exit_key"
-  assert cf_callcenter.reason_name(types.QueueFull) == "queue_full"
-  assert cf_callcenter.reason_name(types.Transfer) == "transfer"
-  assert cf_callcenter.reason_name(types.QueueDeleted) == "queue_deleted"
 }
 
 /// A callflow naming a queue that is not there -- never was, was deleted, or
@@ -354,42 +308,6 @@ pub fn the_channel_variables_a_queue_call_carries_test() {
       #("Agent-ID", doc.String("")),
       #("Queue-Answered-Timestamp", doc.String("")),
     ]
-}
-
-/// A caller carrying these channel variables, as a call record built from
-/// their channel does.
-fn carrying(ccvs: List(#(String, doc.Value))) -> call.Call {
-  call.from_value(
-    doc.object([
-      #("Call-ID", doc.String(call_id)),
-      #("Custom-Channel-Vars", doc.object(ccvs)),
-    ]),
-  )
-}
-
-/// A queue with exit keys asks a ring from the caller's channel to read their
-/// keys, which is what publishes a key pressed while an agent rings. A queue
-/// without them asks nothing, and a channel that already asks -- the mark
-/// comes back from the switch as text, or is on the record as it was set --
-/// is never asked again: a ring running on it has kept the value it read.
-pub fn only_the_first_queue_with_exit_keys_asks_the_ring_to_read_keys_test() {
-  assert cf_callcenter.asks_ring_to_read_keys(["#"], carrying([]))
-  assert cf_callcenter.asks_ring_to_read_keys(["1", "#"], carrying([]))
-  assert !cf_callcenter.asks_ring_to_read_keys([], carrying([]))
-  list.each([doc.String("true"), doc.Bool(True)], fn(mark) {
-    let marked = carrying([#("Queue-Ring-Reads-Keys", mark)])
-    assert !cf_callcenter.asks_ring_to_read_keys(["#"], marked)
-  })
-}
-
-/// The cancel key is one no keypad sends. The switch compares a key with the
-/// first character of it, and a cancel key a keypad could send would end the
-/// ring in the switch as `NO_ANSWER`, which the offer counts as the agents'
-/// miss.
-pub fn the_rings_cancel_key_is_no_key_test() {
-  let keys = string.to_graphemes("0123456789*#ABCDabcdWwFf")
-  let assert Ok(first) = string.first(cf_callcenter.no_keypad_key)
-  assert list.contains(keys, first) == False
 }
 
 /// A queue with no name is still identifiable on the CDR.
@@ -453,115 +371,6 @@ pub fn the_first_queue_stamps_the_channel_test() {
 // --- The dispatcher's messages ---------------------------------------------
 //
 
-fn relayed(fields: List(#(String, doc.Value))) -> doc.Value {
-  doc.object([#("Call-ID", doc.String(call_id)), ..fields])
-}
-
-/// The executor relays everything about the call; the dispatcher's messages
-/// are this caller's only when they are about this queue too.
-pub fn whose_event_it_is_test() {
-  let channel = relayed([#("Event-Category", doc.String("call_event"))])
-  assert cf_callcenter.is_own(
-    call_id,
-    queue_id,
-    cf_callcenter.FirstHere,
-    channel,
-  )
-  assert !cf_callcenter.is_own(
-    "another-call",
-    queue_id,
-    cf_callcenter.FirstHere,
-    channel,
-  )
-
-  let this_queue =
-    relayed([
-      #("Event-Category", doc.String("callcenter")),
-      #("Event-Name", doc.String("member_offer")),
-      #("Queue-ID", doc.String(queue_id)),
-    ])
-  assert cf_callcenter.is_own(
-    call_id,
-    queue_id,
-    cf_callcenter.FirstHere,
-    this_queue,
-  )
-
-  // The last offer of a queue the caller timed out of, landing in the next.
-  let earlier_queue =
-    relayed([
-      #("Event-Category", doc.String("callcenter")),
-      #("Event-Name", doc.String("member_offer")),
-      #("Queue-ID", doc.String("earlier-queue")),
-    ])
-  assert !cf_callcenter.is_own(
-    call_id,
-    queue_id,
-    cf_callcenter.FirstHere,
-    earlier_queue,
-  )
-
-  let no_queue =
-    relayed([
-      #("Event-Category", doc.String("callcenter")),
-      #("Event-Name", doc.String("member_position")),
-    ])
-  assert !cf_callcenter.is_own(
-    call_id,
-    queue_id,
-    cf_callcenter.FirstHere,
-    no_queue,
-  )
-}
-
-fn offer_joined(joined: option.Option(Int)) -> doc.Value {
-  relayed([
-    #("Event-Category", doc.String("callcenter")),
-    #("Event-Name", doc.String("member_offer")),
-    #("Queue-ID", doc.String(queue_id)),
-    ..case joined {
-      Some(joined) -> [#("Joined-Timestamp", doc.Int(joined))]
-      None -> []
-    }
-  ])
-}
-
-/// A caller back in a queue this executor has had them in -- a timeout or
-/// exit branch leading straight back -- hears only what is about the
-/// passage it is running now. The first time here, whatever the dispatcher
-/// says about the caller in the queue counts: a rerun on another node is
-/// continuing the passage the dispatcher holds, under its older join. A
-/// dispatcher that does not say is heard as it always was.
-pub fn which_passage_a_message_is_about_test() {
-  let first = cf_callcenter.FirstHere
-  let again = cf_callcenter.Again(joined: 200)
-  let own = fn(passage, event) {
-    cf_callcenter.is_own(call_id, queue_id, passage, event)
-  }
-  assert own(first, offer_joined(Some(100)))
-  assert own(first, offer_joined(Some(200)))
-  assert own(first, offer_joined(None))
-  assert own(again, offer_joined(Some(200)))
-  assert !own(again, offer_joined(Some(100)))
-  assert own(again, offer_joined(None))
-
-  // The channel's own events are not the dispatcher's and name no passage.
-  assert own(again, relayed([#("Event-Category", doc.String("call_event"))]))
-}
-
-/// What says which it is: a note on the call's key-value store, made by
-/// each passage as it starts, per queue.
-pub fn a_passage_notes_itself_on_the_call_test() {
-  let fresh = call.from_value(doc.object([#("Call-ID", doc.String(call_id))]))
-  assert cf_callcenter.passage_of(fresh, queue_id, 100)
-    == cf_callcenter.FirstHere
-  let ran = cf_callcenter.ran_here(fresh, queue_id, 100)
-  assert cf_callcenter.passage_of(ran, queue_id, 200)
-    == cf_callcenter.Again(joined: 200)
-  assert cf_callcenter.passage_of(ran, "another-queue", 200)
-    == cf_callcenter.FirstHere
-}
-
 const executor = "<0.311.0>"
 
 fn never() -> option.Option(String) {
@@ -606,138 +415,6 @@ pub fn without_an_executor_or_a_listener_the_call_says_test() {
   assert cf_callcenter.reachable_at(stale, Some(executor), fn() { None })
     == stale
   assert cf_callcenter.reachable_at(None, None, never) == None
-}
-
-//
-// --- The dispatcher's position ---------------------------------------------
-//
-
-pub fn a_position_event_test() {
-  assert cf_callcenter.position_of(
-      doc.object([
-        #("Event-Category", doc.String("callcenter")),
-        #("Event-Name", doc.String("member_position")),
-        #("Position", doc.Int(2)),
-        #("Waiting", doc.Int(5)),
-        #("Agents-Available", doc.Int(0)),
-      ]),
-    )
-    == cf_callcenter.Position(
-      position: Some(2),
-      waiting: Some(5),
-      agents_available: Some(0),
-      offered: None,
-    )
-}
-
-fn position(available: Int, offered: Bool) -> doc.Value {
-  doc.object([
-    #("Event-Category", doc.String("callcenter")),
-    #("Event-Name", doc.String("member_position")),
-    #("Position", doc.Int(1)),
-    #("Waiting", doc.Int(1)),
-    #("Agents-Available", doc.Int(available)),
-    #("Offered", doc.Bool(offered)),
-  ])
-}
-
-/// A position that says no offer is in flight ends the ring the caller was
-/// told of -- a bridge sent and never run shows no end on the channel -- and
-/// the no-agent clock starts from its count. One that says an offer is in
-/// flight changes nothing, and never starts a ring nobody told of.
-pub fn a_position_with_no_offer_out_ends_the_ring_test() {
-  let ringing = caller.offered(caller.new(100), until: 125)
-  assert caller.is_offered(ringing, at: 110)
-
-  let over = cf_callcenter.position_heard(ringing, position(0, False), 110)
-  assert caller.is_offered(over, at: 110) == False
-  assert over.no_agents_since == Some(110)
-
-  let still = cf_callcenter.position_heard(ringing, position(0, True), 110)
-  assert caller.is_offered(still, at: 110)
-  assert still.no_agents_since == None
-
-  let waiting =
-    cf_callcenter.position_heard(caller.new(100), position(0, True), 110)
-  assert caller.is_offered(waiting, at: 110) == False
-  assert waiting.no_agents_since == Some(110)
-}
-
-/// A position event that leaves a count out says nothing about it, which is
-/// not the same as saying zero.
-pub fn a_position_event_with_nothing_in_it_test() {
-  assert cf_callcenter.position_of(doc.object([]))
-    == cf_callcenter.Position(
-      position: None,
-      waiting: None,
-      agents_available: None,
-      offered: None,
-    )
-}
-
-/// The status answer that let the caller in already counted the agents. With
-/// none, the no-agent clock starts at the join and not at the first position
-/// event, which the lab of 2026-09-14 showed a caller can miss: they waited
-/// out the whole `max_wait_time` of thirty seconds in a queue configured to
-/// give up on them after ten with nobody there.
-pub fn the_no_agent_clock_starts_from_the_status_that_let_the_caller_in_test() {
-  let joined = 63_900_000_000
-  let limits =
-    caller.limits(
-      doc.object([
-        #("max_wait_time", doc.Int(30)),
-        #("max_wait_time_with_no_agent", doc.Int(10)),
-      ]),
-    )
-
-  let nobody =
-    cf_callcenter.arriving(
-      joined,
-      Some(cf_callcenter.Status(waiting: Some(0), agents_available: Some(0))),
-    )
-  assert caller.expired(nobody, limits, now: joined + 9) == None
-  assert caller.expired(nobody, limits, now: joined + 10)
-    == Some(caller.NoAgentTooLong)
-
-  // Somebody could take them: only the whole wait applies.
-  let somebody =
-    cf_callcenter.arriving(
-      joined,
-      Some(cf_callcenter.Status(waiting: Some(0), agents_available: Some(1))),
-    )
-  assert caller.expired(somebody, limits, now: joined + 10) == None
-  assert caller.expired(somebody, limits, now: joined + 30)
-    == Some(caller.WaitedTooLong)
-
-  // Nobody answered, which an account with no dispatcher does: nothing is
-  // known yet, and the first position event says the rest.
-  let unknown = cf_callcenter.arriving(joined, None)
-  assert unknown == caller.new(joined)
-  assert caller.expired(unknown, limits, now: joined + 10) == None
-}
-
-//
-// --- The offer and the hold ------------------------------------------------
-//
-// The dispatcher's offer bridges the agents' phones from the caller's own
-// channel, interrupting the hold; the action never interrupts in return, so
-// its holds queue behind a ringing bridge and run if the ring comes to
-// nothing. These are the action's half: what it sends after each of the
-// channel's events, in both orders the two commands can land in.
-//
-
-/// How long the dispatcher's offer can still be ringing: the ring timeout
-/// it said, and the same grace the dispatcher gives the offer itself.
-pub fn how_long_an_offer_can_ring_test() {
-  let offer =
-    doc.object([
-      #("Event-Category", doc.String("callcenter")),
-      #("Event-Name", doc.String("member_offer")),
-      #("Agent-IDs", doc.List([doc.String("agent-a")])),
-      #("Offer-Timeout", doc.Int(15)),
-    ])
-  assert cf_callcenter.offer_ceiling(offer, 1000) == 1020
-  assert cf_callcenter.offer_ceiling(doc.object([]), 1000) == 1005
 }
 //
 // --- The announcement ------------------------------------------------------

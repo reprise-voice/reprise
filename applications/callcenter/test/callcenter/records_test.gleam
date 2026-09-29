@@ -1,8 +1,11 @@
 //// The caller's own record, read back: the only thing about a caller that
 //// survives the node which was dispatching for them.
 
+import callcenter/recording
 import callcenter/records
 import callcenter/types.{CallerHangup, Completed, QueueDeleted, Transferred}
+import gleam/int
+import gleam/list
 import gleam/option.{None, Some}
 import kazoo/doc
 import support/cluster
@@ -195,6 +198,38 @@ pub fn a_deleted_queue_is_a_cancel_reason_of_its_own_test() {
   assert records.passage(left).cancelled == Some(joined_at + 30)
   let assert Ok([kept]) = doc.get_list(left, ["offered_to"])
   assert doc.get_string(kept, ["outcome"]) == Ok("cancelled")
+}
+
+/// A recorded call's record names its recording, as `media_mgr` names the
+/// `call_recording` document.
+pub fn a_recording_is_named_on_the_record_test() {
+  let named =
+    records.recording_named(
+      record([]),
+      recording.name("queue-one", "call-one", joined_at + 20),
+    )
+  assert doc.get_string(named, ["recording"])
+    == Ok("queue-queue-one-call-one-" <> int.to_string(joined_at + 20))
+}
+
+/// Every reason a caller leaves for is written as its own word, and reads
+/// back as itself.
+pub fn every_cancel_reason_reads_back_test() {
+  [
+    types.Hangup,
+    types.Timeout,
+    types.NoAgentTimeout,
+    types.ExitKey,
+    types.QueueFull,
+    types.Transfer,
+    types.QueueDeleted,
+    types.Quarantined,
+  ]
+  |> list.each(fn(reason) {
+    assert records.reason_from_string(records.reason_to_string(reason))
+      == reason
+  })
+  assert records.reason_to_string(types.Quarantined) == "quarantined"
 }
 
 /// Written twice it changes nothing. The dispatcher that connected a caller

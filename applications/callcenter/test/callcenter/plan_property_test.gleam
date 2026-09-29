@@ -253,16 +253,10 @@ fn caller(
     False -> member
   }
   #(
-    Wait(
-      member: member,
-      position: 0,
-      announced_at: 0,
-      rerun: False,
-      tried: case tried_some {
-        True -> tried
-        False -> []
-      },
-    ),
+    Wait(member: member, position: 0, announced_at: 0, tried: case tried_some {
+      True -> tried
+      False -> []
+    }),
     rng,
   )
 }

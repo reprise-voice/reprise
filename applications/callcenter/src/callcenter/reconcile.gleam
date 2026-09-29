@@ -990,6 +990,8 @@ pub fn rebuilt(call: OpenCall) -> types.Member {
     callflow_node: "",
     caller_id_name: None,
     caller_id_number: None,
+    handoff_id: member.handoff_of(call.call_id, call.joined),
+    branches: doc.object([]),
     delivery: member.no_delivery(),
   )
 }

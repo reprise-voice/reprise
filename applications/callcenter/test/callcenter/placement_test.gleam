@@ -3,7 +3,8 @@
 //// take shards at all.
 ////
 //// The broker is an actor that knows which nodes are members, who consumes
-//// each shard's queue, and which shards have an agent ringing; it passes a
+//// each shard's queue, and which shards are too busy to answer being given
+//// up; it passes a
 //// want to the member it is addressed to, as the member's own queue would.
 //// Each node is a real placement actor whose hooks talk to it. Nothing
 //// ticks on its own: every look is sent by hand, so a run is the same every
@@ -35,8 +36,8 @@ type World {
     broken: Set(String),
     /// Who consumes each shard's member queue, and the tree doing it.
     owners: Dict(Int, #(String, Pid)),
-    /// The shards with an agent ringing.
-    ringing: Set(Int),
+    /// The shards too busy to answer being given up.
+    stuck: Set(Int),
     /// How long a shard takes to answer whether it will give itself up.
     give_up_ms: Int,
     /// The clock, in milliseconds.
@@ -71,7 +72,7 @@ fn world() -> Subject(Ask) {
         disagreeing: set.new(),
         broken: set.new(),
         owners: dict.new(),
-        ringing: set.new(),
+        stuck: set.new(),
         give_up_ms: 0,
         now: 1_000_000,
         takes: [],
@@ -142,7 +143,7 @@ fn serve(w: World, ask: Ask) -> actor.Next(World, Ask) {
       actor.continue(w)
     }
     GiveUp(node, shard, done) ->
-      case set.contains(w.ringing, shard) {
+      case set.contains(w.stuck, shard) {
         True -> {
           process.send(done, False)
           actor.continue(w)
@@ -446,22 +447,22 @@ pub fn a_node_with_the_wrong_count_takes_nothing_and_is_given_nothing_test() {
   stop([node_a, node_b])
 }
 
-/// An agent ringing keeps a shard where it is when its node is asked for
-/// it, until the patience runs out: then it moves ringing.
-pub fn a_shard_with_an_agent_ringing_moves_after_the_patience_test() {
+/// A shard too busy to answer being given up stays where it is when its node
+/// is asked for it, until the patience runs out: then it moves all the same.
+pub fn a_shard_that_does_not_answer_moves_after_the_patience_test() {
   let w = world()
   let node_a = node(w, a)
   round([node_a])
   assert list.length(held(w, a)) == 64
 
   let assigned = shards.assign(count, [a, b])
-  let assert Ok(#(ringing, _b)) =
+  let assert Ok(#(stuck, _b)) =
     dict.to_list(assigned) |> list.find(fn(assigned) { assigned.1 == b })
-  change(w, fn(w) { World(..w, ringing: set.from_list([ringing])) })
+  change(w, fn(w) { World(..w, stuck: set.from_list([stuck])) })
   let node_b = node(w, b)
   rounds([node_a, node_b], 3)
   assert list.length(held(w, b)) == 31
-  assert list.contains(held(w, a), ringing)
+  assert list.contains(held(w, a), stuck)
 
   change(w, fn(w) { World(..w, now: w.now + placement.patience_ms) })
   rounds([node_a, node_b], 2)

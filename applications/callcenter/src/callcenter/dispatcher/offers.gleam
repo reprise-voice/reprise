@@ -3,30 +3,36 @@
 //// because the caller left.
 ////
 //// An agent is in at most one offer at a time, which `State.busy` holds and
-//// every offer checks. The reply from the offer process -- `callcenter/offer`
-//// on a node, a fake in the tests -- is matched to its offer here and only
-//// here, by the `OfferId` made when the offer was asked for: the caller's
-//// call id says which offer the dispatcher holds for them now, and the
-//// reference says whether that is the offer replying.
+//// every offer checks. The reply from the caller's actor --
+//// `callcenter/call/actor` on a node, a fake in the tests -- is matched to
+//// its offer here and only here, by the `OfferId` made when the offer was
+//// asked for: the caller's call id says which offer the dispatcher holds for
+//// them now, and the reference says whether that is the offer replying.
+////
+//// The actor decides the ring: whichever of an answer, the caller leaving
+//// and a call-off it handles first stands, and this module takes what it
+//// says. So an answer to a ring this dispatcher has called off is an
+//// answer, and a caller who left is told here by the shard, once the actor
+//// has decided they did.
 
 import callcenter/activity
 import callcenter/availability.{NoAnswerRule}
+import callcenter/call/talk
 import callcenter/closed
 import callcenter/dispatcher/memo
 import callcenter/dispatcher/publish
 import callcenter/dispatcher/settings.{type AgentSettings, type QueueSettings}
 import callcenter/dispatcher/state.{
-  type Offer, type State, type Wait, Leaving, Offer, State, Wait, held_offer,
+  type Offer, type State, type Wait, Offer, State, Wait, held_offer,
   is_pickup_offer, offer_of as holding,
 }
 import callcenter/dispatcher/view
 import callcenter/presence
 import callcenter/records
 import callcenter/system
-import callcenter/takeover
 import callcenter/types.{
   type CancelReason, type EndResult, type Member, type OfferId, type OfferReply,
-  Answered, Busy, CallerGone, Completed, Ended, Failed, FailedBridge, Hangup,
+  Answered, Busy, Completed, Ended, Failed, FailedBridge, Hangup, Member,
   OfferId, OfferNoAnswer, OfferRequest, OfferRinging, OfferSettings,
   QueueDeleted, Rejected, Sequential, Simultaneous, Transfer,
 }
@@ -59,7 +65,7 @@ pub const stand_down_hold_s = 30
 
 /// Ask for the offer, and believe it has begun until told otherwise.
 ///
-/// The agents are marked busy and ringing before the offer process has said
+/// The agents are marked busy and ringing before the caller's actor has said
 /// anything, which is the point: the next caller's pass in this same message
 /// must not pick the same agent. A request that could not even be started
 /// undoes that at once.
@@ -163,12 +169,11 @@ pub fn send(
 /// A caller has left without an agent: settle the message, close the
 /// document, and call off a ring going on for them (`abandon_offer`).
 ///
-/// Every reason but one is the caller's own doing, and their action already
-/// knows. `QueueDeleted` is this dispatcher's, so it tells the action --
-/// and whoever watches the call -- with a `member_result` whose result is
-/// the reason: the action leaves on `no_agents` when it hears it.
+/// Every reason but one is the caller's own doing, and their actor already
+/// knows: it decided it. `QueueDeleted` is this dispatcher's, and the actor
+/// is told as the queue goes (`queue_deleted`); whoever watches the call
+/// hears it as a `member_result` whose result is the reason.
 pub fn leave(state: State, call_id: String, reason: CancelReason) -> State {
-  let state = State(..state, leaving: dict.delete(state.leaving, call_id))
   case dict.get(state.waiting, call_id) {
     Error(_) -> state
     Ok(wait) -> {
@@ -187,32 +192,29 @@ pub fn leave(state: State, call_id: String, reason: CancelReason) -> State {
       // its end can tell whether it was for the passage they are leaving or
       // for one they had already left (`close_if_superseded`).
       let state = abandon_offer(state, call_id, reason)
-      State(..state, waiting: dict.delete(state.waiting, call_id))
+      State(
+        ..state,
+        waiting: dict.delete(state.waiting, call_id),
+        actors: dict.delete(state.actors, call_id),
+        presenting: dict.delete(state.presenting, call_id),
+      )
     }
   }
 }
 
 /// A queue has been deleted: every caller waiting in it leaves it, now, on
-/// `QueueDeleted`, and the action holding them takes `no_agents`.
+/// `QueueDeleted`, and their actor takes them out of it on `no_agents`.
 ///
-/// A caller being rung for waits for the ring to be called off first, as an
-/// agent released by hand does (`release_agent`): the offer is held until
-/// its process replies, the reply frees everybody it rang with no miss and
-/// no delay, and the caller leaves then (`give_up`). Leaving at once would
-/// let the ring run on into whatever the callflow does next -- or, if the
-/// bridge was not out yet, start after the caller had gone. An agent who
-/// picks up as the ring is called off does not have the caller: the
-/// unbridge parks the caller and cuts the bridge, and the offer's answer is
-/// not taken (`replied`, `offer.overtaken`). A caller whose
-/// offer's process is gone has nothing left to wait for and leaves at once,
-/// with a ring already out called off.
+/// The actor sequences the departure itself -- a ring going on for them
+/// called off, their legs hung up, the channel's commands run out before
+/// the callflow is told to go on -- so the dispatcher lets them go at once
+/// and frees whoever was being rung for them. An agent who answered before
+/// the actor heard of the deletion has the caller: the actor bridges them,
+/// and the call goes on outside the queue that no longer exists.
 pub fn queue_deleted(state: State, queue_id: String) -> State {
   let callers =
     dict.values(state.waiting)
-    |> list.filter(fn(wait) {
-      wait.member.queue_id == queue_id
-      && !dict.has_key(state.leaving, wait.member.call_id)
-    })
+    |> list.filter(fn(wait) { wait.member.queue_id == queue_id })
     |> list.map(fn(wait) { wait.member })
   case callers {
     [] -> Nil
@@ -228,47 +230,29 @@ pub fn queue_deleted(state: State, queue_id: String) -> State {
       )
   }
   list.fold(callers, state, fn(state, member) {
-    let call_id = member.call_id
-    case dict.get(state.offers, call_id) {
-      Ok(offer) if offer.connected == None ->
-        case running(offer) {
-          True ->
-            State(
-              ..state,
-              leaving: dict.insert(
-                state.leaving,
-                call_id,
-                Leaving(records.passage_id(member), QueueDeleted),
-              ),
-            )
-            |> call_off_once(offer)
-          False -> leave(state, call_id, QueueDeleted)
-        }
-      _no_ring -> leave(state, call_id, QueueDeleted)
-    }
+    state.config.calls.queue_gone(member)
+    leave(state, member.call_id, QueueDeleted)
   })
 }
 
 /// Call off an offer's ring and keep the offer until it replies: the one
 /// way any ring is called off, and once per offer however many ask.
 ///
-/// A ring that is out is unbridged now. One that is not out yet is
-/// unbridged when the offer says it is (`replied`, on `OfferRinging`), which
-/// it says once. A second call-off -- the agent released twice, or released
-/// after their queue was deleted -- sends nothing: on a channel whose
-/// bridge has already ended, the unbridge parks the caller and stops their
-/// hold music.
+/// The caller's actor hangs the offer's legs up by name, and any of them
+/// that turns up later, and says `Failed(called_off)` once the ring is over.
+/// Nothing is sent the caller: they stay on hold, as they were. An agent
+/// who answered before the call-off reached the actor has the caller, and
+/// the actor's `Answered` says so.
 ///
-/// The offer's process is told as well (`stop`), and that the unbridge is
-/// this dispatcher's to send, now or when the ring is out.
+/// Sent through the member held for the caller now (`held`), which names
+/// the passage their actor is running.
 ///
 /// A supervisor's pickup is called off the same way (`pickup.release`).
 pub fn call_off_once(state: State, offer: Offer) -> State {
   case offer.called_off {
     True -> state
     False -> {
-      unbridge_once(state, offer)
-      stop(state, offer, unbridged: True)
+      state.config.calls.call_off(held(state, offer.member), offer.id)
       State(
         ..state,
         offers: dict.insert(
@@ -281,88 +265,22 @@ pub fn call_off_once(state: State, offer: Offer) -> State {
   }
 }
 
-/// Tell an offer's process its ring is called off (`offer.call_off`), and
-/// whether this dispatcher unbridges it.
-///
-/// An offer that has not sent its bridge yet sends none. One whose bridge
-/// is out unbridges it itself when nobody else will, and one none of whose
-/// legs it had seen checks a moment later that the unbridge took, and
-/// unbridges once more if the ring is still going (`offer.recall_ms`): an
-/// unbridge that lands before the bridge runs parks a channel with nothing
-/// on it, and then the bridge rings.
-///
-/// The offer is handed the member held for the caller now (`held`), as
-/// this dispatcher's own unbridge is (`unbridge`): its own request's names
-/// the control queue of a callflow that may have died and been run again
-/// since, and an unbridge sent there reaches nobody.
-fn stop(state: State, offer: Offer, unbridged unbridged: Bool) -> Nil {
-  case offer.pid, running(offer) {
-    Some(pid), True ->
-      state.config.stop_offer(pid, unbridged, held(state, offer.member))
-    _, _ -> Nil
-  }
-}
-
-/// Unbridge an offer's ring if it is out and nobody has called it off yet,
-/// for an offer that is about to be dropped and so is not marked.
-pub fn unbridge_once(state: State, offer: Offer) -> Nil {
-  case offer.rung && !offer.called_off {
-    True -> unbridge(state, offer)
-    False -> Nil
-  }
-}
-
-/// Unbridge an offer's ring on its caller's channel: the command every
-/// call-off here sends, the pickups' included.
-///
-/// Sent through the member held for the caller now (`held`), not the
-/// offer's own. The command goes to the `Control-Queue` in the member's
-/// call, and a callflow run again while the phones rang (plan 4.4) comes
-/// back with a new one: the offer's member still names the control queue
-/// of the callflow that died, and an unbridge sent there reaches nobody
-/// while the ring goes on.
-pub fn unbridge(state: State, offer: Offer) -> Nil {
-  state.config.call_off(held(state, offer.member))
-}
-
 /// The offer for a caller who has left: its ring is called off, and the
 /// agents go free at once.
 ///
-/// Given up on without a word, as it used to be, the offer left its ring
-/// running. The caller's action calls a ring off itself only once it has
-/// heard `member_offer`, so a caller who left before that -- or whose
-/// unbridge landed before the bridge ran -- left the agents' phones ringing
-/// into their voicemail, and an agent who answered was put through to it
-/// while this dispatcher counted them free. So the offer's process is told
-/// (`stop`), and it calls the ring off: one that has not sent its bridge
-/// sends none, and one whose bridge is out unbridges it unless it has seen
-/// the ring end, and checks that the unbridge took (`offer.recall_ms`).
-///
-/// The unbridge is the process's and not this dispatcher's, as
-/// `release_agent`'s is, because a caller leaving is already on their way
-/// somewhere else. Their action unbridged the ring itself when it knew of
-/// it, and goes on to its next callflow action the moment the ring's end
-/// comes back. An unbridge from here reached the caller's channel whenever
-/// this dispatcher got to the cancel, and one that landed after the action
-/// had gone on parked the caller in the middle of the exit branch's own
-/// ring. The process sees the same channel events the action does and
-/// leaves a ring it has seen end alone. Only an offer whose process has
-/// gone, which leaves nobody else to do it, is unbridged here.
-///
-/// The process is only as current as its own event stream. A call-off that
-/// reaches it before a lagging stream brings the ring's end still unbridges,
-/// and a stream slow enough lets that land after the action has gone on.
-/// Closing that would take the channel itself saying which bridge it is
-/// running, which `ecallmgr`'s unbridge does not ask.
-///
-/// The offer is not held until its process replies, as a released agent's
-/// is: the dispatcher holds one offer a caller, and a caller timing out of
-/// one queue into an overflow queue of the same account would wait on it
-/// for the overflow's first ring. The process owns what is left of the
-/// call-off, and its reply is dropped when it comes.
-///
+/// A caller who left on their own -- a key, a clock, hanging up -- left
+/// because their actor said so, and it called their ring off as it did.
+/// One taken out by somebody else -- by hand, or seen gone by the activity
+/// actor before the actor said anything -- has the call-off sent here as
+/// well, which an actor that has already let the ring go takes as nothing.
 /// A caller whose channel has gone (`Hangup`) has no ring left to call off,
 /// and an offer already called off has been told.
+///
+/// The offer is not held until the actor replies, as a released agent's
+/// is: the dispatcher holds one offer a caller, and a caller timing out of
+/// one queue into an overflow queue of the same account would wait on it
+/// for the overflow's first ring. The actor owns what is left of the
+/// call-off, and its reply is dropped when it comes.
 fn abandon_offer(state: State, call_id: String, reason: CancelReason) -> State {
   case dict.get(state.offers, call_id) {
     Error(_) -> state
@@ -370,10 +288,7 @@ fn abandon_offer(state: State, call_id: String, reason: CancelReason) -> State {
       case offer.connected, reason, offer.called_off {
         None, Hangup, _ | None, _, True | Some(_), _, _ -> Nil
         None, _, False ->
-          case running(offer) {
-            True -> stop(state, offer, unbridged: False)
-            False -> unbridge_once(state, offer)
-          }
+          state.config.calls.call_off(held(state, offer.member), offer.id)
       }
       give_up(state, offer)
     }
@@ -414,9 +329,6 @@ pub fn give_up(state: State, offer: Offer) -> State {
     memo.each(ringing, types.Abandoned),
   )
   |> retell(offer)
-  // A caller whose ring was called off because they are being taken out of
-  // the queue goes now that it is over.
-  |> leave_if_leaving(offer.member.call_id)
 }
 
 // --- A passage the caller has moved on from --------------------------------
@@ -483,35 +395,18 @@ pub fn superseded_passage(
   }
 }
 
-/// A caller marked as leaving (`queue_deleted`) leaves, now that the ring
-/// that held them is over -- if they are still the passage the mark was set
-/// for. A caller who has since moved on to another queue is not the one
-/// being taken out: the mark is dropped and the new passage waits on.
-pub fn leave_if_leaving(state: State, call_id: String) -> State {
-  let waiting_in =
-    dict.get(state.waiting, call_id)
-    |> result.map(fn(wait) { records.passage_id(wait.member) })
-  case dict.get(state.leaving, call_id), waiting_in {
-    Ok(Leaving(passage, reason)), Ok(waiting) if passage == waiting ->
-      leave(state, call_id, reason)
-    Ok(_mark), _ -> State(..state, leaving: dict.delete(state.leaving, call_id))
-    Error(Nil), _ -> state
-  }
-}
-
 /// `release_agent`: take the agent out of the offer they are in.
 ///
-/// An offer still ringing has its ring called off, on the caller's channel,
-/// and is held until its process replies, as any other offer is. Dropping
-/// it at once, as this used to, freed the agent while their phone rang on:
-/// if they then picked up, the answer was dropped as stale and the caller,
-/// talking to them, could be offered to somebody else. Called off, the ring
-/// ends in the two seconds the offer waits to see whether the caller hung
-/// up, and the reply that says so frees everybody it rang without a miss or
-/// a delay; an answer the call-off crossed is cut by the unbridge and not
-/// taken (`replied`). The caller stays in the queue and the next pass offers
-/// them again. An offer whose process is gone has nothing left to reply,
-/// and is given up on at once.
+/// An offer still ringing has its ring called off (`call_off_once`) and is
+/// held until the caller's actor says the ring is over, as any other is.
+/// Dropping it at once freed the agent while their phone rang on: if they
+/// then picked up, the answer was dropped as stale and the caller, talking
+/// to them, could be offered to somebody else. The reply that ends the ring
+/// frees everybody it rang without a miss or a delay, and the caller stays
+/// in the queue for the next pass. An agent who answered before the
+/// call-off reached the actor has the caller, and the answer stands. An
+/// offer whose actor is gone has nothing left to reply, and is given up on
+/// at once.
 ///
 /// An answered one is ended here, now, as the sweep ends a call whose
 /// caller has gone, so that its record is closed and the agent's counters
@@ -538,7 +433,7 @@ pub fn release_agent(state: State, agent_id: String) -> State {
   }
 }
 
-/// Whether the offer's process is still there to reply.
+/// Whether the offer's actor is still there to reply.
 fn running(offer: Offer) -> Bool {
   case offer.pid {
     Some(pid) -> process.is_alive(pid)
@@ -562,8 +457,8 @@ pub fn offer_of(state: State, agent_id: String) -> Result(Offer, Nil) {
 /// `State.busy` with these agents in the offer `id`.
 ///
 /// An agent already in another offer this dispatcher holds is in two things
-/// at once: a takeover watching a ring a node that died left going, or a
-/// call adopted for an agent this node has since rung. That is logged, and
+/// at once: a ring a node that died left going, held until its ceiling, or
+/// a call adopted for an agent this node has since rung. That is logged, and
 /// the newer offer takes them; the older one's end does not free them
 /// (`release`).
 pub fn hold(
@@ -631,28 +526,28 @@ pub fn release(
   })
 }
 
-// --- An offer's process ending --------------------------------------------
+// --- A caller's actor ending ----------------------------------------------
 
-/// Watch an offer's process, or a takeover's, for as long as it runs.
+/// Watch the caller's actor for as long as an offer of theirs is held.
 ///
-/// Monitored and not linked: the process is started unlinked, so that its
+/// Monitored and not linked: the actor runs under its shard's calls, so its
 /// crash is not this dispatcher's, and a monitor is what tells this
-/// dispatcher it happened. The `Down` comes back to the actor as
+/// dispatcher it happened. The `Down` comes back to the dispatcher as
 /// `dispatcher.OfferDown` and goes to `down`.
 pub fn monitored(pid: Pid) -> Pid {
   let _monitor = process.monitor(pid)
   pid
 }
 
-/// An offer's process, or a takeover's, has ended.
+/// A caller's actor has ended.
 ///
-/// Nearly always after its last reply, which it sent before it exited and
-/// which therefore reached this actor first: the offer has been settled and
-/// is not held any more, and there is nothing to do (`Error(Nil)`, and no
-/// pass).
+/// Nearly always after its last reply about any offer, which it sent before
+/// it exited and which therefore reached this dispatcher first: the offer
+/// has been settled and is not held any more, and there is nothing to do
+/// (`Error(Nil)`, and no pass).
 ///
-/// An offer still held under that process ended without its last word: it
-/// crashed, or it was killed. Before an answer that is `Failed` -- nobody
+/// An offer still held under that actor ended without its last word: the
+/// actor crashed, or it was killed. Before an answer that is `Failed` -- nobody
 /// missed anything, the agents are left alone for a moment, and the caller
 /// is offered again. After one it is the end of a call nobody is watching
 /// any more, closed as `FailedBridge`, the result for a call whose end was
@@ -668,12 +563,12 @@ pub fn down(state: State, pid: Pid, reason: String) -> Result(State, Nil) {
   }
 }
 
-/// An offer held whose process has ended without its last word, closed as
+/// An offer held whose actor has ended without its last word, closed as
 /// `down` closes it. The monitor's word is one way here; the other is the
-/// tick finding an offer past its ceiling whose process is already gone
+/// tick finding an offer past its ceiling whose actor is already gone
 /// while that word is still on its way (`timers.expire_offers`). Whichever
 /// comes first closes the offer, and the other finds nothing held under
-/// that process.
+/// that actor.
 pub fn lost(state: State, offer: Offer, reason: String) -> State {
   system.log_error(
     "offer for call "
@@ -683,16 +578,10 @@ pub fn lost(state: State, offer: Offer, reason: String) -> State {
     <> " ended without a reply: "
     <> reason,
   )
+  // A ring whose actor is gone has nobody left to hear an answer, and its
+  // legs park until their `park_timeout` hangs them up.
   let told = case offer.connected {
-    None -> {
-      // Its bridge is still ringing on the caller's channel, with nobody
-      // left to hear an answer: called off, so that the caller is not put
-      // through to an agent this dispatcher has let go. Once only: on a
-      // channel with no bridge left, the same command parks the caller and
-      // stops their hold music.
-      unbridge_once(state, offer)
-      Failed(offer_crashed)
-    }
+    None -> Failed(offer_crashed)
     Some(_answered) -> Ended(FailedBridge, state.config.now())
   }
   replied(state, offer.id, told)
@@ -700,7 +589,7 @@ pub fn lost(state: State, offer: Offer, reason: String) -> State {
 
 // --- Replies ---------------------------------------------------------------
 
-/// What the offer process said about one offer.
+/// What the caller's actor said about one offer.
 pub fn replied(state: State, id: OfferId, reply: OfferReply) -> State {
   let call_id = id.call_id
   case dict.get(state.offers, call_id) {
@@ -724,13 +613,9 @@ pub fn replied(state: State, id: OfferId, reply: OfferReply) -> State {
     Ok(offer) ->
       case reply {
         OfferRinging(agents) -> {
-          // The ring is out, and one called off before it was is unbridged
-          // now: the other half of `call_off_once`, and once, since the ring
-          // goes out once.
-          case offer.called_off, offer.rung {
-            True, False -> unbridge(state, offer)
-            False, False -> tell_offered(state, offer, agents)
-            _, True -> Nil
+          case offer.called_off || offer.rung {
+            False -> tell_offered(state, offer, agents)
+            True -> Nil
           }
           State(
             ..state,
@@ -742,33 +627,23 @@ pub fn replied(state: State, id: OfferId, reply: OfferReply) -> State {
           )
         }
 
-        // An answer to a ring this dispatcher has called off is not one: the
-        // unbridge it sent parks the caller and cuts the bridge. The offer
-        // says so itself once it hears the call-off (`offer.overtaken`), and
-        // its `Failed` gives the ring up below.
-        Answered(agent_id, _agent_call_id, _at) if offer.called_off -> {
-          system.log(
-            "call "
-            <> call_id
-            <> " was answered by "
-            <> agent_id
-            <> " as its ring was called off: not an answer",
-          )
-          state
-        }
-
+        // An answer to a ring this dispatcher has called off is an answer
+        // all the same: the actor had bridged the caller before the call-off
+        // reached it, and the caller is talking to the agent.
         Answered(agent_id, agent_call_id, at) ->
           answered(state, offer, agent_id, agent_call_id, at)
 
-        // A ring that was called off ends in whatever the switch says a
-        // cancelled bridge ends in, and none of it is anybody's miss.
+        // A ring that was called off ends in whatever the actor says a
+        // cancelled ring ends in, and none of it is anybody's miss. The end
+        // of a call answered before the call-off is the end of a call.
         OfferNoAnswer(_)
           | Busy(_)
           | Rejected(_)
           | Failed(_)
-          | Ended(_, _)
           if offer.called_off
         -> give_up(state, offer)
+        Ended(_, _) if offer.called_off && offer.connected == None ->
+          give_up(state, offer)
 
         OfferNoAnswer(agents) -> missed(state, offer, agents, "no_answer")
         Busy(agent_id) -> missed(state, offer, [agent_id], "busy")
@@ -806,13 +681,9 @@ pub fn replied(state: State, id: OfferId, reply: OfferReply) -> State {
 
         Ended(result, at) -> ended(state, offer, result, at)
 
-        // The caller's channel went while the phones rang, seen by the offer
-        // or by a takeover's watch: it means what a `hangup` cancel means.
-        // The caller has left, so nobody missed them and nobody is put on a
-        // delay, and they are out of the waiting list before the pass this
-        // message runs. The action's own cancel, if one is coming, finds
-        // nothing left to settle.
-        CallerGone -> leave(state, call_id, Hangup)
+        // The dispatcher routes a presence to `arrival.present` before any
+        // offer's reply is looked at.
+        types.Present(_) -> state
       }
   }
 }
@@ -829,11 +700,12 @@ fn answered(
   at: Int,
 ) -> State {
   let member = offer.member
-  // The member message is settled here and nowhere else: the caller has an
-  // agent, so the broker may forget them. The delivery settled is the one
-  // held for the caller now, which need not be the one the offer was made
-  // from (`held`).
-  state.config.settle(held(state, member))
+  // The member message is not settled yet: the call is the queue's until it
+  // ends, and a node that dies meanwhile leaves it on the broker for the
+  // next holder to take the call over. The delivery kept is the one held for
+  // the caller now, which need not be the one the offer was made from
+  // (`held`), and it is settled when the call ends (`ended`).
+  let delivery = held(state, member).delivery
   records.answered(member, agent_id, agent_call_id, at)
   records.offer_outcome(member, agent_id, "answered")
   close_if_superseded(state, offer, answered: True)
@@ -857,12 +729,12 @@ fn answered(
   State(
     ..state,
     waiting: dict.delete(state.waiting, member.call_id),
-    leaving: dict.delete(state.leaving, member.call_id),
     offers: dict.insert(
       state.offers,
       member.call_id,
       Offer(
         ..offer,
+        member: Member(..member, delivery: delivery),
         agents: [agent_id],
         ringing: [],
         connected: Some(#(agent_id, agent_call_id, at)),
@@ -1129,6 +1001,11 @@ fn delay_for(agent: AgentSettings, outcome: String) -> Int {
 /// record, the counters, the events and the wrap-up.
 pub fn ended(state: State, offer: Offer, result: EndResult, at: Int) -> State {
   let member = offer.member
+  // The call is over, and the broker may forget it: the delivery the answer
+  // kept on the offer. A caller the agent passed on into another queue has
+  // been delivered again since, and the shard settles that one only when
+  // it is the one it holds.
+  state.config.settle(member)
   let queue = settings.for_queue(state.config, offer.queue_id)
   let #(agent_id, talk_time) = case offer.connected {
     Some(#(agent_id, _call_id, answered_at)) -> #(agent_id, at - answered_at)
@@ -1180,7 +1057,7 @@ pub fn ended(state: State, offer: Offer, result: EndResult, at: Int) -> State {
 /// it shows the availability they are in now. An adopted call whose agent
 /// nobody could name has no lamp to change.
 fn lamp_after_call(state: State, agent_id: String) -> State {
-  case agent_id == takeover.unknown_agent() {
+  case agent_id == talk.unknown_agent {
     True -> state
     False -> {
       let #(current, _counters) = view.agent_state(state, agent_id)

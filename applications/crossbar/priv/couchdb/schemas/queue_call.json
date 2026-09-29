@@ -36,7 +36,8 @@
                 "exit_key",
                 "queue_full",
                 "transfer",
-                "queue_deleted"
+                "queue_deleted",
+                "quarantined"
             ],
             "type": "string"
         },
@@ -99,7 +100,7 @@
             "type": "string"
         },
         "recording": {
-            "description": "Recording of the call, when the queue or the agent asked for one",
+            "description": "The name of the call's recording, when the queue or the agent asked for one: the call_recording document's name, less its extension",
             "type": "string"
         }
     },

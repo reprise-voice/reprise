@@ -141,7 +141,13 @@ pub fn cause(event: Value) -> String {
 
 /// What an unanswered bridge's event says went wrong.
 pub fn miss(event: Value) -> Miss {
-  case cause(event) {
+  miss_of(cause(event))
+}
+
+/// The same, from the switch's word alone: what an originate's error reply
+/// says, which is a cause and not an event.
+pub fn miss_of(cause: String) -> Miss {
+  case string.uppercase(cause) {
     "USER_BUSY" | "BUSY" -> WasBusy
     "CALL_REJECTED" | "REJECTED" -> WasRejected
     "ORIGINATOR_CANCEL" -> Cancelled

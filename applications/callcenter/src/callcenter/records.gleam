@@ -30,7 +30,7 @@ import callcenter/system
 import callcenter/types.{
   type CancelReason, type EndResult, type Member, type OfferId, AgentHangup,
   CallerHangup, Completed, ExitKey, FailedBridge, Hangup, NoAgentTimeout,
-  QueueDeleted, QueueFull, Timeout, Transfer, Transferred,
+  Quarantined, QueueDeleted, QueueFull, Timeout, Transfer, Transferred,
 }
 import gleam/erlang/process.{type Name, type Subject}
 import gleam/int
@@ -490,11 +490,16 @@ pub fn cancellation(document: Value, reason: CancelReason, at: Int) -> Value {
   |> doc.set(["cancel_reason"], doc.String(reason_to_string(reason)))
 }
 
-/// The recording of a queue call, when the queue or the agent asked for one.
+/// The recording of a queue call, when the queue or the agent asked for one:
+/// its name (`recording.name`), which is the `name` of the `call_recording`
+/// document `media_mgr` stores it under, less the extension.
 pub fn recorded(member: Member, recording: String) -> Nil {
-  change_queue_call(member, fn(document) {
-    doc.set(document, ["recording"], doc.String(recording))
-  })
+  change_queue_call(member, recording_named(_, recording))
+}
+
+/// The document as a recording leaves it.
+pub fn recording_named(document: Value, recording: String) -> Value {
+  doc.set(document, ["recording"], doc.String(recording))
 }
 
 fn change_queue_call(member: Member, apply: fn(Value) -> Value) -> Nil {
@@ -821,6 +826,7 @@ pub fn reason_to_string(reason: CancelReason) -> String {
     QueueFull -> "queue_full"
     Transfer -> "transfer"
     QueueDeleted -> "queue_deleted"
+    Quarantined -> "quarantined"
   }
 }
 
@@ -832,6 +838,7 @@ pub fn reason_from_string(name: String) -> CancelReason {
     "queue_full" -> QueueFull
     "transfer" -> Transfer
     "queue_deleted" -> QueueDeleted
+    "quarantined" -> Quarantined
     _hangup -> Hangup
   }
 }

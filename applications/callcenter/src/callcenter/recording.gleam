@@ -53,45 +53,6 @@ pub fn start(
   )
 }
 
-/// Stop the recording `start` began for the answer at `at`, and nothing else
-/// recording on the channel: an answer the call-off of its ring overtook,
-/// whose caller goes on to the rest of their callflow
-/// (`callcenter/offer.overtaken`).
-///
-/// The switch finds a recording by its file, so the name is built as `start`
-/// builds it: `name`, and the extension of the format the account's settings
-/// give -- the same settings, read again.
-pub fn stop(
-  caller: Call,
-  account_id: String,
-  queue_id: String,
-  call_id: String,
-  at: Int,
-) -> Nil {
-  let format =
-    account_settings(account(account_id), network(caller))
-    |> doc.get_string(["format"])
-  call.record_call(
-    caller,
-    call.RecordStop,
-    call.RecordOptions(
-      ..call.record_options(),
-      media_name: Some(
-        file_name(name(queue_id, call_id, at), case format {
-          Ok(format) -> format
-          Error(Nil) -> ""
-        }),
-      ),
-    ),
-  )
-}
-
-/// The file a recording called `name` is written to, for a `format` the
-/// account's settings give (empty for none): `kapps_call_recording`'s own
-/// choice of extension.
-@external(erlang, "callcenter_ffi", "recording_file_name")
-fn file_name(name: String, format: String) -> String
-
 /// The recording of one answer of one queue call.
 ///
 /// `origin` and `recording_vars` are what the `call_recording` document

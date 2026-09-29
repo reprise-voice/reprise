@@ -61,6 +61,8 @@
 //// account on the shard.
 
 import callcenter/ask
+import callcenter/call/actor as call_actor
+import callcenter/call/calls
 import callcenter/dispatcher
 import callcenter/dispatcher/config as dispatcher_config
 import callcenter/fields
@@ -118,8 +120,12 @@ pub type Message {
     delivery: Delivery,
     done: Subject(Bool),
   )
-  /// A dispatcher is done with a caller -- they have an agent, or they have
-  /// left -- and their member may be settled. Nothing when it already was,
+  /// A caller's actor says the caller left a queue without an agent: a key,
+  /// a clock, a hang-up, a bridge somebody else made. Settled as the
+  /// caller's cancel settled it, and their dispatcher told.
+  CallerLeft(member: types.Member, reason: types.CancelReason)
+  /// A dispatcher is done with a caller -- their call has ended, or they
+  /// have left -- and their member may be settled. Nothing when it already was,
   /// and nothing when the delivery held for the call is not this one: a
   /// caller who left and came back is a new delivery, and a late word about
   /// the old one must not settle the new.
@@ -270,6 +276,10 @@ pub type Hooks {
   Hooks(
     start_offer: StartOffer,
     start_dispatcher: StartDispatcher,
+    /// The shard's calls (`callcenter/call/calls`): the actors of its
+    /// callers, as the last child of its tree, told where a caller who
+    /// leaves is settled. `None` where there is nothing to command.
+    calls: fn(Int, Subject(Message)) -> Option(ChildSpecification(Nil)),
     /// The shard's member listener, as a child beside the actor, handing
     /// its deliveries to the subject. `None` where there is no broker.
     consumer: fn(Int, Subject(Message)) -> Option(ChildSpecification(Nil)),
@@ -282,18 +292,31 @@ pub type Hooks {
 }
 
 /// The node's own hooks: real dispatchers, the real member listener, the
-/// node's count, and the offer given.
+/// shard's call actors, the node's count, and the offer given.
 pub fn hooks(count: Int, start_offer: StartOffer) -> Hooks {
   Hooks(
     start_offer: start_offer,
     start_dispatcher: fn(account_id, settle) {
       let config = dispatcher.config(system.live(), account_id)
+      let registry = calls.of_shard(shards.of_account(account_id, count))
       dispatcher.start(
-        dispatcher_config.Config(..config, settle: settle),
+        dispatcher_config.Config(
+          ..config,
+          settle: settle,
+          calls: dispatcher_config.calls_of(registry),
+        ),
         start_offer: start_offer,
       )
       |> result.map(fn(started) { started.data })
       |> result.map_error(string.inspect)
+    },
+    calls: fn(shard, to) {
+      Some(calls.supervised(
+        shard,
+        call_actor.live(system.live(), fn(member, reason) {
+          process.send(to, CallerLeft(member, reason))
+        }),
+      ))
     },
     consumer: fn(shard, to) {
       Some(
@@ -307,11 +330,19 @@ pub fn hooks(count: Int, start_offer: StartOffer) -> Hooks {
   )
 }
 
-/// The offer that is not written yet, or is not available: every offer
-/// fails, which the dispatcher logs and treats as an offer it could not
-/// make.
+/// No offers: every offer fails, which the dispatcher logs and treats as an
+/// offer it could not make.
 pub fn no_offers(_request: types.OfferRequest) -> Result(Pid, String) {
-  Error("no offer process on this node")
+  Error("no call actors on this node")
+}
+
+/// No call actors: a tree with nothing to command, which is every test that
+/// is not about the calls.
+pub fn no_calls(
+  _shard: Int,
+  _to: Subject(Message),
+) -> Option(ChildSpecification(Nil)) {
+  None
 }
 
 /// The registered name of the shard actor for a shard.
@@ -427,6 +458,13 @@ fn start_tree(shard: Int, hooks: Hooks) -> Result(Pid, String) {
       )
     None -> tree
   }
+  // Last, so that everything that tells an actor something is up before
+  // it, and so that the actors are stopped first when the shard goes: no
+  // caller of a shard this node no longer holds is commanded from here.
+  let tree = case hooks.calls(shard, to) {
+    Some(calls) -> supervisor.add(tree, calls)
+    None -> tree
+  }
   case supervisor.start(tree) {
     Error(error) -> Error(string.inspect(error))
     Ok(started) -> {
@@ -494,17 +532,21 @@ const release_timeout_ms = 30_000
 /// members go back to the broker with the listener's channel for that node
 /// to take.
 ///
-/// `False` when the shard refused because an agent is being rung on it; the
-/// placement keeps it and the other node asks again. A shard this node does
-/// not hold is `True`: there is nothing here to let go of.
+/// A shard always agrees. It stops its dispatchers, so that nobody is rung
+/// from here any more, and gives its callers' actors `quiesce_ms` to finish
+/// what the next holder could not see -- an originate some of whose legs
+/// have not shown, a bridge on its way (`core.steady`) -- and goes. The
+/// node taking it finds every caller where they stand on the switch and
+/// takes on whatever is going on for them, a ring or a conversation
+/// included (*Takeover*). A shard this node does not hold is `True`: there
+/// is nothing here to let go of.
 ///
-/// The shard asks its dispatchers before it answers, a second in all, and
-/// stops them, a second more. An answer that does not come in time is
-/// `False`, and the placement keeps watching the tree: if the shard does
-/// agree once it gets to the question, it ends its own tree, and the
-/// placement sees that as the tree going down. `True` waits for the tree to
-/// be gone, so that its channel has closed and the members are back on the
-/// broker when this answers.
+/// An answer that does not come in `give_up_timeout_ms` is `False`, and the
+/// placement keeps watching the tree: if the shard does agree once it gets
+/// to the question, it ends its own tree, and the placement sees that as
+/// the tree going down. `True` waits for the tree to be gone, so that its
+/// channel has closed and the members are back on the broker when this
+/// answers.
 pub fn give_up(shard: Int) -> Bool {
   case tree(shard) {
     Error(_) -> True
@@ -523,54 +565,10 @@ pub fn give_up(shard: Int) -> Bool {
 
 const give_up_timeout_ms = 10_000
 
-/// How many offers the dispatchers given have in flight: agents being rung
-/// for callers waiting in the shard. Asked of the dispatchers, because the
-/// offers are theirs -- the shard holds the members, the dispatcher rings
-/// for them.
-///
-/// A dispatcher that does not answer in time is counted as an offer and the
-/// shard stays where it is, which is the safe way round: a shard kept back
-/// is a node a little over its share, and a shard moved while an agent is
-/// ringing is a caller behind a bridge nobody will answer.
-fn offers_of(
-  shard: Int,
-  dispatchers: List(#(String, Subject(dispatcher.Message))),
-  timeout_ms: Int,
-) -> Int {
-  let answers =
-    ask.call_all(
-      list.map(dispatchers, fn(entry) { entry.1 }),
-      timeout_ms,
-      dispatcher.Offers,
-    )
-  list.zip(dispatchers, answers)
-  |> list.map(fn(entry) {
-    let #(#(account_id, _to), answer) = entry
-    case answer {
-      Ok(offers) -> offers
-      // Stopped itself since it was listed: nothing was ringing.
-      Error(ask.Exited(_)) -> 0
-      Error(ask.NoReply) -> {
-        system.log_error(
-          "the dispatcher for account "
-          <> account_id
-          <> " did not say how many offers it has within "
-          <> int.to_string(timeout_ms)
-          <> " ms: counting shard "
-          <> int.to_string(shard)
-          <> " as ringing and keeping it here",
-        )
-        1
-      }
-    }
-  })
-  |> int.sum
-}
-
-/// How long a dispatcher is given to count its own offers, asked from inside
-/// the shard actor, which answers nobody while it waits: short, because a dispatcher that is slow to say is counted as
-/// ringing and the shard stays, which is the safe way round.
-const offers_in_actor_timeout_ms = 1000
+/// How long a shard being handed over gives its callers' actors to be
+/// steady. What is not steady by then goes as it is: an unseen leg rings
+/// out, and a bridge left half done is found by the next holder.
+const quiesce_ms = 3000
 
 /// Every dispatcher a shard this node holds is running.
 pub fn dispatchers(shard: Int) -> List(#(String, Subject(dispatcher.Message))) {
@@ -800,6 +798,20 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
       actor.continue(state)
     }
 
+    CallerLeft(caller, reason) -> {
+      let #(_settled, state) =
+        cancelled(
+          state,
+          caller.account_id,
+          caller.call_id,
+          caller.queue_id,
+          records.reason_to_string(reason),
+          Some(caller.joined),
+          Some(modb.now()),
+        )
+      actor.continue(state)
+    }
+
     Settle(account_id, call_id, delivery) -> {
       // Only the delivery the dispatcher was handed. The call may since
       // have left and come back as a newer one, held here under the same
@@ -884,49 +896,34 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
     }
 
     GiveUp(done) -> {
-      // Asked here, at the one moment the answer has to be true: the moment
-      // before the members go back on the broker. An offer is a bridge
-      // ringing on a switch with its member unacked behind it; the node
-      // taking the shard would meet that member redelivered and could only
-      // watch the ring (`callcenter/takeover`). Callers who are only
-      // waiting move freely: they are redelivered, and the next holder reads
-      // their records as any failover does. Safe to ask from inside this
-      // actor, since a dispatcher never calls its shard, it only sends to
-      // it.
-      case
-        offers_of(
-          state.shard,
-          dict.to_list(state.dispatchers),
-          offers_in_actor_timeout_ms,
-        )
-      {
-        0 -> {
-          // Everything this shard is holding goes back to the broker when
-          // the member listener's channel closes with the supervisor. The
-          // shard ends its tree itself rather than leave it to whoever
-          // asked, who may have stopped waiting for this answer: a tree
-          // that has stopped every dispatcher it had must not be left
-          // running for a caller arriving in between to start them again.
-          let state = stop_dispatchers(state)
-          process.send(done, True)
-          system.log(
-            "shard " <> int.to_string(state.shard) <> " given up: releasing",
-          )
-          end_tree(state.shard, state.parent)
-          actor.continue(State(..state, releasing: True))
-        }
-        offers -> {
+      // Nobody is rung from here any more once the dispatchers are stopped;
+      // then the callers' actors finish what the next holder could not see.
+      // Everything this shard is holding goes back to the broker when the
+      // member listener's channel closes with the supervisor. The shard
+      // ends its tree itself rather than leave it to whoever asked, who may
+      // have stopped waiting for this answer: a tree that has stopped every
+      // dispatcher it had must not be left running for a caller arriving in
+      // between to start them again.
+      let state = stop_dispatchers(state)
+      case calls.quiesce(state.shard, quiesce_ms) {
+        0 -> Nil
+        unsteady ->
           system.log(
             "shard "
             <> int.to_string(state.shard)
-            <> " not handed over yet: "
-            <> int.to_string(offers)
-            <> " offer(s) ringing",
+            <> " handed over with "
+            <> int.to_string(unsteady)
+            <> " call(s) not steady after "
+            <> int.to_string(quiesce_ms)
+            <> " ms",
           )
-          process.send(done, False)
-          actor.continue(state)
-        }
       }
+      process.send(done, True)
+      system.log(
+        "shard " <> int.to_string(state.shard) <> " given up: releasing",
+      )
+      end_tree(state.shard, state.parent)
+      actor.continue(State(..state, releasing: True))
     }
 
     Exited(pid, _reason) if pid == state.parent -> {
