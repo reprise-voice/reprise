@@ -563,6 +563,35 @@ pub fn down(state: State, pid: Pid, reason: String) -> Result(State, Nil) {
   }
 }
 
+/// Let go of the offer held under an actor its supervisor shut down, with
+/// nothing written, published or told, and its agents freed here: the
+/// actor went with its shard's calls, the call goes on, and whichever actor
+/// has the caller next says where it stands (`dispatcher.OfferDown`). A
+/// supervisor's pickup is let go of the same way, and `pickup.prune` tells
+/// whoever still waits on it that the caller is not waiting.
+pub fn let_go(state: State, pid: Pid) -> State {
+  case
+    dict.values(state.offers)
+    |> list.find(fn(offer) { offer.pid == Some(pid) })
+  {
+    Error(Nil) -> state
+    Ok(offer) -> {
+      system.log(
+        "the actor of call "
+        <> offer.member.call_id
+        <> " was shut down with its shard's calls: letting its offer to "
+        <> string.join(offer.agents, ", ")
+        <> " go for whoever has the caller next",
+      )
+      State(
+        ..state,
+        offers: dict.delete(state.offers, offer.member.call_id),
+        busy: release(state, offer.id, offer.agents),
+      )
+    }
+  }
+}
+
 /// An offer held whose actor has ended without its last word, closed as
 /// `down` closes it. The monitor's word is one way here; the other is the
 /// tick finding an offer past its ceiling whose actor is already gone

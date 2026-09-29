@@ -58,6 +58,7 @@
 //// publish on, and the functions an actor hands over are run where they are
 //// handed over instead (`of_call`).
 
+import callcenter/stall
 import callcenter/system
 import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Name, type Subject}
@@ -75,8 +76,9 @@ import kazoo/util
 /// What a publisher is sent.
 pub type Message {
   /// Run `run` from the publisher's process, after everything sent to it
-  /// before, for the call `call_id`.
-  Run(call_id: String, run: fn() -> Nil)
+  /// before, for the call `call_id`, handed over by an actor that started
+  /// at `since`, the VM's monotonic milliseconds.
+  Run(call_id: String, since: Int, run: fn() -> Nil)
   /// Ask for the publisher's channel: sent to itself as it starts.
   Connect
   /// Anything else in its mailbox: `kz_amqp_assignments`' word about its
@@ -96,6 +98,9 @@ pub type Io {
     /// Ask for this process's own AMQP channel, and say whether it has one
     /// yet.
     channel: fn() -> Bool,
+    /// Whether work handed over by an actor started at this monotonic
+    /// millisecond may still go out: `stall.fresh` on a node.
+    fresh: fn(Int) -> Bool,
   )
 }
 
@@ -128,7 +133,7 @@ pub fn supervised(kz: Kazoo) -> ChildSpecification(Nil) {
   supervision.supervisor(fn() {
     let pool = Pool(prefix: node_prefix, count: count(kz))
     put_node_term(pool_term, pool.count)
-    start(pool, Io(channel: ensure_channel))
+    start(pool, Io(channel: ensure_channel, fresh: stall.fresh))
   })
   |> supervision.map_data(fn(_supervisor) { Nil })
 }
@@ -165,18 +170,19 @@ pub fn name(pool: Pool, index: Int) -> Name(Message) {
 }
 
 /// Hand `run` to the call's publisher, behind everything handed to it
-/// before. A publisher that is not running -- its supervisor is starting it
-/// again -- drops it, and that is logged: it is sent to the process found
-/// under the name and not to the name, so a publisher that goes between the
-/// two is never the crash of the actor sending.
-pub fn send(pool: Pool, call_id: String, run: fn() -> Nil) -> Nil {
+/// before, from an actor that started at `since`. A publisher that is not
+/// running -- its supervisor is starting it again -- drops it, and that is
+/// logged: it is sent to the process found under the name and not to the
+/// name, so a publisher that goes between the two is never the crash of the
+/// actor sending.
+pub fn send(pool: Pool, call_id: String, since: Int, run: fn() -> Nil) -> Nil {
   let index = index(call_id, pool.count)
   let name = name(pool, index)
   case process.named(name) {
     Ok(pid) ->
       process.send(
         process.unsafely_create_subject(pid, name_tag(name)),
-        Run(call_id, run),
+        Run(call_id, since, run),
       )
     Error(Nil) ->
       system.log_error(
@@ -201,9 +207,9 @@ pub fn node_pool() -> Option(Pool) {
 /// in the node's pool, or at once, in the actor's own process, on a node
 /// that runs none -- where there is no broker to publish to, and every
 /// publish is `Unavailable` wherever it is made.
-pub fn of_call(call_id: String) -> fn(fn() -> Nil) -> Nil {
+pub fn of_call(call_id: String, since: Int) -> fn(fn() -> Nil) -> Nil {
   case node_pool() {
-    Some(pool) -> send(pool, call_id, _)
+    Some(pool) -> send(pool, call_id, since, _)
     None -> fn(run) { run() }
   }
 }
@@ -251,7 +257,7 @@ fn start_publisher(
     // hold the node's start-up for the whole of the wait. A call's work that
     // gets in first is no harm: publishing asks for the channel too.
     process.send(self, Connect)
-    actor.initialised(io)
+    actor.initialised(Publisher(io: io, dropping: None))
     |> actor.selecting(
       process.new_selector()
       |> process.select(self)
@@ -265,23 +271,54 @@ fn start_publisher(
   |> actor.start
 }
 
-fn handle(io: Io, message: Message) -> actor.Next(Io, Message) {
+/// A publisher: its reach, and the call whose work it last dropped, so that
+/// a call's work dropped in a run is logged once.
+type Publisher {
+  Publisher(io: Io, dropping: Option(String))
+}
+
+fn handle(
+  publisher: Publisher,
+  message: Message,
+) -> actor.Next(Publisher, Message) {
+  let io = publisher.io
   case message {
     Connect -> {
       let _ = io.channel()
-      actor.continue(io)
+      actor.continue(publisher)
     }
-    Run(call_id, run) -> {
-      case run_guarded(run) {
-        Ok(Nil) -> Nil
-        Error(reason) ->
-          system.log_error(
-            "call " <> call_id <> ": publishing crashed: " <> reason,
-          )
+    Run(call_id, since, run) ->
+      case io.fresh(since) {
+        True -> {
+          case run_guarded(run) {
+            Ok(Nil) -> Nil
+            Error(reason) ->
+              system.log_error(
+                "call " <> call_id <> ": publishing crashed: " <> reason,
+              )
+          }
+          actor.continue(Publisher(..publisher, dropping: None))
+        }
+        // From an actor started before the node stood still, of a shard the
+        // broker may have given another node meanwhile: dropped, since
+        // whatever it commands is that node's to command now
+        // (`callcenter/stall`). Whether it was handed over before the stall
+        // or after, by an actor that had got past its own fence before the
+        // node stopped and went on after.
+        False -> {
+          case publisher.dropping == Some(call_id) {
+            True -> Nil
+            False ->
+              system.log(
+                "call "
+                <> call_id
+                <> ": dropping what its actor sent before this node stood still",
+              )
+          }
+          actor.continue(Publisher(..publisher, dropping: Some(call_id)))
+        }
       }
-      actor.continue(io)
-    }
-    Ignored -> actor.continue(io)
+    Ignored -> actor.continue(publisher)
   }
 }
 

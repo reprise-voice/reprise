@@ -105,6 +105,7 @@ fn state_with(wait: Wait, offers: fake_offer.Fake) -> State {
       lamp: fn(_agent_id, _state) { Nil },
       activity: fake_activity.reader(fake_activity.new()),
       calls: fake_calls.nothing(),
+      fresh: fn() { True },
     ),
     ticks: process.new_subject(),
     replies: process.new_subject(),

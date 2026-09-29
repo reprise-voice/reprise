@@ -22,6 +22,7 @@ import callcenter/reconcile
 import callcenter/records
 import callcenter/shard
 import callcenter/shards
+import callcenter/stall
 import callcenter/status
 import callcenter/system
 import callcenter/types.{
@@ -65,6 +66,10 @@ pub fn main() -> Nil {
 ///   an agent's lamp that Kamailio has no state for, off a queue every node
 ///   shares;
 /// - the reconciler, the sweep behind the events;
+/// - the stall watch (`callcenter/stall`), which notes the time every
+///   second and, when the node has stood still for long enough that the
+///   broker may have given its shards away, fences everything its shards
+///   started before and has them taken again;
 /// - the node's confirming publisher, the one channel every caller's
 ///   `member_call` goes out on;
 /// - the call publishers (`callcenter/call/publishers`), a few processes
@@ -113,6 +118,7 @@ fn children(
     False -> always
     True ->
       always
+      |> list.append([stall.supervised(stood_still(count))])
       |> list.append([amqp.confirming_publisher()])
       |> list.append([publishers.supervised(kz)])
       |> list.append([supervised_listener(replies.listener())])
@@ -127,6 +133,16 @@ fn children(
       |> list.append(lamp_probe.supervised(kz, count))
       |> list.append(dnd.supervised(kz))
       |> list.append(placement.supervised(count, start_offer(kz, count)))
+  }
+}
+
+/// The node stood still: every shard this node runs a tree for looks
+/// whether it may still act for the shard.
+fn stood_still(count: Int) -> fn(Int) -> Nil {
+  fn(_gap_ms) {
+    int.range(from: 0, to: count, with: Nil, run: fn(_, index) {
+      shard.stood_still(index)
+    })
   }
 }
 

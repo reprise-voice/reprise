@@ -40,6 +40,7 @@ pub fn new() -> State {
       lamp: fn(_agent_id, _state) { Nil },
       activity: fake_activity.reader(activities),
       calls: fake_calls.nothing(),
+      fresh: fn() { True },
     ),
     ticks: process.new_subject(),
     replies: process.new_subject(),

@@ -63,6 +63,13 @@
         ,run_guarded/1
         ]).
 
+%% The node's stall watch: see `callcenter/stall'.
+-export([stall_note/2
+        ,stall_watch/0
+        ,high_priority/0
+        ,is_shutdown/1
+        ]).
+
 %%------------------------------------------------------------------------------
 %% @doc The shard an account belongs to: `erlang:phash2(AccountId, Shards)'.
 %%
@@ -751,3 +758,73 @@ reason(Reason) when is_binary(Reason) -> Reason;
 reason(Reason) when is_atom(Reason) -> atom_to_binary(Reason, 'utf8');
 reason(Reason) -> iolist_to_binary(io_lib:format("~p", [Reason])).
 
+%%------------------------------------------------------------------------------
+%% @doc The stall watch's notes: an `atomics' array of two, the last note and
+%% the last stall, in the VM's monotonic milliseconds, found through a
+%% persistent term put once in the node's life. A watch started again keeps
+%% the array, and with it the last stall.
+%%
+%% A stall is written before the note that saw it, and read after: whoever
+%% reads the new note reads the stall with it.
+%% @end
+%%------------------------------------------------------------------------------
+-define(STALL_WATCH, {'callcenter', 'stall_watch'}).
+
+-spec stall_note(integer(), boolean()) -> 'nil'.
+stall_note(Now, Stalled) ->
+    Ref = stall_array(Now),
+    case Stalled of
+        'true' -> atomics:put(Ref, 2, Now);
+        'false' -> 'ok'
+    end,
+    atomics:put(Ref, 1, Now),
+    'nil'.
+
+stall_array(Now) ->
+    case persistent_term:get(?STALL_WATCH, 'undefined') of
+        'undefined' ->
+            Ref = atomics:new(2, [{'signed', 'true'}]),
+            %% No stall yet: anything started from now on is fresh.
+            atomics:put(Ref, 2, Now - 1),
+            persistent_term:put(?STALL_WATCH, Ref),
+            Ref;
+        Ref -> Ref
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc The watch's last note and last stall, while the watch runs: an array
+%% whose watch has ended says nothing, or every shard would be fenced for good.
+%% @end
+%%------------------------------------------------------------------------------
+-spec stall_watch() -> {'ok', {integer(), integer()}} | {'error', 'nil'}.
+stall_watch() ->
+    case whereis('callcenter_stall') of
+        'undefined' -> {'error', 'nil'};
+        _Watch ->
+            case persistent_term:get(?STALL_WATCH, 'undefined') of
+                'undefined' -> {'error', 'nil'};
+                Ref ->
+                    Last = atomics:get(Ref, 1),
+                    Stalled = atomics:get(Ref, 2),
+                    {'ok', {Last, Stalled}}
+            end
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Run this process ahead of the node's others: the stall watch, which
+%% has to be among the first to run when the node moves again.
+%% @end
+%%------------------------------------------------------------------------------
+-spec high_priority() -> 'nil'.
+high_priority() ->
+    _ = process_flag('priority', 'high'),
+    'nil'.
+
+%%------------------------------------------------------------------------------
+%% @doc Whether a process ended because its supervisor shut it down.
+%% @end
+%%------------------------------------------------------------------------------
+-spec is_shutdown(any()) -> boolean().
+is_shutdown('shutdown') -> 'true';
+is_shutdown({'shutdown', _}) -> 'true';
+is_shutdown(_) -> 'false'.

@@ -7,6 +7,7 @@
 //// `Io` records who asks for a channel instead of asking a broker.
 
 import callcenter/call/publishers
+import callcenter/stall
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/int
 import gleam/list
@@ -16,6 +17,7 @@ import gleam/otp/static_supervisor as supervisor
 import gleam/set
 import kazoo/doc
 import kazoo/testing/fake
+import support/flag
 
 /// A pool of `count` under a prefix of the test's own, whose publishers
 /// tell `channels` when they ask for their channel.
@@ -32,10 +34,13 @@ fn pool(
   let assert Ok(started) =
     publishers.start(
       pool,
-      publishers.Io(channel: fn() {
-        process.send(channels, process.self())
-        True
-      }),
+      publishers.Io(
+        channel: fn() {
+          process.send(channels, process.self())
+          True
+        },
+        fresh: fn(_handed_at) { True },
+      ),
     )
   #(pool, started)
 }
@@ -75,7 +80,7 @@ fn actor_publishing(
     process.spawn(fn() {
       process.send(actors, process.self())
       int.range(from: 0, to: messages, with: Nil, run: fn(_, n) {
-        publishers.send(pool, call_id, fn() {
+        publishers.send(pool, call_id, 0, fn() {
           process.send(published, #(call_id, n, process.self()))
         })
       })
@@ -159,11 +164,11 @@ pub fn a_crash_in_one_calls_work_loses_nothing_behind_it_test() {
   let #(pool, started) = pool("crash", 1, channels)
   let published = process.new_subject()
   let assert [publisher] = publisher_pids(pool)
-  publishers.send(pool, "call-a", fn() { panic as "a publish that throws" })
-  publishers.send(pool, "call-a", fn() {
+  publishers.send(pool, "call-a", 0, fn() { panic as "a publish that throws" })
+  publishers.send(pool, "call-a", 0, fn() {
     process.send(published, #("call-a", process.self()))
   })
-  publishers.send(pool, "call-b", fn() {
+  publishers.send(pool, "call-b", 0, fn() {
     process.send(published, #("call-b", process.self()))
   })
   assert receive_all(published, 2, [])
@@ -178,8 +183,50 @@ pub fn a_publisher_not_running_drops_the_work_test() {
   let pool =
     publishers.Pool(prefix: "callcenter_test_publishers_absent_", count: 2)
   let published = process.new_subject()
-  publishers.send(pool, "call-a", fn() { process.send(published, Nil) })
+  publishers.send(pool, "call-a", 0, fn() { process.send(published, Nil) })
   assert process.receive(published, 100) == Error(Nil)
+}
+
+/// Work from an actor started before the node stood still is dropped when
+/// its turn comes: the shard that started the actor may be another node's
+/// by then, whose own actor has the caller (`callcenter/stall`). That goes
+/// for work handed over after the stall too, by an actor that got past its
+/// own fence before the node stopped and went on after. Work already going
+/// out goes on, and work from an actor started after the stall goes out.
+pub fn work_from_an_actor_older_than_a_stall_is_dropped_test() {
+  let stalled = flag.new(None)
+  let pool =
+    publishers.Pool(prefix: "callcenter_test_publishers_fenced_", count: 1)
+  let assert Ok(started) =
+    publishers.start(
+      pool,
+      publishers.Io(channel: fn() { True }, fresh: fn(since) {
+        case flag.get(stalled) {
+          None -> True
+          Some(at) -> since > at
+        }
+      }),
+    )
+  let ran = process.new_subject()
+  let old = stall.now_ms()
+  // The publisher is busy with this while the rest is handed over.
+  publishers.send(pool, "call-a", old, fn() {
+    process.sleep(200)
+    process.send(ran, "going out")
+  })
+  publishers.send(pool, "call-a", old, fn() { process.send(ran, "before") })
+  publishers.send(pool, "call-b", old, fn() { process.send(ran, "before") })
+  process.sleep(5)
+  flag.set(stalled, Some(stall.now_ms()))
+  process.sleep(5)
+  publishers.send(pool, "call-a", old, fn() { process.send(ran, "old after") })
+  publishers.send(pool, "call-a", stall.now_ms(), fn() {
+    process.send(ran, "new")
+  })
+  let heard = [process.receive(ran, 2000), process.receive(ran, 2000)]
+  assert heard == [Ok("going out"), Ok("new")]
+  assert process.receive(ran, 100) == Error(Nil)
+  stop(started)
 }
 
 /// Without a pool on the node -- no broker, this suite -- an actor's work
@@ -188,7 +235,7 @@ pub fn a_node_without_a_pool_runs_the_work_in_place_test() {
   assert publishers.node_pool() == None
   let here = process.self()
   let ran = process.new_subject()
-  publishers.of_call("call-a")(fn() { process.send(ran, process.self()) })
+  publishers.of_call("call-a", 0)(fn() { process.send(ran, process.self()) })
   assert process.receive(ran, 0) == Ok(here)
 }
 

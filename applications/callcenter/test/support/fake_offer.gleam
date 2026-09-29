@@ -13,6 +13,7 @@
 //// that dials.
 
 import callcenter/types.{type OfferReply, type OfferRequest}
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/list
 import gleam/otp/actor
@@ -28,6 +29,7 @@ pub opaque type Message {
   Succeed(done: Subject(Nil))
   Clear(done: Subject(Nil))
   Died(done: Subject(Nil))
+  ShutDown(reason: Dynamic, done: Subject(Nil))
   CallOf(pid: Pid, done: Subject(Result(String, Nil)))
 }
 
@@ -70,6 +72,14 @@ pub fn requests(fake: Fake) -> List(OfferRequest) {
 pub fn died(fake: Fake) -> Nil {
   process.call(fake.subject, 5000, Died)
   // The kill is a signal, and `is_alive` is only false once it has landed.
+  process.sleep(20)
+}
+
+/// The most recent offer's process was shut down by its supervisor, with
+/// the reason given (`shutdown`, `{shutdown, _}`): what the shard's calls
+/// do to their actors as the shard ends.
+pub fn shut_down(fake: Fake, reason: Dynamic) -> Nil {
+  process.call(fake.subject, 5000, ShutDown(reason, _))
   process.sleep(20)
 }
 
@@ -172,6 +182,19 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
     CallOf(pid, done) -> {
       process.send(done, list.key_find(state.owners, pid))
       actor.continue(state)
+    }
+    ShutDown(reason, done) -> {
+      case state.processes {
+        [pid, ..rest] -> {
+          process.send_abnormal_exit(pid, reason)
+          process.send(done, Nil)
+          actor.continue(State(..state, processes: rest))
+        }
+        [] -> {
+          process.send(done, Nil)
+          actor.continue(state)
+        }
+      }
     }
     Died(done) -> {
       case state.processes {

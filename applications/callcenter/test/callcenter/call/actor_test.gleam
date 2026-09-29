@@ -19,6 +19,7 @@ import kazoo/doc
 import kazoo/events
 import kazoo/testing/channel
 import support/cluster
+import support/flag
 
 const call_id = "caller-leg"
 
@@ -57,7 +58,8 @@ fn io(did: Subject(Did)) -> actor.Io {
     audit: fn(_call_ids) { [] },
     address: fn() { Some("pid://<0.1.0>/call_replies") },
     perform: fn(_context, effect) { process.send(did, Performed(effect)) },
-    once_sent: fn(_call_id, then) { then() },
+    once_sent: fn(_call_id, _since, then) { then() },
+    fresh: fn(_since) { True },
   )
 }
 
@@ -253,6 +255,40 @@ pub fn the_actor_ends_with_the_call_test() {
   assert !process.is_alive(pid)
 }
 
+/// An actor the node stood still since it started does nothing more for the
+/// call: the caller's shard may be another node's by then, whose own actor
+/// has the caller (`callcenter/stall`). What it is handed -- a ring, the
+/// caller's own events, its wake-ups -- is dropped, and the switch, the
+/// dispatcher and the shard hear nothing from it. It still stops when its
+/// shard stops it.
+pub fn an_actor_fenced_by_a_stall_does_nothing_more_test() {
+  let did = process.new_subject()
+  let replies = process.new_subject()
+  let stood_still = flag.new(False)
+  let io = actor.Io(..io(did), fresh: fn(_since) { !flag.get(stood_still) })
+  let assert Ok(started) = actor.start(io, cluster.account_id, call_id, 0)
+  let to = started.data
+  process.send(to, actor.Join(member(), False, replies))
+  assert done(did) == [Bound(call_id), Performed(core.Play("welcome"))]
+
+  flag.set(stood_still, True)
+  process.send(to, actor.Ring(request(replies, ["ann"])))
+  process.send(to, event(call_id, "CHANNEL_DESTROY", []))
+  process.send(to, actor.Wake(0))
+  assert done(did) == []
+  assert process.receive(replies, 0) == Error(Nil)
+  assert process.is_alive(started.pid)
+
+  // Heard no more once it is fenced, even if the stall is forgotten.
+  flag.set(stood_still, False)
+  process.send(to, event(call_id, "CHANNEL_DESTROY", []))
+  assert done(did) == []
+
+  let stopped = process.new_subject()
+  process.send(to, actor.Stop(stopped))
+  assert process.receive(stopped, 1000) == Ok(Nil)
+}
+
 /// The callflow's answer to a hand-back is what ends the actor after a
 /// departure.
 pub fn the_callflows_answer_ends_a_departure_test() {
@@ -419,11 +455,14 @@ fn recording_pool(
   let assert Ok(_started) =
     publishers.start(
       pool,
-      publishers.Io(channel: fn() {
-        channel.record()
-        process.send(channels, process.self())
-        True
-      }),
+      publishers.Io(
+        channel: fn() {
+          channel.record()
+          process.send(channels, process.self())
+          True
+        },
+        fresh: fn(_handed_at) { True },
+      ),
     )
   pool
 }
@@ -439,10 +478,12 @@ fn io_through(did: Subject(Did), pool: publishers.Pool) -> actor.Io {
         context,
         effect,
         fn(_member, _reason) { Nil },
-        publishers.send(pool, context.call_id, _),
+        publishers.send(pool, context.call_id, context.since, _),
       )
     },
-    once_sent: fn(call_id, then) { publishers.send(pool, call_id, then) },
+    once_sent: fn(call_id, since, then) {
+      publishers.send(pool, call_id, since, then)
+    },
   )
 }
 
@@ -462,7 +503,7 @@ fn sent_by_publisher_of(
   call: String,
 ) -> #(Pid, List(channel.Command)) {
   let answer = process.new_subject()
-  publishers.send(pool, call, fn() {
+  publishers.send(pool, call, 0, fn() {
     process.send(answer, #(process.self(), channel.sent()))
   })
   let assert Ok(sent) = process.receive(answer, 1000)
@@ -527,7 +568,7 @@ pub fn an_actor_is_steady_once_its_publisher_has_sent_everything_test() {
   let channels = process.new_subject()
   let pool = recording_pool("steady", 1, channels)
   let gate = process.new_subject()
-  publishers.send(pool, "somebody-else", fn() {
+  publishers.send(pool, "somebody-else", 0, fn() {
     let release = process.new_subject()
     process.send(gate, release)
     let _ = process.receive(release, 2000)

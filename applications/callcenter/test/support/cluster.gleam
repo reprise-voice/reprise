@@ -186,6 +186,25 @@ pub fn new_with(
   users: List(#(String, Value)),
   through: fn(Kazoo) -> Kazoo,
 ) -> Cluster {
+  build(queues, users, through, fn() { True })
+}
+
+/// The same, the dispatcher asking `fresh` whether it may still act for
+/// its shard (`callcenter/stall`).
+pub fn new_fenced(
+  queues: List(#(String, Value)),
+  users: List(#(String, Value)),
+  fresh: fn() -> Bool,
+) -> Cluster {
+  build(queues, users, fn(kz) { kz }, fresh)
+}
+
+fn build(
+  queues: List(#(String, Value)),
+  users: List(#(String, Value)),
+  through: fn(Kazoo) -> Kazoo,
+  fresh: fn() -> Bool,
+) -> Cluster {
   swap([])
   let fake = fake.new_with_views(views())
   fake.put_account(fake, account_id, "queues.example.com", [])
@@ -243,6 +262,7 @@ pub fn new_with(
         },
         activity: fake_activity.reader(activities),
         calls: fake_calls.calls(calls),
+        fresh: fresh,
       ),
       start_offer: fake_offer.start_offer(offers),
     )

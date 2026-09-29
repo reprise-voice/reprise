@@ -69,10 +69,12 @@ import callcenter/fields
 import callcenter/member.{type Member}
 import callcenter/records
 import callcenter/shards
+import callcenter/stall
 import callcenter/system
 import callcenter/tombstones.{type Tombstones}
 import callcenter/types
 import gleam/dict.{type Dict}
+import gleam/dynamic.{type Dynamic}
 import gleam/erlang/process.{type Name, type Pid, type Subject}
 import gleam/int
 import gleam/list
@@ -174,6 +176,9 @@ pub type Message {
   /// A linked process ended: the supervisor shutting this actor down, or a
   /// dispatcher going.
   Exited(pid: Pid, reason: process.ExitReason)
+  /// The node stood still (`callcenter/stall`): look whether this tree may
+  /// still act for the shard.
+  StoodStill
 }
 
 /// What a shard is holding, for `callcenter_maintenance:status/0` and the
@@ -229,6 +234,9 @@ type State {
     tombstones: Tombstones,
     /// Everything this shard reaches outside itself.
     hooks: Hooks,
+    /// When this actor started, in the VM's monotonic milliseconds: a
+    /// stall of the node after it is the shard maybe lost (`hooks.fresh`).
+    since: Int,
   )
 }
 
@@ -288,6 +296,9 @@ pub type Hooks {
     /// The node's shard count, which a member's account is hashed with to
     /// check that it belongs here. `None` checks nothing.
     count: Option(Int),
+    /// Whether a process of the shard started at this monotonic millisecond
+    /// may still act for it: `stall.fresh` on a node.
+    fresh: fn(Int) -> Bool,
   )
 }
 
@@ -327,6 +338,7 @@ pub fn hooks(count: Int, start_offer: StartOffer) -> Hooks {
     },
     settle: listener.ack,
     count: Some(count),
+    fresh: stall.fresh,
   )
 }
 
@@ -364,6 +376,22 @@ fn tree_name(shard: Int) -> Name(Nil) {
 /// is not holding anything, and may be about to lose the race for it.
 pub fn holds(shard: Int) -> Bool {
   holder(shard) |> result.is_ok
+}
+
+/// Tell the shard's actor, if one is running here, that the node stood
+/// still: a tree started before the stall ends and is started again, fresh.
+pub fn stood_still(shard: Int) -> Nil {
+  // Sent to the process found and not to the name: a fenced actor ends and
+  // gives the name up at any moment after a stall, and a send to a name
+  // nobody holds would end the watch that sends it.
+  case process.named(name(shard)) {
+    Ok(pid) ->
+      process.send(
+        process.unsafely_create_subject(pid, name_tag(name(shard))),
+        StoodStill,
+      )
+    Error(Nil) -> Nil
+  }
 }
 
 /// The shard actor, when this node is dispatching for the shard.
@@ -695,6 +723,7 @@ fn start_actor(
       orphaned: set.new(),
       tombstones: tombstones.new(),
       hooks: hooks,
+      since: stall.now_ms(),
     ))
     |> actor.selecting(
       process.new_selector()
@@ -711,6 +740,38 @@ fn start_actor(
 
 fn handle(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
+    // The supervisor's shutdown is answered whatever else is so.
+    Exited(pid, _reason) if pid == state.parent -> act(state, message)
+    _ ->
+      case state.hooks.fresh(state.since) {
+        True -> act(state, message)
+        // The node stood still since this tree started, and the broker may
+        // have given the shard to another node meanwhile: nothing more is
+        // done for it from here, not even settling a member. The tree ends
+        // and starts again, the listener's channel going with it, so that
+        // the shard is either taken back fresh or found to be somebody
+        // else's (`callcenter/stall`).
+        False -> {
+          system.log(
+            "shard "
+            <> int.to_string(state.shard)
+            <> ": this node stood still since the shard was taken:"
+            <> " taking it again",
+          )
+          actor.stop_abnormal(
+            "shard " <> int.to_string(state.shard) <> " fenced after a stall",
+          )
+        }
+      }
+  }
+}
+
+/// What the shard does with a message while it may still act for the shard.
+fn act(state: State, message: Message) -> actor.Next(State, Message) {
+  case message {
+    // Looked at on the way in.
+    StoodStill -> actor.continue(state)
+
     Arrived(arrival, message, delivery, done) -> {
       system.log(
         "member for account "
@@ -1855,3 +1916,6 @@ fn stop_normally() -> Nil
 /// `True` once it is, `False` when it is not within the time given.
 @external(erlang, "callcenter_ffi", "terminate")
 fn terminate(pid: Pid, within_ms: Int) -> Bool
+
+@external(erlang, "gleam_stdlib", "identity")
+fn name_tag(name: Name(Message)) -> Dynamic

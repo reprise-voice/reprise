@@ -13,6 +13,7 @@ import callcenter/dispatcher
 import callcenter/member
 import callcenter/shard
 import callcenter/shards
+import callcenter/stall
 import callcenter/types.{type Member}
 import cf_callcenter
 import gleam/dict.{type Dict}
@@ -28,6 +29,7 @@ import gleam/string
 import kazoo/doc
 import kazoo/listener.{type Delivery}
 import support/cluster
+import support/flag
 
 const account_id = "4b1f0c2d7e8a9b0c1d2e3f4051627384"
 
@@ -257,6 +259,22 @@ fn take_poisoned(
   count: option.Option(Int),
   poison: List(String),
 ) -> Harness {
+  take_with(shard_id, arrivals, on_left, on_stop, count, poison, fn(_since) {
+    True
+  })
+}
+
+/// The same, the shard's processes asking `fresh` whether they may still act
+/// for it (`callcenter/stall`).
+fn take_with(
+  shard_id: Int,
+  arrivals: List(OnArrival),
+  on_left: OnLeft,
+  on_stop: OnStop,
+  count: option.Option(Int),
+  poison: List(String),
+  fresh: fn(Int) -> Bool,
+) -> Harness {
   let acks = process.new_subject()
   let cancel_acks = process.new_subject()
   let starts = process.new_subject()
@@ -292,6 +310,7 @@ fn take_poisoned(
         }
       },
       count: count,
+      fresh: fresh,
     )
   let assert Ok(tree) = shard.take_using(shard_id, hooks)
   // The tree is linked to whoever took it, which on a node is the owner,
@@ -573,6 +592,7 @@ pub fn a_shard_is_not_held_until_its_listener_consumes_test() {
       },
       settle: fn(_delivery) { process.send(acks, Nil) },
       count: None,
+      fresh: fn(_since) { True },
     )
   let assert Ok(tree) = shard.take_using(52, hooks)
   process.unlink(tree)
@@ -601,6 +621,54 @@ pub fn a_shard_is_not_held_until_its_listener_consumes_test() {
 
   shard.release(52)
   assert shard.tree(52) == Error(Nil)
+}
+
+/// A shard the node stood still since it was taken may be another node's by
+/// then (`callcenter/stall`). Told of the stall, or asked anything at all,
+/// its actor answers nothing, settles nothing -- the caller it holds goes
+/// back to the broker with the listener's channel -- and ends, and the tree
+/// is started again, fresh: its listener takes the shard back if it is still
+/// this node's. A shard actor started after the stall goes on as it is.
+pub fn a_shard_fenced_by_a_stall_is_taken_again_test() {
+  let stalled = flag.new(None)
+  let h =
+    take_with(84, [], Ignores, Stops, None, [], fn(since) {
+      case flag.get(stalled) {
+        None -> True
+        Some(at) -> since > at
+      }
+    })
+  arrive(h, "call-one")
+  assert next(h.seen, 1000) == account_id <> ":handed:call-one"
+  let first = actor_pid(h)
+
+  // Told of the stall.
+  process.sleep(2)
+  flag.set(stalled, Some(stall.now_ms()))
+  process.sleep(2)
+  shard.stood_still(84)
+  process.sleep(100)
+  let second = actor_pid(h)
+  assert second != first
+  assert shard.tree(84) == Ok(h.tree)
+  assert shard.holds(84)
+  // Told again: started after the stall, it goes on.
+  shard.stood_still(84)
+  process.sleep(50)
+  assert actor_pid(h) == second
+
+  // A stall nobody told it of: the first thing it is asked ends it.
+  process.sleep(2)
+  flag.set(stalled, Some(stall.now_ms()))
+  process.sleep(2)
+  assert shard.held(84) == None
+  process.sleep(100)
+  assert actor_pid(h) != second
+  assert shard.holds(84)
+
+  // Nothing was settled on the way: the caller was never let go of here.
+  assert drain(h.acks) == []
+  shard.release(84)
 }
 
 /// A dispatcher that settles the caller it was told had left asks the shard,
@@ -1123,6 +1191,7 @@ pub fn a_listener_that_ends_ends_the_tree_test() {
       },
       settle: fn(_delivery) { Nil },
       count: None,
+      fresh: fn(_since) { True },
     )
   let assert Ok(tree) = shard.take_using(54, hooks)
   process.unlink(tree)

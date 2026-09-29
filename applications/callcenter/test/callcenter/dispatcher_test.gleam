@@ -11,6 +11,8 @@ import callcenter/types.{
   WrappingUp,
 }
 import cf_callcenter
+import gleam/dynamic.{type Dynamic}
+import gleam/erlang/atom
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{type Option, None, Some}
@@ -22,6 +24,7 @@ import support/cluster
 import support/fake_activity
 import support/fake_calls
 import support/fake_offer
+import support/flag
 
 // --- Queue and user documents ----------------------------------------------
 
@@ -847,6 +850,81 @@ pub fn an_offer_that_crashes_after_an_answer_is_ended_test() {
   cluster.tick(c)
   cluster.arrive(c, "call-two", "support", 0, 71)
   assert cluster.ringing(c, "call-two") != []
+}
+
+/// An actor its supervisor shut down went with its shard's calls, which end
+/// only with the shard's whole tree, and its call goes on. Its offer is let
+/// go of with nothing settled or closed -- the actor of the tree that takes
+/// the shard next finds the call where it stands and says so -- where an
+/// actor that crashed has its call closed here (above). In the lab of
+/// 2026-09-28 (`e2e-260927-cca10`) a thawed node closed an answered call on
+/// its actor's shutdown that the node holding the shard by then had closed
+/// already, and the call had two `member_result`s.
+pub fn an_actor_shut_down_leaves_its_call_to_whoever_has_it_next_test() {
+  let reasons = [
+    #("shutdown", to_dynamic(atom.create("shutdown"))),
+    #(
+      "{shutdown, _}",
+      to_dynamic(#(atom.create("shutdown"), atom.create("handed_over"))),
+    ),
+  ]
+  list.each(reasons, fn(case_) {
+    let #(name, reason) = case_
+    let c = two_agent_queue()
+    cluster.arrive(c, "call-one", "support", 0, 0)
+    cluster.reply(
+      c,
+      "call-one",
+      Answered("ann", "ann-leg", cluster.start_of_time + 2),
+    )
+    cluster.at(c, 60)
+    fake_offer.shut_down(c.offers, reason)
+    cluster.sync(c)
+    assert cluster.alive(c) as name
+    assert cluster.report(c).offers == [] as name
+    assert cluster.settled(c) == [] as name
+  })
+}
+
+/// A dispatcher the node stood still since it started does nothing more
+/// for its shard, which may be another node's by then (`callcenter/stall`):
+/// the end of a call it had answered is not taken, so nothing is closed or
+/// settled from here; a caller arriving is not rung for; the clock moves
+/// nothing. It still stops when its shard stops it.
+pub fn a_dispatcher_fenced_by_a_stall_does_nothing_more_test() {
+  let stood_still = flag.new(False)
+  let c =
+    cluster.new_fenced(
+      [#("support", queue("longest_idle", [#("ann", 1, 1), #("bob", 1, 2)]))],
+      [#("ann", user([])), #("bob", user([]))],
+      fn() { !flag.get(stood_still) },
+    )
+  cluster.agent_is(c, "ann", "available")
+  cluster.agent_is(c, "bob", "available")
+  cluster.arrive(c, "call-one", "support", 0, 0)
+  cluster.reply(
+    c,
+    "call-one",
+    Answered("ann", "ann-leg", cluster.start_of_time + 2),
+  )
+  let offers = fake_offer.count(c.offers)
+
+  flag.set(stood_still, True)
+  // Sent, not asked: a dispatcher that drops a question never answers it.
+  fake_offer.reply_last(c.offers, Ended(Completed, cluster.start_of_time + 30))
+  process.send(
+    c.dispatcher,
+    dispatcher.Arrived(
+      cluster.member("call-two", "support", 0, cluster.start_of_time + 31),
+      process.new_subject(),
+    ),
+  )
+  process.send(c.dispatcher, dispatcher.Tick)
+  process.sleep(100)
+  assert cluster.settled(c) == []
+  assert fake_offer.count(c.offers) == offers
+
+  assert process.call(c.dispatcher, 1000, dispatcher.Stop) == Nil
 }
 
 // --- Activity --------------------------------------------------------------
@@ -2876,3 +2954,6 @@ pub fn a_waiting_callers_lost_actor_is_replaced_test() {
   cluster.sync(c)
   assert list.length(cluster.joined(c)) == 2
 }
+
+@external(erlang, "gleam_stdlib", "identity")
+fn to_dynamic(value: a) -> Dynamic

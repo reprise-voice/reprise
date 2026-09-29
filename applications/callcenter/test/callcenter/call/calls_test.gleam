@@ -10,6 +10,8 @@ import gleam/erlang/process
 import gleam/erlang/reference
 import gleam/list
 import gleam/option.{None}
+import gleam/otp/static_supervisor as supervisor
+import gleam/result
 import kazoo/doc
 import support/cluster
 
@@ -25,7 +27,8 @@ fn io() -> actor.Io {
     audit: fn(_call_ids) { [] },
     address: fn() { None },
     perform: fn(_context, _effect: core.Effect) { Nil },
-    once_sent: fn(_call_id, then) { then() },
+    once_sent: fn(_call_id, _since, then) { then() },
+    fresh: fn(_since) { True },
   )
 }
 
@@ -51,6 +54,28 @@ fn registry_telling(
 
 fn registry() -> process.Subject(calls.Message) {
   registry_telling(process.new_subject())
+}
+
+/// A shard's calls give up at their first failure, which takes the shard's
+/// tree down with them: started again on their own, they would end every
+/// actor while the shard's dispatchers and members stayed, and a caller
+/// being rung for, through to an agent or half way out of the queue would
+/// be left with no actor.
+pub fn the_calls_fall_with_the_shard_test() {
+  let assert Ok(tree) =
+    supervisor.new(supervisor.OneForOne)
+    |> supervisor.restart_tolerance(intensity: 0, period: 1)
+    |> supervisor.add(calls.supervised(97, io()))
+    |> supervisor.start
+  process.unlink(tree.pid)
+  let watching = process.monitor(tree.pid)
+  let assert Ok(registry) = process.subject_owner(calls.of_shard(97))
+  process.kill(registry)
+  let down =
+    process.new_selector()
+    |> process.select_specific_monitor(watching, fn(down) { down })
+    |> process.selector_receive(1000)
+  assert result.is_ok(down)
 }
 
 /// A caller joining twice -- delivered again -- is the one actor.

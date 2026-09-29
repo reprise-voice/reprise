@@ -28,7 +28,15 @@
 ////
 //// The registry and the factory stand or fall together: a registry started
 //// again with actors still running would know none of them, and start a
-//// second actor for the next caller of theirs to join.
+//// second actor for the next caller of theirs to join. And the two fall
+//// with the shard: either of them ending is the whole shard's tree started
+//// again, not theirs alone. Started again on their own, they would end every
+//// actor of the shard while its dispatchers and its members stayed: a
+//// caller being rung for or through to an agent would have neither actor
+//// nor offer, and a caller half way out of the queue would be handed back
+//// by nobody. The shard's tree started again gives every member back to
+//// the broker, and every caller is found out about by the actor of the
+//// tree that takes the shard next.
 
 import callcenter/ask
 import callcenter/call/actor.{type Message as ActorMessage}
@@ -104,11 +112,13 @@ fn factory_name(
 }
 
 /// The shard's calls: the factory the actors run under, then the registry
-/// that starts them there, one failure boundary.
+/// that starts them there, one failure boundary, which gives up at the first
+/// failure and so takes the shard's tree down with it.
 pub fn supervised(shard: Int, io: actor.Io) -> ChildSpecification(Nil) {
   let actors = factory_name(shard)
   supervision.supervisor(fn() {
     supervisor.new(supervisor.OneForAll)
+    |> supervisor.restart_tolerance(intensity: 0, period: 1)
     |> supervisor.add(
       factory.worker_child(fn(call: #(String, String, Int)) {
         actor.start(io, call.0, call.1, call.2)

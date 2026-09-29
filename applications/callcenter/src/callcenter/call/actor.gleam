@@ -52,6 +52,7 @@ import callcenter/call/snapshots
 import callcenter/member as member_message
 import callcenter/recording
 import callcenter/records
+import callcenter/stall
 import callcenter/system
 import callcenter/types.{
   type CancelReason, type Member, type OfferId, type OfferReply,
@@ -142,6 +143,10 @@ pub type Context {
     /// How much longer than its ring timeout a ring is waited for.
     grace_s: Int,
     now: Int,
+    /// When the actor started, in the VM's monotonic milliseconds: what the
+    /// call's publisher drops its work by once the node has stood still
+    /// since (`callcenter/stall`).
+    since: Int,
   )
 }
 
@@ -171,10 +176,13 @@ pub type Io {
     address: fn() -> Option(String),
     /// Carry out one effect.
     perform: fn(Context, core.Effect) -> Nil,
-    /// Run a function once everything already performed for a call id has
-    /// gone out: behind it at the call's publisher on a node, at once in
-    /// the tests.
-    once_sent: fn(String, fn() -> Nil) -> Nil,
+    /// Run a function once everything already performed for a call id, by
+    /// an actor started at the monotonic millisecond given, has gone out:
+    /// behind it at the call's publisher on a node, at once in the tests.
+    once_sent: fn(String, Int, fn() -> Nil) -> Nil,
+    /// Whether an actor started at this monotonic millisecond may still act
+    /// for its shard: `stall.fresh` on a node.
+    fresh: fn(Int) -> Bool,
   )
 }
 
@@ -204,6 +212,11 @@ type State {
     quarantined: Bool,
     /// Whoever is waiting for the call to be steady.
     steadying: List(Subject(Nil)),
+    /// When the actor started, in the VM's monotonic milliseconds.
+    since: Int,
+    /// Whether the node has stood still since then, and the actor stopped
+    /// acting for the call (`callcenter/stall`).
+    fenced: Bool,
   )
 }
 
@@ -236,6 +249,8 @@ pub fn start(
         timer: None,
         quarantined: strikes >= quarantine_after,
         steadying: [],
+        since: io.monotonic_ms(),
+        fenced: False,
       )
       |> bind(call_id)
     actor.initialised(state)
@@ -259,6 +274,31 @@ pub fn start(
 // --- The loop --------------------------------------------------------------
 
 fn handle(state: State, message: Message) -> actor.Next(State, Message) {
+  case message, state.fenced || !state.io.fresh(state.since) {
+    Stop(_), _ | _, False -> act(state, message)
+    // The node stood still since the actor started, and the caller's shard
+    // may be another node's now, whose own actor has the caller: what it is
+    // handed is dropped, and the caller, the legs, the dispatcher and the
+    // record hear nothing more from here. The shard's tree is ending, and
+    // this actor with it (`callcenter/stall`).
+    _, True -> {
+      case state.fenced {
+        True -> Nil
+        False ->
+          system.log(
+            "call "
+            <> state.call.call_id
+            <> ": this node stood still since its actor started:"
+            <> " the actor does nothing more for it",
+          )
+      }
+      actor.continue(State(..state, fenced: True))
+    }
+  }
+}
+
+/// What the actor does with a message while it may still act for the call.
+fn act(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
     Stop(done) -> {
       process.send(done, Nil)
@@ -302,7 +342,9 @@ fn steadied(state: State) -> State {
     [], _ | _, False -> state
     waiting, True -> {
       list.each(waiting, fn(done) {
-        state.io.once_sent(state.call.call_id, fn() { process.send(done, Nil) })
+        state.io.once_sent(state.call.call_id, state.since, fn() {
+          process.send(done, Nil)
+        })
       })
       State(..state, steadying: [])
     }
@@ -565,6 +607,7 @@ fn context(state: State, request: Option(OfferRequest), now: Int) -> Context {
     request: request,
     grace_s: state.io.grace_s,
     now: now,
+    since: state.since,
   )
 }
 
@@ -625,9 +668,17 @@ pub fn live(kz: Kazoo, left: fn(Member, CancelReason) -> Nil) -> Io {
     },
     address: fn() { reply_address() |> option.from_result },
     perform: fn(context: Context, effect) {
-      perform(context, effect, left, publishers.of_call(context.call_id))
+      perform(
+        context,
+        effect,
+        left,
+        publishers.of_call(context.call_id, context.since),
+      )
     },
-    once_sent: fn(call_id, then) { publishers.of_call(call_id)(then) },
+    once_sent: fn(call_id, since, then) {
+      publishers.of_call(call_id, since)(then)
+    },
+    fresh: stall.fresh,
   )
 }
 

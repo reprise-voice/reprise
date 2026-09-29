@@ -11,6 +11,7 @@ import callcenter/call/calls
 import callcenter/presence
 import callcenter/queue_doc
 import callcenter/shards
+import callcenter/stall
 import callcenter/types.{type Member, type OfferId, type OfferReply}
 import gleam/erlang/process.{type Pid, type Subject}
 import gleam/option.{type Option, Some}
@@ -56,6 +57,10 @@ pub type Config {
     /// commanding one caller: the shard's own on a node, recorders in the
     /// tests.
     calls: Calls,
+    /// Whether this dispatcher may still act for its shard: no stall of the
+    /// node since it was started (`callcenter/stall`). Always, in the
+    /// tests that are not about a stall.
+    fresh: fn() -> Bool,
   )
 }
 
@@ -117,6 +122,8 @@ pub fn calls_of(registry: Subject(calls.Message)) -> Calls {
 
 /// The configuration a node runs with.
 pub fn live(kz: Kazoo, account_id: String) -> Config {
+  // Built as the dispatcher is started, so this is when it started.
+  let since = stall.now_ms()
   Config(
     kz: kz,
     account_id: account_id,
@@ -146,5 +153,6 @@ pub fn live(kz: Kazoo, account_id: String) -> Config {
     calls: calls_of(
       calls.of_shard(shards.of_account(account_id, shards.count(kz))),
     ),
+    fresh: fn() { stall.fresh(since) },
   )
 }

@@ -9,6 +9,7 @@ import callcenter/dispatcher/state.{Offer, State}
 import callcenter/types.{
   type Member, ExitKey, Failed, Hangup, OfferNoAnswer, OfferRinging, Timeout,
 }
+import gleam/dict
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{Some}
@@ -56,6 +57,41 @@ fn release(c: cluster.Cluster, agent_id: String) -> Nil {
   let _known =
     process.call(c.dispatcher, 5000, dispatcher.ReleaseAgent(agent_id, _))
   cluster.sync(c)
+}
+
+// --- An actor shut down ----------------------------------------------------
+
+/// The offer under an actor its supervisor shut down is let go of: dropped,
+/// its agents freed, and nothing else -- no outcome written, no miss, no
+/// call-off, nothing published -- since the call goes on under whoever has
+/// the caller's actor next (`dispatcher.OfferDown`). The caller stays
+/// waiting, for a new actor to be joined to. Only the offer under that actor
+/// goes, and an actor holding none changes nothing.
+pub fn an_offer_let_go_of_frees_its_agents_and_nothing_else_test() {
+  let platform = platform_start()
+  let gone = process.spawn_unlinked(fn() { process.sleep_forever() })
+  let other = process.spawn_unlinked(fn() { process.sleep_forever() })
+  let stray = process.spawn_unlinked(fn() { process.sleep_forever() })
+  let ring =
+    Offer(..bare_state.offer("call-one", ["ann", "bob"]), pid: Some(gone))
+  let kept = Offer(..bare_state.offer("call-two", ["cal"]), pid: Some(other))
+  let before =
+    bare_state.new()
+    |> bare_state.waiting("call-one")
+    |> bare_state.waiting("call-two")
+    |> bare_state.held(ring)
+    |> bare_state.held(kept)
+  let events = list.length(published_events())
+
+  let after = offers.let_go(before, gone)
+  assert dict.keys(after.offers) == ["call-two"]
+  assert dict.to_list(after.busy) == [#("cal", kept.id)]
+  assert dict.has_key(after.waiting, "call-one")
+  assert list.length(published_events()) == events
+  assert offers.let_go(before, stray) == before
+
+  list.each([gone, other, stray], process.kill)
+  platform_stop(platform)
 }
 
 // --- member_offer follows the bridge ---------------------------------------

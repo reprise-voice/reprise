@@ -276,6 +276,20 @@ pub fn start(
 // --- The loop --------------------------------------------------------------
 
 fn handle(state: State, message: Message) -> actor.Next(State, Message) {
+  case message, state.config.fresh() {
+    Stop(_), _ | _, True -> act(state, message)
+    // The node stood still since this dispatcher started, and the shard it
+    // dispatches for may be another node's now (`callcenter/stall`): what
+    // it is handed is dropped, and nothing more is written, published or
+    // settled from here. The shard's tree is ending, this dispatcher with
+    // it.
+    _, False -> actor.continue(state)
+  }
+}
+
+/// What the dispatcher does with a message while it may still act for its
+/// shard.
+fn act(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
     Arrived(member, done) -> {
       process.send(done, Nil)
@@ -342,19 +356,18 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
         False -> step(state, offers.replied(state, offer, reply))
       }
 
+    // An actor its supervisor shut down went with its shard's calls, which
+    // only ever end with the shard's whole tree (`calls.supervised`), this
+    // dispatcher next. Its call goes on, and the actor of the tree that
+    // takes the shard next finds it where it stands and says so
+    // (*Takeover*). So its offer is let go of with nothing written or
+    // published: closed here, an answered call was closed twice, once by
+    // each holder (the lab of 2026-09-28, `e2e-260927-cca10`).
     OfferDown(process.ProcessDown(pid: pid, reason: reason, ..)) ->
-      // The offer the actor held is closed first, and only then is a caller
-      // still waiting joined to a new actor: the new one finds out whatever
-      // the old one left ringing and says so, and a dispatcher still holding
-      // the old offer would take that for an offer it already has.
-      case pickup.down(state, pid, string.inspect(reason)) {
-        Ok(after) -> actor.continue(arrival.actor_down(after, pid) |> pass.run)
-        Error(Nil) ->
-          case offers.down(state, pid, string.inspect(reason)) {
-            Ok(after) -> step(state, arrival.actor_down(after, pid))
-            // Settled already: nearly every offer's end is this.
-            Error(Nil) -> step(state, arrival.actor_down(state, pid))
-          }
+      case shut_down(reason) {
+        True ->
+          step(state, offers.let_go(state, pid) |> arrival.actor_down(pid))
+        False -> actor_ended(state, pid, reason)
       }
 
     OfferDown(process.PortDown(..)) -> actor.continue(state)
@@ -692,3 +705,35 @@ pub fn account_of(config: Config) -> String {
 pub fn no_answer_source() -> Source {
   NoAnswerRule
 }
+
+/// A caller's actor that ended any other way than by its supervisor's
+/// shutdown. The offer the actor held is closed first, and only then is a
+/// caller still waiting joined to a new actor: the new one finds out
+/// whatever the old one left ringing and says so, and a dispatcher still
+/// holding the old offer would take that for an offer it already has.
+fn actor_ended(
+  state: State,
+  pid: Pid,
+  reason: process.ExitReason,
+) -> actor.Next(State, Message) {
+  case pickup.down(state, pid, string.inspect(reason)) {
+    Ok(after) -> actor.continue(arrival.actor_down(after, pid) |> pass.run)
+    Error(Nil) ->
+      case offers.down(state, pid, string.inspect(reason)) {
+        Ok(after) -> step(state, arrival.actor_down(after, pid))
+        // Settled already: nearly every offer's end is this.
+        Error(Nil) -> step(state, arrival.actor_down(state, pid))
+      }
+  }
+}
+
+/// Whether a process ended because its supervisor shut it down.
+fn shut_down(reason: process.ExitReason) -> Bool {
+  case reason {
+    process.Abnormal(reason) -> is_shutdown(reason)
+    process.Normal | process.Killed -> False
+  }
+}
+
+@external(erlang, "callcenter_ffi", "is_shutdown")
+fn is_shutdown(reason: Dynamic) -> Bool

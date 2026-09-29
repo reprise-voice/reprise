@@ -415,6 +415,73 @@ does. Giving a shard up goes through the supervisor (`sys:terminate`), so
 the listener's channel closes after the actor has finished, and the members
 go back with it.
 
+The callers' actors are the last of the tree's children, so they are the
+first it stops: nothing of a shard this node no longer holds is commanded
+from here. A dispatcher still running then hears each of them end with
+`shutdown`. That is not a lost call: its call goes on, and whoever holds the
+caller's actor next -- this node's tree started again, or the node the shard
+went to -- finds it where it stands and says so (*Takeover*). So an offer
+under an actor its supervisor shut down is let go of with nothing written,
+published or settled. The calls only ever go with the whole tree: a crash
+of their registry or factory is not started again on its own, which would
+end every actor while the dispatchers and the members stayed, but takes
+the tree down, and every member back to the broker. An actor that crashes, or is killed, still
+has its offer closed as lost. In the lab of 2026-09-28 (`e2e-260927-cca10`)
+a thawed node whose listener found its channel gone closed an answered call
+this way, as `failed_bridge`, after the node holding the shard by then had
+closed it: the call had two `member_result`s.
+
+**A node that stood still.** A node whose VM stops -- frozen, or starved
+of the CPU by its host -- loses its shards once the broker has heard
+nothing from it for long enough: LavinMQ gives up after 15 seconds, and an
+idle connection sends a frame only about every 10, so that can be five
+seconds into the stop (15 to 16 seconds in the lab of 2026-09-28,
+`e2e-260927-cca10`). The broker hands every member the node held to the
+next consumer, and another node takes the shards over and every caller in
+them. When the node moves again, nothing it runs knows that yet. Its socket
+still holds what the broker sent before it gave up, the callers' events
+among it, and the connection reads all of that before it reads that it is
+closed. So for a moment every process of every shard it held went on as the
+holder: in that lab a call actor thawed after its agent's blind transfer
+took the caller for transferred, and its dispatcher wrote the passage's
+record and published `member_result` -- which failed only because the
+channel it went out on had gone -- for a call the next holder had already
+closed.
+
+The stall watch (`callcenter/stall`) notes the time every second, at high
+priority, so that it is among the first to run when the node moves again. A
+gap of more than three seconds between two notes is a stall. A call actor,
+a dispatcher or a shard actor started before the last stall is fenced, and
+so is every one of them while the last note is more than three seconds old
+-- the node moving again, the watch not yet run. A fenced call actor and a
+fenced dispatcher drop whatever they are handed, and write, publish, settle
+and command nothing more. A fenced shard actor answers nothing, settles
+nothing and ends, and the tree starts again, fresh; the watch tells every
+shard of a stall before it logs it, so that one that is sent nothing ends
+too. The listener then takes the shard back if it is still this node's, and
+every caller in it is found out about again; or it finds the shard somebody
+else's, and the tree ends. A call publisher drops the work of every actor
+started before the stall, whenever its turn comes, whether it was handed
+over before the stall or after.
+
+Three seconds leaves room under the broker's five at worst for the backlog
+a node works through as it moves again. What the fence catches is the
+whole VM standing still: a VM that runs but is too busy to answer the
+broker starves the heartbeat and not the watch, which runs ahead of it, and
+a VM its host pauses may show no gap, since a guest's monotonic clock can
+be held across the pause. A stall that lost nothing costs as much as one
+that lost everything: every member goes back to the broker and is handed
+out again, every caller is found out about again, the next sweep scans
+every account for orphans as for a shard newly taken, and each shard's end
+is a crash report. A caller half way out of the queue is handed back by
+the actor that finds them (*Leaving*). A node with no watch -- no broker,
+the tests -- is never fenced, and nor is one whose watch has ended, which
+would otherwise fence every shard for good. What was already handed on
+goes out -- the record writer's queue, what a dispatcher gave the node's
+AMQP workers -- and a message a process was handling as the VM stopped is
+finished as it moves again: all of it was decided while the node held the
+shard.
+
 Giving a shard up is a question to the actor first (`GiveUp`), which it
 always agrees to once its callers' actors are steady, or three seconds have
 gone by (`calls.quiesce`). Once it agrees it is *releasing*,
@@ -1840,6 +1907,7 @@ cluster-wide view of who holds what.
 | `callcenter/members` | which nodes take shards: each node's own queue, whose consumer is its membership and which carries the wants |
 | `callcenter/placement` | one process per node: takes the shards assigned to it, asks for the ones somebody else holds, and hands over the ones another member asks for |
 | `callcenter/shard` | one shard while this node holds it: its supervisor, the actor that settles its members, the member listener, the dispatchers and the callers' actors |
+| `callcenter/stall` | the node's stall watch: a note of the time every second, and whether a process of a shard started before the node last stood still may still act for it |
 | `callcenter/ask` | a call that hands the callee's exit or silence back as a value |
 | `callcenter/member` | what is on a member queue: `member_call` and `member_cancel` |
 | `callcenter/tombstones` | the cancels a shard received for callers it was not holding, for the `member_call` behind them |
