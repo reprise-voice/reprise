@@ -17,6 +17,7 @@
 -export([declare_exchange/2, declare_exchange/3]).
 -export([exchange_bind/2, exchange_bind/3]).
 -export([create_prechannel/1]).
+-export([reregister/1]).
 -export([disconnect/1]).
 -export([init/1
         ,handle_call/3
@@ -103,6 +104,15 @@ exchange_bind(Srv, Channel, Binding) ->
 create_prechannel(Srv) ->
     gen_server:cast(Srv, 'create_prechannel').
 
+%% @doc Ask a connection's manager to register with kz_amqp_connections
+%% again, with what it is now. kz_amqp_connections asks it as it restarts
+%% after a crash of its own, which lost its table while the connections
+%% lived on. A cast: the manager answers when it is free, with
+%% kz_amqp_connections:register_connection/1, and nobody waits on anybody.
+-spec reregister(pid()) -> 'ok'.
+reregister(Srv) ->
+    gen_server:cast(Srv, 'register_connection').
+
 -spec disconnect(pid()) -> 'ok'.
 disconnect(Srv) ->
     gen_server:cast(Srv, 'disconnect').
@@ -127,6 +137,12 @@ zone(#kz_amqp_connections{zone=Zone}) ->
 init([#kz_amqp_connection{}=Connection]) ->
     _ = process_flag('trap_exit', 'true'),
     kz_log:put_callid(?DEFAULT_LOG_SYSTEM_ID),
+    %% On every start, its supervisor's restart after a crash included: the
+    %% crashed process's record was deleted, and without this one nothing
+    %% names the broker primary again. (A restart of kz_amqp_connections
+    %% itself is covered by its asking, see reregister/1.) The connection
+    %% given here has not connected yet, so it registers as not available.
+    kz_amqp_connections:register_connection(Connection),
 
     {'ok', disconnected(Connection#kz_amqp_connection{manager=self()})}.
 
@@ -140,11 +156,11 @@ handle_call('get_connection', _, Connection) ->
 handle_call({info, _Items}, _From, #kz_amqp_connection{available=false} = Connection) ->
     {reply, {error, connection_not_available}, Connection};
 handle_call({info, Items}, _From, #kz_amqp_connection{connection = AMQPConnectionPID} = Connection) ->
-    {'reply', amqp_connection:info(AMQPConnectionPID, Items), Connection};
+    {'reply', connection_info(fun() -> amqp_connection:info(AMQPConnectionPID, Items) end), Connection};
 handle_call(info_keys, _From, #kz_amqp_connection{available=false} = Connection) ->
     {reply, {error, connection_not_available}, Connection};
 handle_call(info_keys, _From, #kz_amqp_connection{connection = AMQPConnectionPID} = Connection) ->
-    {'reply', amqp_connection:info_keys(AMQPConnectionPID), Connection};
+    {'reply', connection_info(fun() -> amqp_connection:info_keys(AMQPConnectionPID) end), Connection};
 handle_call('stop', _From, Connection) ->
     lager:info("stopping from ~p", [_From]),
     {'stop', 'normal', 'ok', disconnected(Connection)};
@@ -222,6 +238,11 @@ handle_cast('create_prechannel'
            ,#kz_amqp_connection{available='true'}=Connection
            ) ->
     _ = kz_process:spawn(fun establish_prechannel/1, [Connection]),
+    {'noreply', Connection, 'hibernate'};
+handle_cast('register_connection', Connection) ->
+    %% kz_amqp_connections restarted with an empty table (reregister/1):
+    %% tell it again who this is, and whether it is available now.
+    kz_amqp_connections:register_connection(Connection),
     {'noreply', Connection, 'hibernate'};
 handle_cast(_Msg, Connection) ->
     lager:debug("unhandled cast : ~p : ~p", [_Msg, Connection]),
@@ -311,6 +332,24 @@ code_change(_OldVsn, Connection, _Extra) ->
 %%%=============================================================================
 %%% Internal functions
 %%%=============================================================================
+
+%%------------------------------------------------------------------------------
+%% @doc What the broker says of the connection, or `connection_not_available'
+%% when the connection has gone and its `DOWN' is not handled yet. A call
+%% into a dead connection exits, and this server must not exit with it: the
+%% heartbeat of `kz_nodes' asks for `channel_max' every few seconds, and the
+%% first one after the broker dropped a node used to take this server down
+%% (the lab of 2026-09-28).
+%% @end
+%%------------------------------------------------------------------------------
+-spec connection_info(fun(() -> any())) -> any().
+connection_info(Info) ->
+    try Info()
+    catch
+        _E:_R ->
+            lager:info("amqp connection info not available: ~s: ~p", [_E, _R]),
+            {'error', 'connection_not_available'}
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc
