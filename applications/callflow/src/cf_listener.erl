@@ -182,7 +182,12 @@ handle_cast(_Msg, State) ->
 %% @end
 %%------------------------------------------------------------------------------
 -spec handle_info(any(), state()) -> kz_types:handle_info_ret_state(state()).
-handle_info({'forward', Msg}, #{queue := Queue}=State) ->
+%% A `callflow.resume' the shared listener took off its queue and handed to
+%% this instance (`cf_listener_sup:forward/1'). The resumed callflow is
+%% reached through this instance's queue, as a routed one is: the state
+%% keeps it as `instance_queue', and matching any other key dropped every
+%% resume as an unhandled message.
+handle_info({'forward', Msg}, #{instance_queue := Queue}=State) ->
     handle_msg(Msg, [{'queue', Queue}], State),
     {'noreply', State};
 
