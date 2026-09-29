@@ -25,7 +25,7 @@
 //// unavailable" row.
 
 import callcenter/ask
-import callcenter/offer
+import callcenter/call/originate
 import callcenter/system
 import callcenter/types.{
   type CancelReason, type EndResult, type Member, type OfferId, AgentHangup,
@@ -330,11 +330,11 @@ pub fn joined(member: Member) -> Nil {
 }
 
 /// The caller is being offered to an agent, by the offer `id`. The entry
-/// carries what that offer's legs' call ids start with (`offer.leg_prefix`):
+/// carries what that offer's legs' call ids start with (`originate.leg_prefix`):
 /// what tells whoever takes the caller over an answer from that ring from a
 /// bridge to anybody else.
 pub fn offered(member: Member, agent_id: String, at: Int, id: OfferId) -> Nil {
-  let leg_prefix = offer.leg_prefix(id)
+  let leg_prefix = originate.leg_prefix(id)
   change_queue_call(member, fn(document) {
     let offers = doc.get_list(document, ["offered_to"]) |> result.unwrap([])
     doc.set(
@@ -414,7 +414,7 @@ pub fn pickup_offered(
   at: Int,
   id: OfferId,
 ) -> Nil {
-  let leg_prefix = offer.leg_prefix(id)
+  let leg_prefix = originate.leg_prefix(id)
   change_queue_call(member, fn(document) {
     let offers = doc.get_list(document, ["offered_to"]) |> result.unwrap([])
     doc.set(

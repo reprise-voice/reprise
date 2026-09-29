@@ -1,6 +1,8 @@
 //// Watching a caller the node that was dispatching for them did not live to
 //// finish: what the switch's events mean when nothing rang from here.
 
+import callcenter/call/recovery
+import callcenter/call/talk
 import callcenter/member
 import callcenter/offer
 import callcenter/takeover
@@ -202,7 +204,7 @@ pub fn an_earlier_passages_mark_on_the_switch_test() {
         ]),
       ),
     ])
-  assert takeover.answered_at(channel, offered_at, offered_at + 40)
+  assert recovery.answered_at(channel, offered_at, offered_at + 40)
     == offered_at
   assert takeover.looked(
       recorded(["bob"]),
@@ -383,7 +385,7 @@ pub fn the_watch_waits_a_moment_after_the_bridge_ends_test() {
   assert move.over == False
   assert move.effects == []
   assert takeover.deadline_for(move.state, deadline, { offered_at + 63 } * 1000)
-    == { offered_at + 63 } * 1000 + offer.transfer_wait_ms
+    == { offered_at + 63 } * 1000 + talk.transfer_wait_ms
 
   // Counted in milliseconds from the end, whichever calendar second it fell
   // in: an end 900 ms into a second still waits the whole second.
@@ -473,31 +475,6 @@ fn marked_channel(answered_at: Int) -> events.Channel {
   ])
 }
 
-/// A bridge that happened while the shard was moving leaves no event for a
-/// new watcher to hear, so the caller's channel is asked about once. One
-/// bridged to another leg is a caller who is already talking.
-pub fn a_channel_already_bridged_test() {
-  assert takeover.already_through([marked_channel(offered_at + 2)], caller_leg)
-    == Some(#(agent_leg, Some("ann")))
-}
-
-/// One that is still on its own is a caller nobody has taken.
-pub fn a_channel_on_its_own_test() {
-  assert takeover.already_through([channel(caller_leg, [])], caller_leg) == None
-  assert takeover.already_through([], caller_leg) == None
-}
-
-/// Somebody else's channel is not this caller's.
-pub fn another_callers_channel_test() {
-  assert takeover.already_through(
-      [
-        channel("somebody-else", [#("Other-Leg-Call-ID", doc.String(agent_leg))]),
-      ],
-      caller_leg,
-    )
-    == None
-}
-
 /// The answer the offer that died never reported, taken off the channel: it
 /// carries the second the offer wrote when it answered, so the record, the
 /// CDR and the reply keep agreeing.
@@ -517,7 +494,7 @@ pub fn a_bridge_found_on_the_switch_test() {
 pub fn a_bridge_nothing_dated_test() {
   let channel =
     channel(caller_leg, [#("Other-Leg-Call-ID", doc.String(agent_leg))])
-  assert takeover.answered_at(channel, offered_at, offered_at + 40)
+  assert recovery.answered_at(channel, offered_at, offered_at + 40)
     == offered_at
 
   assert takeover.looked(
@@ -866,12 +843,12 @@ pub fn the_end_of_the_ring_ends_the_watch_test() {
       Heard(offered_at + 5, ring_ended("ORIGINATOR_CANCEL")),
       Heard(offered_at + 6, bridged_to(operator_leg)),
     ])
-    == [takeover.Tell(types.Failed(offer.originator_cancel))]
+    == [takeover.Tell(types.Failed(talk.originator_cancel))]
   assert played(named(["ann"]), [
       Heard(offered_at + 5, ring_ended("ORIGINATOR_CANCEL")),
       Silence(offered_at + 7),
     ])
-    == [takeover.Tell(types.Failed(offer.originator_cancel))]
+    == [takeover.Tell(types.Failed(talk.originator_cancel))]
 }
 
 /// The switches' first answer: a caller already through to one of the

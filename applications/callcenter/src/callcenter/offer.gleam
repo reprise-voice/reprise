@@ -78,6 +78,8 @@
 //// it never hangs the caller up after a call-off, and the caller is left to
 //// their callflow or to the dispatcher.
 
+import callcenter/call/originate
+import callcenter/call/talk
 import callcenter/recording
 import callcenter/system
 import callcenter/types.{
@@ -86,16 +88,13 @@ import callcenter/types.{
 }
 import gleam/dict.{type Dict}
 import gleam/erlang/process.{type Pid, type Subject}
-import gleam/erlang/reference.{type Reference}
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/string
 import kazoo/call.{type Call}
 import kazoo/doc.{type Value}
-import kazoo/endpoints
 import kazoo/events
-import kazoo/kazoo
 import kazoo/modb
 
 /// How much longer than the ring timeout the offer waits for the switch to
@@ -140,27 +139,6 @@ const identify_wait_ms = 2000
 /// already been told to the dispatcher by the action's `member_cancel`.
 /// Neither is an agent's miss.
 pub const cancel_wait_ms = 2000
-
-/// How long the end of an answered bridge waits to see whether it was a
-/// transfer before the caller is hung up.
-///
-/// An agent passing the caller on from their phone ends the bridge too: the
-/// caller is unbridged and the agent's leg goes. The switch fires its
-/// transfer events before it moves the caller, but they are published for
-/// other channels and can reach the offer a moment after the unbridge, so
-/// the offer waits this long for one before deciding the call is simply
-/// over. The caller of an agent who just hung up hears this much silence
-/// more before they are hung up themselves.
-pub const transfer_wait_ms = 1000
-
-/// The agent on an answer nobody could name.
-///
-/// It is a name and not an empty string on purpose: `kz_api` strips empty
-/// values, so an empty `Agent-ID` makes the `agent_answered` event fail
-/// validation and disappear, and leaves the caller's own CCV and the CDR with
-/// no agent at all. This says the same thing out loud, and everything
-/// downstream keeps working.
-pub const unknown_agent = "unknown"
 
 /// One offer as it runs: an `OfferRequest` without the member's delivery,
 /// which stays with the dispatcher.
@@ -257,7 +235,7 @@ pub type State {
     cancelled: Option(Int),
     /// The answered bridge has ended, and the offer is waiting a moment to
     /// see whether it was a transfer.
-    closing: Option(Closing),
+    closing: Option(talk.Closing),
     /// Whether any leg this offer rang has been seen: an event from a
     /// channel that is not the caller's and carries one of the agents'
     /// `Agent-ID`, or is one of `legs`. A ring that runs out without one rang
@@ -279,13 +257,6 @@ pub type State {
     /// call-off that overtook the answer takes back.
     marked: Option(Int),
   )
-}
-
-/// The end of an answered bridge that may yet turn out to be a transfer:
-/// what it is if it does not, when it happened (a calendar second), and
-/// until when the offer waits to find out (a monotonic millisecond).
-pub type Closing {
-  Closing(result: types.EndResult, at: Int, until: Int)
 }
 
 /// An answer waiting for a name: the leg that took the caller, when it took
@@ -332,8 +303,8 @@ fn run_guarded(ring: Ring) -> Nil {
   // command is built from, and `kapps_call` puts the routing context on it.
   // Without it the command goes out flagged `direct_call`, which is not what
   // a caller sitting in a queue is.
-  let caller = call.from_value(ring.call) |> sourced
-  let prefix = leg_prefix(ring.id)
+  let caller = call.from_value(ring.call) |> originate.sourced
+  let prefix = originate.leg_prefix(ring.id)
   case watch(ring, prefix) {
     // Without the call's events the offer cannot tell an answer from a ring
     // that ran out, and would report whichever it guessed at the end of the
@@ -348,7 +319,16 @@ fn run_guarded(ring: Ring) -> Nil {
 }
 
 fn ring_with(ring: Ring, caller: Call, prefix: String) -> Nil {
-  case ringable(ring, prefix) {
+  case
+    originate.endpoints(
+      call: ring.call,
+      account_id: ring.account_id,
+      agents: ring.agents,
+      devices: ring.devices,
+      settings: ring.settings,
+      prefix: prefix,
+    )
+  {
     [] -> {
       system.log(
         "offer for call " <> ring.call_id <> ": nobody has an endpoint to ring",
@@ -379,7 +359,7 @@ fn bridge(ring: Ring, caller: Call, endpoints: List(Value)) -> Nil {
       caller,
       endpoints,
       ring.settings.ring_timeout_s,
-      strategy(endpoints),
+      originate.strategy(endpoints),
       ringback(ring.settings),
     )
   {
@@ -397,7 +377,7 @@ fn bridge(ring: Ring, caller: Call, endpoints: List(Value)) -> Nil {
       waiting(
         ring,
         caller,
-        ringing(legs_of(endpoints)),
+        ringing(originate.legs_of(endpoints)),
         monotonic_ms() + { ring.settings.ring_timeout_s + grace_s() } * 1000,
       )
     }
@@ -428,117 +408,6 @@ pub const bridge_not_sent = "bridge_not_sent"
 /// it rang was ever seen.
 pub const nothing_rang = "nothing_rang"
 
-/// What this application calls itself to `kz_endpoint` and to `kapps_call`.
-///
-/// Two rules read it and both say the same thing about a queue call: it is
-/// not a direct call. A device whose call forward is `direct_calls_only`
-/// therefore does not forward one, which is right -- the queue picked this
-/// agent because they are here, and a caller who is queued should not be
-/// sent to somebody's mobile because their desk phone is on forward.
-const source = "callcenter"
-
-/// The key `kapps_call` keeps the name of whatever is placing the call
-/// under. `cf_exe` sets it to the callflow module; the offer sets it here
-/// because the call it rings from was rebuilt out of a member message and
-/// has been through no `cf_exe`.
-const source_key = "context-source"
-
-/// All the endpoints of all the agents, each marked with whose it is.
-///
-/// An agent whose devices cannot be built is left out rather than failing
-/// the offer: with a simultaneous ring the others should still ring, and the
-/// dispatcher hears about the miss either way.
-fn ringable(ring: Ring, prefix: String) -> List(Value) {
-  let ringing =
-    prefixed(ring.call, ring.settings.cid_prefix)
-    |> call.from_value
-    |> sourced
-  let account_db = kazoo.account_db(ring.account_id)
-  list.flat_map(ring.agents, fn(agent_id) {
-    case ring.devices {
-      None ->
-        endpoints.build_for_owned_devices(
-          ringing,
-          account_db,
-          agent_id,
-          properties(),
-        )
-      // A supervisor's pickup: the phones they named, built one device at a
-      // time as an agent's are, and a device that will not build left out.
-      Some(device_ids) ->
-        list.flat_map(device_ids, fn(device_id) {
-          case endpoints.build_with(ringing, device_id, properties()) {
-            Ok(built) -> built
-            Error(_reason) -> []
-          }
-        })
-    }
-    |> list.map(decorate(_, agent_id, ring.settings))
-  })
-  |> named_legs(prefix)
-}
-
-/// Give every endpoint the call id its leg will have: the prefix and its
-/// place in the ring.
-///
-/// `Outbound-Call-ID`, which `ecallmgr` passes to the switch as the leg's
-/// `origination_uuid`. The prefix is the offer's own, fresh for every offer,
-/// so no two legs anywhere share one and the offer can pick its legs' events
-/// out of the account's before any of them names the caller.
-pub fn named_legs(endpoints: List(Value), prefix: String) -> List(Value) {
-  list.index_map(endpoints, fn(endpoint, index) {
-    doc.set(
-      endpoint,
-      ["Outbound-Call-ID"],
-      doc.String(prefix <> "-" <> int.to_string(index + 1)),
-    )
-  })
-}
-
-/// Which agent each named leg rings, read back off the endpoints.
-pub fn legs_of(endpoints: List(Value)) -> Dict(String, String) {
-  list.fold(endpoints, dict.new(), fn(legs, endpoint) {
-    case
-      doc.get_string(endpoint, ["Outbound-Call-ID"]),
-      doc.get_string(endpoint, ["Custom-Channel-Vars", "Agent-ID"])
-    {
-      Ok(leg), Ok(agent_id) -> dict.insert(legs, leg, agent_id)
-      _, _ -> legs
-    }
-  })
-}
-
-/// The part every call id this offer gives its legs starts with: a function
-/// of the offer's own reference, so fresh for every offer, and one the
-/// dispatcher can write on the caller's record for a takeover to read
-/// (`records.offered`). A leg bridged to the caller whose id does not start
-/// with it is not one of this offer's.
-pub fn leg_prefix(id: OfferId) -> String {
-  prefix_of(id.serial)
-}
-
-@external(erlang, "callcenter_ffi", "leg_prefix")
-fn prefix_of(serial: Reference) -> String
-
-/// The call as the thing placing it: a queue, not a person dialling.
-///
-/// `kapps_call` reads this key to decide the routing context, and every
-/// name in `non_direct_modules` -- of which `callcenter` is one -- makes the
-/// call a `non_direct_call`. A call rebuilt from a member message has been
-/// through no `cf_exe`, so nothing has said it yet.
-pub fn sourced(call: Call) -> Call {
-  call.kvs_store(call, source_key, doc.String(source))
-}
-
-/// What `kz_endpoint:build/3` is told about the call it is building for.
-///
-/// Only `source`, and only so that a device forwarding on
-/// `direct_calls_only` refuses a queue call the way it refuses a ring
-/// group's. Everything else about the endpoint is the device's own.
-pub fn properties() -> Value {
-  doc.object([#("source", doc.String(source))])
-}
-
 /// What the caller hears while the phones ring: the hold music they were
 /// already hearing, which is the queue's own when it has one and the
 /// account's otherwise -- the same choice the callflow action makes when it
@@ -550,22 +419,6 @@ pub fn ringback(settings: OfferSettings) -> call.Ringback {
     None -> call.HoldMusic
     Some("") -> call.HoldMusic
     Some(media) -> call.Music(media)
-  }
-}
-
-/// Every endpoint rings at once, whether they are one agent's desk phone and
-/// softphone or several agents' phones: the offer is one ring, bounded by one
-/// timeout. A lone endpoint rings alone. `single` and `simultaneous` are the
-/// switch's own words for it.
-///
-/// It is decided by the endpoints and not by the agents. `ecallmgr` turns
-/// `single` into the `|` failover separator, so an agent with two devices
-/// rung `single` had the first for the whole ring timeout and the second
-/// never.
-pub fn strategy(endpoints: List(Value)) -> call.Strategy {
-  case endpoints {
-    [_one] -> call.Single
-    _many -> call.Simultaneous
   }
 }
 
@@ -722,7 +575,7 @@ fn learn(state: State, ring: Ring, event: Value) -> State {
       let agent =
         option.or(
           option.from_result(dict.get(state.legs, call_id)),
-          agent_of(event, ring.agents),
+          talk.agent_of(event, ring.agents),
         )
       let state = State(..state, rang: state.rang || option.is_some(agent))
       case answering_leg(state, call_id), agent {
@@ -1144,8 +997,8 @@ fn ending(state: State, ring: Ring, event: Value) -> Bool {
   case events.event_name(event) {
     Some("CHANNEL_DESTROY") -> from_caller || from_agent
     Some("CHANNEL_UNBRIDGE") -> from_caller
-    Some("CHANNEL_EXECUTE_COMPLETE") -> from_caller && is_bridge(event)
-    _ -> from_caller && is_bridge_error(event)
+    Some("CHANNEL_EXECUTE_COMPLETE") -> from_caller && talk.is_bridge(event)
+    _ -> from_caller && talk.is_bridge_error(event)
   }
 }
 
@@ -1190,28 +1043,22 @@ fn before_answer(
       over(state, [Tell(types.CallerGone)])
 
     Some("CHANNEL_EXECUTE_COMPLETE"), True, _ ->
-      case is_bridge(event) {
+      case talk.is_bridge(event) {
         False -> going(state)
         True -> unanswered(ring, state, event, now_ms)
       }
 
     _, _, answered ->
-      case answered, is_bridge_error(event) && from_caller {
+      case answered, talk.is_bridge_error(event) && from_caller {
         False, True -> unanswered(ring, state, event, now_ms)
         _, _ -> going(state)
       }
   }
 }
 
-/// What one event means once the caller is through to an agent.
-///
-/// The end of the bridge -- the caller unbridged, the agent's leg gone, the
-/// bridge command finished -- used to hang the caller up at once, which is
-/// today's `hangup_after_bridge`. An agent transferring the caller from
-/// their phone produces exactly those events, and the caller being put
-/// through to the transfer's target was hung up on the way. So the end
-/// waits `transfer_wait_ms` for a sign that it was a transfer, and a transfer
-/// ends the offer's part without touching the caller.
+/// What one event means once the caller is through to an agent: see
+/// `callcenter/call/talk`, which reads the end of the bridge and waits for a
+/// transfer.
 fn after_answer(
   ring: Ring,
   state: State,
@@ -1219,71 +1066,22 @@ fn after_answer(
   now: Int,
   now_ms: Int,
 ) -> Move {
-  let leg = events.call_id(event)
-  let from_caller = leg == Some(ring.call_id)
-  let from_agent = option.is_some(leg) && leg == state.bridged_to
-  case is_transfer(ring, state, event), events.event_name(event) {
-    True, _ -> transferred(state, now)
-
-    // The caller went: there is nobody left to hang up.
-    False, Some("CHANNEL_DESTROY") if from_caller ->
-      case state.closing {
-        Some(closing) ->
-          over(state, [Tell(types.Ended(closing.result, closing.at))])
-        None -> over(state, [Tell(types.Ended(types.CallerHangup, now))])
-      }
-
-    False, Some("CHANNEL_DESTROY") if from_agent ->
-      bridge_ended(state, types.Completed, now, now_ms)
-    False, Some("CHANNEL_UNBRIDGE") if from_caller ->
-      bridge_ended(state, types.Completed, now, now_ms)
-    False, Some("CHANNEL_EXECUTE_COMPLETE") if from_caller ->
-      case is_bridge(event) {
-        True -> bridge_ended(state, ended_as(event), now, now_ms)
-        False -> going(state)
-      }
-
-    // The caller bridged again, to a leg that is not the agent's, after the
-    // agent's bridge ended: an attended transfer putting them through to
-    // its target.
-    False, Some("CHANNEL_BRIDGE") if from_caller ->
-      case state.closing, events.other_leg_call_id(event) == state.bridged_to {
-        Some(_closing), False -> transferred(state, now)
-        _, _ -> going(state)
-      }
-
-    _, _ -> going(state)
-  }
+  talk.heard(talking(ring, state), event, now, now_ms) |> talked(state)
 }
 
-/// The answered bridge has ended; wait a moment to see whether it was a
-/// transfer. The first end is the one that counts.
-fn bridge_ended(
-  state: State,
-  result: types.EndResult,
-  now: Int,
-  now_ms: Int,
-) -> Move {
-  case state.closing {
-    Some(_already) -> going(state)
-    None -> going(State(..state, closing: Some(closing(result, now, now_ms))))
-  }
+/// The offer's answered call as `callcenter/call/talk` reads it.
+fn talking(ring: Ring, state: State) -> talk.Talk {
+  talk.Talk(caller: ring.call_id, leg: state.bridged_to, closing: state.closing)
 }
 
-/// The wait on an answered bridge's end, begun at `now` (a calendar second)
-/// and `now_ms` (a monotonic millisecond). A takeover's watch waits the same.
-pub fn closing(result: types.EndResult, now: Int, now_ms: Int) -> Closing {
-  Closing(result: result, at: now, until: now_ms + transfer_wait_ms)
-}
-
-/// The agent passed the caller on. The offer's part is over, as of the
-/// moment the agent's bridge ended, and the caller is left alone.
-fn transferred(state: State, now: Int) -> Move {
-  let at = case state.closing {
-    Some(closing) -> closing.at
-    None -> now
+/// What `talk` said, as the offer's move.
+fn talked(heard: talk.Heard, state: State) -> Move {
+  case heard {
+    talk.Talking(talking) -> going(State(..state, closing: talking.closing))
+    talk.Over(result, at) -> over(state, [Tell(types.Ended(result, at))])
+    talk.HangUp(result, at) ->
+      over(state, [HangUp, Tell(types.Ended(result, at))])
   }
-  over(state, [Tell(types.Ended(types.Transferred, at))])
 }
 
 /// Whether an event says the call is being transferred.
@@ -1294,42 +1092,7 @@ fn transferred(state: State, now: Int) -> Move {
 /// leg of this call, and the agent's leg going with a transfer as its cause,
 /// which is how `mod_reprise` reports a leg that sent a `REFER`.
 pub fn is_transfer(ring: Ring, state: State, event: Value) -> Bool {
-  is_transfer_of(ring.call_id, state.bridged_to, event)
-}
-
-/// The same, for whatever watches a caller: `callcenter/takeover` too.
-pub fn is_transfer_of(
-  call_id: String,
-  bridged_to: Option(String),
-  event: Value,
-) -> Bool {
-  let leg = events.call_id(event)
-  let from_agent = option.is_some(leg) && leg == bridged_to
-  let ours =
-    leg == Some(call_id)
-    || from_agent
-    || events.other_leg_call_id(event) == Some(call_id)
-  case events.event_name(event) {
-    Some("CHANNEL_TRANSFEREE")
-    | Some("CHANNEL_TRANSFEROR")
-    | Some("CHANNEL_REPLACED") -> ours
-    Some("CHANNEL_DESTROY") -> from_agent && ended_by_transfer(event)
-    _ -> False
-  }
-}
-
-/// Whether a leg's end says it was transferred away.
-fn ended_by_transfer(event: Value) -> Bool {
-  list.any(["Hangup-Cause", "Endpoint-Disposition", "Disposition"], fn(field) {
-    case doc.get_string(event, [field]) {
-      Ok(cause) ->
-        case string.uppercase(cause) {
-          "BLIND_TRANSFER" | "ATTENDED_TRANSFER" -> True
-          _ -> False
-        }
-      Error(Nil) -> False
-    }
-  })
+  talk.is_transfer_of(ring.call_id, state.bridged_to, event)
 }
 
 /// Whether the caller's bridge is this offer's answer, for a ring that has
@@ -1383,7 +1146,7 @@ fn bridged_after_call_off(state: State, event: Value) -> Move {
 /// over, and nothing is done to the caller's channel.
 fn bridged_elsewhere(state: State) -> Move {
   let reason = case state.cancelled {
-    Some(_ended) -> originator_cancel
+    Some(_ended) -> talk.originator_cancel
     None -> called_off
   }
   over(state, [Tell(types.Failed(reason))])
@@ -1394,18 +1157,10 @@ fn bridged_elsewhere(state: State) -> Move {
 /// see whether the caller's channel goes: the caller hanging up sends the
 /// bridge's end before the destroy.
 fn unanswered(ring: Ring, state: State, event: Value, now_ms: Int) -> Move {
-  case miss(event) {
-    Cancelled -> going(State(..state, cancelled: Some(now_ms + cancel_wait_ms)))
-    missed -> over(state, [Tell(miss_reply(missed, ring.agents))])
-  }
-}
-
-/// A bridge that ended cleanly after an answer is a completed call; one that
-/// ended any other way dropped, which the dispatcher counts differently.
-pub fn ended_as(event: Value) -> types.EndResult {
-  case cause(event) {
-    "SUCCESS" | "NORMAL_CLEARING" | "ANSWER" | "UNSPECIFIED" -> types.Completed
-    _other -> types.FailedBridge
+  case talk.miss(event) {
+    talk.Cancelled ->
+      going(State(..state, cancelled: Some(now_ms + cancel_wait_ms)))
+    missed -> over(state, [Tell(talk.miss_reply(missed, ring.agents))])
   }
 }
 
@@ -1450,7 +1205,7 @@ fn answer(
       pending: Some(pending),
       bridged_to: leg(agent_call_id, state.bridged_to),
     )
-  case option.or(named, answering_agent(ring.agents, event)) {
+  case option.or(named, talk.answering_agent(ring.agents, event)) {
     None -> going(state)
     Some(agent_id) -> {
       let #(state, effects) =
@@ -1478,7 +1233,7 @@ fn settled(
   }
   let #(agent_id, complaint) = case named {
     Some(agent_id) -> #(agent_id, [])
-    None -> #(unknown_agent, [Complain(unnamed(ring, agent_call_id))])
+    None -> #(talk.unknown_agent, [Complain(unnamed(ring, agent_call_id))])
   }
   let recording = case ring.settings.record {
     True -> [Record(agent_id, pending.at)]
@@ -1527,7 +1282,7 @@ fn unnamed(ring: Ring, agent_call_id: String) -> String {
   <> ", which named no agent of "
   <> string.join(ring.agents, ", ")
   <> "; answering as "
-  <> unknown_agent
+  <> talk.unknown_agent
 }
 
 /// Nothing was said for as long as the offer was willing to wait.
@@ -1556,7 +1311,7 @@ pub fn timed_out(ring: Ring, state: State, now: Int) -> Move {
         None -> over(state, [Tell(types.Ended(types.FailedBridge, now))])
       }
     None, False, Some(_until) ->
-      over(state, [Tell(types.Failed(originator_cancel))])
+      over(state, [Tell(types.Failed(talk.originator_cancel))])
     // The ring ran out and the switch never said so. It is the agents' miss
     // only if one of their phones was seen ringing; otherwise nothing rang,
     // and a miss would count against somebody whose phone never rang.
@@ -1568,9 +1323,6 @@ pub fn timed_out(ring: Ring, state: State, now: Int) -> Move {
   }
 }
 
-/// The failure a ring called off from the caller's side is reported as.
-pub const originator_cancel = "originator_cancel"
-
 fn reply(ring: Ring, told: OfferReply) -> Nil {
   process.send(ring.reply_to, #(ring.id, told))
 }
@@ -1578,190 +1330,6 @@ fn reply(ring: Ring, told: OfferReply) -> Nil {
 //
 // --- Reading an event ------------------------------------------------------
 //
-
-/// Why an offer produced no answer.
-pub type Miss {
-  /// Nobody picked up, or the ring ran out.
-  NotAnswered
-  /// A phone said it was busy.
-  WasBusy
-  /// A phone refused the call.
-  WasRejected
-  /// The ring was called off from the caller's side: the caller hung up, or
-  /// the callflow action ended the ring because they are leaving the queue.
-  Cancelled
-  /// Anything else: no route, no endpoint, an execution error.
-  Broke(reason: String)
-}
-
-/// The switch's word for how a bridge ended, in upper case.
-///
-/// `Application-Response` is what the bridge itself answered and is the
-/// specific one; `Hangup-Cause` is what the channel ended with. Neither is
-/// always there, and a bridge that says nothing at all is `UNSPECIFIED`,
-/// which is what `kapps_call_command` calls it too.
-pub fn cause(event: Value) -> String {
-  first_string(event, [
-    ["Application-Response"],
-    ["Hangup-Cause"],
-    ["Disposition"],
-  ])
-  |> option.unwrap("UNSPECIFIED")
-  |> string.uppercase
-}
-
-/// What an unanswered bridge's event says went wrong.
-pub fn miss(event: Value) -> Miss {
-  case cause(event) {
-    "USER_BUSY" | "BUSY" -> WasBusy
-    "CALL_REJECTED" | "REJECTED" -> WasRejected
-    "ORIGINATOR_CANCEL" -> Cancelled
-    "NO_ANSWER"
-    | "NO_USER_RESPONSE"
-    | "ALLOTTED_TIMEOUT"
-    | "PROGRESS_TIMEOUT"
-    | "RECOVERY_ON_TIMER_EXPIRE"
-    | "UNSPECIFIED" -> NotAnswered
-    other -> Broke(other)
-  }
-}
-
-/// The reply a miss is.
-///
-/// A busy or a rejection belongs to one agent, and with a simultaneous ring
-/// the switch gives one cause for all of them: there is no telling which
-/// phone said it, so every agent rung is reported as not having answered and
-/// the dispatcher counts a miss for each, which is what happened.
-pub fn miss_reply(miss: Miss, agents: List(String)) -> OfferReply {
-  case miss, agents {
-    NotAnswered, _ -> types.OfferNoAnswer(agents)
-    WasBusy, [agent] -> types.Busy(agent)
-    WasRejected, [agent] -> types.Rejected(agent)
-    WasBusy, _many -> types.OfferNoAnswer(agents)
-    WasRejected, _many -> types.OfferNoAnswer(agents)
-    Cancelled, _ -> types.Failed(originator_cancel)
-    Broke(reason), _ -> types.Failed(reason)
-  }
-}
-
-/// Whether an event is the end of a `bridge` command.
-pub fn is_bridge(event: Value) -> Bool {
-  doc.get_string(event, ["Application-Name"]) == Ok("bridge")
-}
-
-/// Whether an event is the switch refusing a `bridge` outright, which is an
-/// `error` and not a call event at all.
-pub fn is_bridge_error(event: Value) -> Bool {
-  doc.get_string(event, ["Event-Category"]) == Ok("error") && is_bridge(event)
-}
-
-/// Which of the agents rung answered, as far as one event can say.
-///
-/// One agent rung is one agent answering. With several the bridge event
-/// belongs to the caller, so the answer is the `Agent-ID` the endpoint put on
-/// the agent's leg, which reaches here on that leg's own events.
-pub fn answering_agent(agents: List(String), event: Value) -> Option(String) {
-  case agents {
-    [one] -> Some(one)
-    _many -> agent_of(event, agents)
-  }
-}
-
-/// The agent an event's channel belongs to: the `Agent-ID` this application
-/// put on the leg, or the user who owns the device that authorised it.
-pub fn agent_of(event: Value, agents: List(String)) -> Option(String) {
-  first_string(event, [
-    ["Custom-Channel-Vars", "Agent-ID"],
-    ["Custom-Channel-Vars", "Owner-ID"],
-  ])
-  |> option.then(fn(agent_id) {
-    case list.contains(agents, agent_id) {
-      True -> Some(agent_id)
-      False -> None
-    }
-  })
-}
-
-fn first_string(value: Value, paths: List(List(String))) -> Option(String) {
-  case paths {
-    [] -> None
-    [path, ..rest] ->
-      case doc.get_string(value, path) {
-        Ok("") -> first_string(value, rest)
-        Ok(text) -> Some(text)
-        Error(Nil) -> first_string(value, rest)
-      }
-  }
-}
-
-//
-// --- The caller's identity, and the agents' endpoints ----------------------
-//
-
-/// The call the agents' phones see: the queue's prefix in front of the
-/// caller's name, so an agent knows which queue rang before they answer.
-pub fn prefixed(call: Value, prefix: Option(String)) -> Value {
-  case prefix {
-    None -> call
-    Some("") -> call
-    Some(prefix) -> {
-      let name = doc.get_string(call, ["Caller-ID-Name"]) |> unwrap_string
-      doc.set(call, ["Caller-ID-Name"], doc.String(prefix <> name))
-    }
-  }
-}
-
-fn unwrap_string(read: Result(String, Nil)) -> String {
-  case read {
-    Ok(text) -> text
-    Error(Nil) -> ""
-  }
-}
-
-/// One endpoint, marked with the agent it rings and with the queue's own
-/// outbound caller ID when it leaves the account.
-///
-/// The `Agent-ID` is what makes an answer attributable: it travels with the
-/// agent's leg and comes back on that leg's events and on its CDR.
-pub fn decorate(
-  endpoint: Value,
-  agent_id: String,
-  settings: OfferSettings,
-) -> Value {
-  endpoint
-  |> doc.set(["Custom-Channel-Vars", "Agent-ID"], doc.String(agent_id))
-  |> outbound_caller_id(settings)
-}
-
-fn outbound_caller_id(endpoint: Value, settings: OfferSettings) -> Value {
-  case is_external(endpoint) {
-    False -> endpoint
-    True ->
-      endpoint
-      |> set_some(["Outbound-Caller-ID-Name"], settings.outbound_caller_id_name)
-      |> set_some(
-        ["Outbound-Caller-ID-Number"],
-        settings.outbound_caller_id_number,
-      )
-  }
-}
-
-fn set_some(value: Value, path: List(String), to: Option(String)) -> Value {
-  case to {
-    Some("") | None -> value
-    Some(text) -> doc.set(value, path, doc.String(text))
-  }
-}
-
-/// Whether an endpoint leaves the account.
-///
-/// `kz_endpoint` builds a device on this account with `Invite-Format`
-/// `endpoint`; a call forward to a number outside it is a `loopback` or a
-/// `route` carrying a `To-DID`. The queue's outbound caller ID is for the
-/// second kind, where the contact is somebody else's.
-pub fn is_external(endpoint: Value) -> Bool {
-  doc.get_string(endpoint, ["Invite-Format"]) != Ok("endpoint")
-}
 
 //
 // --- The call's events -----------------------------------------------------

@@ -5,7 +5,6 @@
 //// message carries are empty here and the payloads are exactly the fields
 //// this module puts on them, which is what these check.
 
-import callcenter/announce
 import callcenter/caller
 import callcenter/status as holder
 import callcenter/types
@@ -204,80 +203,6 @@ pub fn a_holder_says_how_it_reaches_a_caller_test() {
 //
 // --- The caller's media ----------------------------------------------------
 //
-
-fn an_event(name: String, fields: List(#(String, doc.Value))) -> doc.Value {
-  doc.object([
-    #("Event-Category", doc.String("call_event")),
-    #("Event-Name", doc.String(name)),
-    ..fields
-  ])
-}
-
-/// Nothing is played until the switch says the channel is up, and the switch
-/// says it two ways: `CHANNEL_ANSWER` on a channel that was ringing, and the
-/// execute-complete for `answer` either way. A channel some earlier action
-/// already answered sends only the second, so both count.
-pub fn the_channel_is_up_test() {
-  assert cf_callcenter.is_answered(an_event("CHANNEL_ANSWER", []))
-  assert cf_callcenter.is_answered(
-    an_event("CHANNEL_EXECUTE_COMPLETE", [
-      #("Application-Name", doc.String("answer")),
-      #("Channel-Answer-State", doc.String("answered")),
-    ]),
-  )
-
-  // The end of the greeting is not the channel coming up.
-  assert !cf_callcenter.is_answered(
-    an_event("CHANNEL_EXECUTE_COMPLETE", [
-      #("Application-Name", doc.String("noop")),
-    ]),
-  )
-  assert !cf_callcenter.is_answered(an_event("CHANNEL_EXECUTE_COMPLETE", []))
-  assert !cf_callcenter.is_answered(an_event("DTMF", []))
-}
-
-/// The loop may not sleep past the moment it gives up on an event the switch
-/// never sent: a caller with no announcements and a long `max_wait_time` has
-/// nothing else to wake it, and would wait the whole of it in silence.
-pub fn the_loop_wakes_for_a_media_ceiling_test() {
-  let a_long_wait = 600_000
-
-  // Answering: five seconds from when the answer went out, and no longer.
-  assert cf_callcenter.wake_ms(
-      cf_callcenter.Answering(since: 100, greeting: None),
-      a_long_wait,
-      100,
-    )
-    == 5000
-  assert cf_callcenter.wake_ms(
-      cf_callcenter.Answering(since: 100, greeting: None),
-      a_long_wait,
-      103,
-    )
-    == 2000
-
-  // Never zero, or a loop already past its ceiling spins.
-  assert cf_callcenter.wake_ms(
-      cf_callcenter.Answering(since: 100, greeting: None),
-      a_long_wait,
-      200,
-    )
-    == 10
-
-  // A deadline of the caller's own that comes first still wins.
-  assert cf_callcenter.wake_ms(
-      cf_callcenter.Answering(since: 100, greeting: None),
-      1500,
-      100,
-    )
-    == 1500
-
-  // On hold nothing is owed, so the caller's own deadline is the whole of it.
-  assert cf_callcenter.wake_ms(cf_callcenter.Held, a_long_wait, 100)
-    == a_long_wait
-  assert cf_callcenter.wake_ms(cf_callcenter.Playing(since: 100), 90_000, 100)
-    == 60_000
-}
 
 //
 // --- The member messages ---------------------------------------------------
@@ -752,7 +677,7 @@ pub fn a_position_event_with_nothing_in_it_test() {
 
 /// The status answer that let the caller in already counted the agents. With
 /// none, the no-agent clock starts at the join and not at the first position
-/// event, which a caller can miss: they would wait
+/// event, which the lab of 2026-09-14 showed a caller can miss: they waited
 /// out the whole `max_wait_time` of thirty seconds in a queue configured to
 /// give up on them after ten with nobody there.
 pub fn the_no_agent_clock_starts_from_the_status_that_let_the_caller_in_test() {
@@ -801,155 +726,6 @@ pub fn the_no_agent_clock_starts_from_the_status_that_let_the_caller_in_test() {
 // channel's events, in both orders the two commands can land in.
 //
 
-const greeting = "queue-welcome"
-
-fn answered() -> doc.Value {
-  an_event("CHANNEL_ANSWER", [])
-}
-
-/// The switch has finished the greeting or an announcement.
-fn play_over() -> doc.Value {
-  an_event("CHANNEL_EXECUTE_COMPLETE", [
-    #("Application-Name", doc.String("noop")),
-  ])
-}
-
-/// The offer's bridge on the caller's channel came to nothing.
-fn offer_over() -> doc.Value {
-  an_event("CHANNEL_EXECUTE_COMPLETE", [
-    #("Application-Name", doc.String("bridge")),
-    #("Application-Response", doc.String("NO_ANSWER")),
-  ])
-}
-
-/// What the media does for a script of events: every cue in order, and
-/// where it ends up.
-fn cued(
-  media: cf_callcenter.Media,
-  script: List(#(Int, doc.Value)),
-) -> #(cf_callcenter.Media, List(cf_callcenter.Cue)) {
-  cueing(media, script, [])
-}
-
-fn cueing(
-  media: cf_callcenter.Media,
-  script: List(#(Int, doc.Value)),
-  done: List(cf_callcenter.Cue),
-) -> #(cf_callcenter.Media, List(cf_callcenter.Cue)) {
-  case script {
-    [] -> #(media, list.reverse(done))
-    [#(at, event), ..rest] -> {
-      let #(media, cue) = cf_callcenter.on_event(media, event, at)
-      cueing(media, rest, [cue, ..done])
-    }
-  }
-}
-
-/// The hold landed first and the bridge broke it, which is the order that
-/// used to fail: the caller was on hold, the offer's bridge interrupted
-/// it, and nobody answered. The bridge threw the queue away, so the caller
-/// is silent until this puts them back on hold.
-pub fn hold_then_bridge_test() {
-  assert cued(cf_callcenter.Held, [#(120, offer_over())])
-    == #(cf_callcenter.Held, [cf_callcenter.Hold])
-}
-
-/// The bridge landed first, while the channel was still being answered. The
-/// answer's own event queues the hold behind the ringing bridge, where it
-/// waits and runs when the ring comes to nothing; the hold queued at the
-/// end of the ring is behind that one and never runs, which is harmless
-/// where a caller left in silence is not.
-pub fn bridge_then_hold_test() {
-  assert cued(cf_callcenter.Answering(since: 100, greeting: None), [
-      #(100, answered()),
-      #(112, offer_over()),
-    ])
-    == #(cf_callcenter.Held, [cf_callcenter.Hold, cf_callcenter.Hold])
-}
-
-/// The bridge cut the greeting short. The greeting's end never comes -- the
-/// bridge threw it away -- so the end of the ring is what puts the caller
-/// on hold, and a late end-of-play is not a second hold.
-pub fn the_bridge_cuts_the_greeting_test() {
-  assert cued(cf_callcenter.Answering(since: 100, greeting: Some(greeting)), [
-      #(100, answered()),
-      #(103, offer_over()),
-      #(104, play_over()),
-    ])
-    == #(cf_callcenter.Held, [
-      cf_callcenter.PlayGreeting(greeting),
-      cf_callcenter.Hold,
-      cf_callcenter.Nothing,
-    ])
-}
-
-/// The bridge came and went before the switch had said the channel was up.
-/// Nothing is owed until it does: the answer brings the greeting or the
-/// hold with it.
-pub fn a_ring_over_before_the_channel_is_up_test() {
-  assert cued(cf_callcenter.Answering(since: 100, greeting: None), [
-      #(101, offer_over()),
-      #(102, answered()),
-    ])
-    == #(cf_callcenter.Held, [cf_callcenter.Nothing, cf_callcenter.Hold])
-}
-
-/// The greeting plays to its end and hold follows it, as it always did; an
-/// announcement ends the same way.
-pub fn hold_follows_the_greeting_test() {
-  assert cued(cf_callcenter.Answering(since: 100, greeting: Some(greeting)), [
-      #(100, answered()),
-      #(108, play_over()),
-    ])
-    == #(cf_callcenter.Held, [
-      cf_callcenter.PlayGreeting(greeting),
-      cf_callcenter.Hold,
-    ])
-  assert cued(cf_callcenter.Playing(since: 130), [#(140, play_over())])
-    == #(cf_callcenter.Held, [cf_callcenter.Hold])
-}
-
-/// The end of an offer is the end of a `bridge` on the caller's channel and
-/// nothing else: not the greeting's end, not the answer, and not the bridge
-/// beginning.
-pub fn the_end_of_an_offer_test() {
-  assert cf_callcenter.is_offer_over(offer_over())
-  assert !cf_callcenter.is_offer_over(play_over())
-  assert !cf_callcenter.is_offer_over(
-    an_event("CHANNEL_EXECUTE_COMPLETE", [
-      #("Application-Name", doc.String("answer")),
-      #("Channel-Answer-State", doc.String("answered")),
-    ]),
-  )
-  assert !cf_callcenter.is_offer_over(
-    an_event("CHANNEL_BRIDGE", [#("Application-Name", doc.String("bridge"))]),
-  )
-}
-
-/// Missing answer confirmation never starts media; only playback has a fallback.
-pub fn only_playback_timeout_ends_in_hold_test() {
-  assert cf_callcenter.overdue_cue(
-      cf_callcenter.Answering(since: 100, greeting: None),
-      104,
-    )
-    == #(
-      cf_callcenter.Answering(since: 100, greeting: None),
-      cf_callcenter.Nothing,
-    )
-  assert cf_callcenter.overdue_cue(
-      cf_callcenter.Answering(since: 100, greeting: Some(greeting)),
-      105,
-    )
-    == #(
-      cf_callcenter.Answering(since: 100, greeting: Some(greeting)),
-      cf_callcenter.Nothing,
-    )
-  assert cf_callcenter.overdue_cue(cf_callcenter.Playing(since: 100), 160)
-    == #(cf_callcenter.Held, cf_callcenter.Hold)
-  assert cf_callcenter.overdue_cue(cf_callcenter.Held, 10_000)
-    == #(cf_callcenter.Held, cf_callcenter.Nothing)
-}
-
 /// How long the dispatcher's offer can still be ringing: the ring timeout
 /// it said, and the same grace the dispatcher gives the offer itself.
 pub fn how_long_an_offer_can_ring_test() {
@@ -963,102 +739,6 @@ pub fn how_long_an_offer_can_ring_test() {
   assert cf_callcenter.offer_ceiling(offer, 1000) == 1020
   assert cf_callcenter.offer_ceiling(doc.object([]), 1000) == 1005
 }
-
 //
 // --- The announcement ------------------------------------------------------
 //
-
-/// A queue that says where the caller is, and nothing else.
-fn position_only() -> announce.Settings {
-  announce.Settings(
-    media: None,
-    interval_s: 30,
-    position: True,
-    prompts: announce.prompts(doc.object([])),
-  )
-}
-
-fn the_announcement() -> List(call.MacroItem) {
-  announce.items(position_only(), Some(3), "en-us")
-}
-
-/// On hold, the announcement is played in place of the hold and the media
-/// is playing until its end. Anywhere else nothing is said: the interval is
-/// spent, which `speak` decides, and the caller goes on hearing what they
-/// were hearing.
-pub fn an_announcement_interrupts_the_hold_and_nothing_else_test() {
-  assert cf_callcenter.announcement_cue(
-      cf_callcenter.Held,
-      position_only(),
-      Some(3),
-      "en-us",
-      130,
-    )
-    == #(
-      cf_callcenter.Playing(since: 130),
-      cf_callcenter.Announce(the_announcement()),
-    )
-  assert cf_callcenter.announcement_cue(
-      cf_callcenter.Playing(since: 120),
-      position_only(),
-      Some(3),
-      "en-us",
-      130,
-    )
-    == #(cf_callcenter.Playing(since: 120), cf_callcenter.Nothing)
-  assert cf_callcenter.announcement_cue(
-      cf_callcenter.Answering(since: 129, greeting: None),
-      position_only(),
-      Some(3),
-      "en-us",
-      130,
-    )
-    == #(
-      cf_callcenter.Answering(since: 129, greeting: None),
-      cf_callcenter.Nothing,
-    )
-}
-
-/// A queue with nothing to say leaves the caller on hold rather than
-/// interrupting it with silence.
-pub fn nothing_to_announce_leaves_the_hold_alone_test() {
-  assert cf_callcenter.announcement_cue(
-      cf_callcenter.Held,
-      position_only(),
-      None,
-      "en-us",
-      130,
-    )
-    == #(cf_callcenter.Held, cf_callcenter.Nothing)
-}
-
-/// The announcement plays to its end and hold follows it.
-pub fn hold_follows_the_announcement_test() {
-  let #(media, _cue) =
-    cf_callcenter.announcement_cue(
-      cf_callcenter.Held,
-      position_only(),
-      Some(3),
-      "en-us",
-      130,
-    )
-  assert cued(media, [#(138, play_over())])
-    == #(cf_callcenter.Held, [cf_callcenter.Hold])
-}
-
-/// The offer's bridge cut the announcement short. Its end never comes, so
-/// the end of the ring is what puts the caller back on hold, and a late
-/// end-of-play is not a second hold. The next announcement falls due at
-/// once, which `caller` decides.
-pub fn the_bridge_cuts_the_announcement_test() {
-  let #(media, _cue) =
-    cf_callcenter.announcement_cue(
-      cf_callcenter.Held,
-      position_only(),
-      Some(3),
-      "en-us",
-      130,
-    )
-  assert cued(media, [#(145, offer_over()), #(146, play_over())])
-    == #(cf_callcenter.Held, [cf_callcenter.Hold, cf_callcenter.Nothing])
-}

@@ -49,6 +49,7 @@
 //// call. See `asks_ring_to_read_keys`.
 
 import callcenter/announce
+import callcenter/call/media
 import callcenter/caller
 import callcenter/fields
 import callcenter/member as member_message
@@ -81,17 +82,10 @@ const status_timeout_ms = 3000
 /// arriving ends instead of waiting for ever.
 const longest_call_s = 14_400
 
-/// The longest the greeting or an announcement is believed to be still
-/// playing before hold is put back whatever the switch has said. A caller
-/// left in silence because one execute-complete went missing is worse than
-/// hold starting a little early.
-const longest_play_s = 60
-
 /// Allow five seconds per answer attempt, with one retry and a fixed total
 /// budget. `Insert-At: now` only bypasses Kazoo's queue; the switch must still
 /// confirm execution before dispatch can interrupt its private event queue.
-const longest_answer_s = 5
-
+/// The first attempt's share is `media.longest_answer_s`.
 const answer_budget_ms = 10_000
 
 /// How much longer than its ring timeout an offer is believed to be still
@@ -196,39 +190,6 @@ pub fn usable(read: Result(Value, kazoo.Error)) -> Result(Value, String) {
   }
 }
 
-/// Where the caller's media is.
-///
-/// The three states are in the order a caller meets them. Nothing is played
-/// on a channel the switch has not said is up, and hold goes on only once
-/// whatever was playing is over, so the states say what is owed: an answer,
-/// an end of play, or nothing.
-pub type Media {
-  /// `answer` has gone out and the switch has not said the channel is up.
-  /// Nothing is played until it has: a greeting on a channel that is still
-  /// ringing is early media.
-  Answering(since: Int, greeting: Option(String))
-  /// The greeting or an announcement is playing. Hold goes back on once
-  /// that is over.
-  Playing(since: Int)
-  /// Hold music, which is where a waiting caller spends their time.
-  Held
-}
-
-/// What the switch is told about the caller's media after one of the
-/// channel's own events, or after waiting too long for one.
-pub type Cue {
-  /// Play the greeting.
-  PlayGreeting(media: String)
-  /// Play an announcement in place of the hold. It interrupts the hold and
-  /// not a bridge: sent to a channel whose agents are ringing, it waits
-  /// behind the ring.
-  Announce(items: List(call.MacroItem))
-  /// Put the caller on hold, behind whatever the channel is doing.
-  Hold
-  /// Nothing is owed.
-  Nothing
-}
-
 /// Everything the loop needs about one waiting caller.
 type Waiting {
   Waiting(
@@ -243,7 +204,7 @@ type Waiting {
     moh: Option(String),
     language: String,
     state: caller.Caller,
-    media: Media,
+    media: media.Media,
     published: Bool,
     /// Which of the dispatcher's messages about the caller in this queue
     /// are about this passage (`is_own`).
@@ -422,7 +383,7 @@ pub fn run(
       moh: fields.some_string(queue, ["moh"]),
       language: option.unwrap(call.language(call), "en-us"),
       state: arriving(joined, status),
-      media: Answering(
+      media: media.Answering(
         since: runtime.now(),
         greeting: fields.some_string(queue, ["greeting"]),
       ),
@@ -456,7 +417,7 @@ pub fn run(
         waiting,
         member,
         sent + answer_budget_ms,
-        sent + longest_answer_s * 1000,
+        sent + media.longest_answer_s * 1000,
         False,
       )
     }
@@ -514,7 +475,7 @@ fn await_answer(
                   }
                 }
                 True, _, _ -> {
-                  case answer_error(event), is_answered(event) {
+                  case media.answer_error(event), media.is_answered(event) {
                     True, _ -> answer_failed(waiting)
                     False, True -> {
                       // Recheck destruction and waiting budgets at the event
@@ -526,7 +487,10 @@ fn await_answer(
                             True -> answer_failed(waiting)
                             False ->
                               admit(
-                                cued(waiting, up(waiting.media, runtime.now())),
+                                cued(
+                                  waiting,
+                                  media.up(waiting.media, runtime.now()),
+                                ),
                                 member,
                               )
                           }
@@ -646,7 +610,7 @@ fn wait_alive(waiting: Waiting, now: Int) -> Nil {
     None -> {
       let waiting = waiting |> overdue(now) |> speak(now)
       case
-        waiting.runtime.receive_event(wake_ms(
+        waiting.runtime.receive_event(media.wake_ms(
           waiting.media,
           caller.next_wake_ms(waiting.state, waiting.limits, now),
           now,
@@ -656,23 +620,6 @@ fn wait_alive(waiting: Waiting, now: Int) -> Nil {
         Ok(event) -> heard(waiting, event)
       }
     }
-  }
-}
-
-/// How long the loop may sleep: the caller's own next deadline, or the end of
-/// a media ceiling if that comes first. Without this a caller with no
-/// announcements and a long `max_wait_time` has nothing to wake the loop, and
-/// it would sleep straight past the moment it gives up on an event the switch
-/// never sent.
-pub fn wake_ms(media: Media, next: Int, now: Int) -> Int {
-  let ceiling = case media {
-    Answering(since, _greeting) -> Some(longest_answer_s - { now - since })
-    Playing(since) -> Some(longest_play_s - { now - since })
-    Held -> None
-  }
-  case ceiling {
-    None -> next
-    Some(seconds) -> int.max(int.min(next, seconds * 1000), 10)
   }
 }
 
@@ -691,7 +638,7 @@ fn speak(waiting: Waiting, now: Int) -> Waiting {
     True ->
       cued(
         Waiting(..waiting, state: caller.announced(waiting.state, at: now)),
-        announcement_cue(
+        media.announcement_cue(
           waiting.media,
           waiting.announcement,
           waiting.state.position,
@@ -702,89 +649,10 @@ fn speak(waiting: Waiting, now: Int) -> Waiting {
   }
 }
 
-/// What an announcement falling due means for the media: on hold it is
-/// played, in place of the hold, and the media is playing until its end.
-/// Anywhere else -- the channel not yet up, the greeting or an earlier
-/// announcement still going -- nothing is said.
-///
-/// The announcement interrupts. Hold never finishes on its own, so an
-/// announcement queued behind it would never be heard, and callers would
-/// never be told their position. It is not sent
-/// while an offer is known to be ringing, and the switch side keeps it
-/// behind a bridge it did not know about.
-pub fn announcement_cue(
-  media: Media,
-  settings: announce.Settings,
-  position: Option(Int),
-  language: String,
-  now: Int,
-) -> #(Media, Cue) {
-  case media {
-    Held ->
-      case announce.items(settings, position, language) {
-        [] -> #(media, Nothing)
-        items -> #(Playing(since: now), Announce(items))
-      }
-    _not_on_hold -> #(media, Nothing)
-  }
-}
-
 /// Restore hold after a missing playback completion. Answer timeouts are
 /// handled only by setup recovery and never start media.
 fn overdue(waiting: Waiting, now: Int) -> Waiting {
-  cued(waiting, overdue_cue(waiting.media, now))
-}
-
-pub fn overdue_cue(media: Media, now: Int) -> #(Media, Cue) {
-  case media {
-    Playing(since) if now - since >= longest_play_s -> #(Held, Hold)
-    _ -> #(media, Nothing)
-  }
-}
-
-/// What one of the channel's own events means for the media: where it
-/// leaves it, and what to send.
-///
-/// The end of an offer's bridge is the one event that does not follow from
-/// the state. The bridge interrupted whatever was running and threw away
-/// whatever was queued, and now nothing is: the caller goes back on hold
-/// from wherever they were. Only a channel not yet confirmed up is left
-/// alone, because its answer is still owed and brings the greeting or the
-/// hold with it.
-pub fn on_event(media: Media, event: Value, now: Int) -> #(Media, Cue) {
-  case events.event_name(event) {
-    Some("CHANNEL_ANSWER") -> up(media, now)
-    Some("CHANNEL_EXECUTE_COMPLETE") ->
-      case is_offer_over(event), media {
-        True, Answering(..) -> #(media, Nothing)
-        True, _ -> #(Held, Hold)
-        False, Answering(..) ->
-          case is_answered(event) {
-            True -> up(media, now)
-            False -> #(media, Nothing)
-          }
-        False, Playing(..) ->
-          case announce.is_finished(event) {
-            True -> #(Held, Hold)
-            False -> #(media, Nothing)
-          }
-        False, Held -> #(media, Nothing)
-      }
-    _other -> #(media, Nothing)
-  }
-}
-
-/// The channel is up: the greeting starts, or hold does when there is none.
-/// Anything but `Answering` has been through here already.
-fn up(media: Media, now: Int) -> #(Media, Cue) {
-  case media {
-    Answering(_since, Some(greeting)) -> #(
-      Playing(since: now),
-      PlayGreeting(greeting),
-    )
-    Answering(_since, None) -> #(Held, Hold)
-    _already_up -> #(media, Nothing)
-  }
+  cued(waiting, media.overdue_cue(waiting.media, now))
 }
 
 /// Send what a cue says, and remember where that leaves the media.
@@ -794,64 +662,15 @@ fn up(media: Media, now: Int) -> #(Media, Cue) {
 /// to nothing, which is when the caller needs it. The announcement
 /// interrupts the hold, which is the only way it is ever heard, and the
 /// switch side keeps even that behind a bridge.
-fn cued(waiting: Waiting, moved: #(Media, Cue)) -> Waiting {
-  let #(media, cue) = moved
+fn cued(waiting: Waiting, moved: #(media.Media, media.Cue)) -> Waiting {
+  let #(now_playing, cue) = moved
   case cue {
-    PlayGreeting(greeting) -> call.play(waiting.call, greeting)
-    Announce(items) -> announce.play(waiting.call, items)
-    Hold -> announce.resume_hold(waiting.call, waiting.moh)
-    Nothing -> Nil
+    media.PlayGreeting(greeting) -> call.play(waiting.call, greeting)
+    media.Announce(items) -> announce.play(waiting.call, items)
+    media.Hold -> announce.resume_hold(waiting.call, waiting.moh)
+    media.Nothing -> Nil
   }
-  Waiting(..waiting, media: media)
-}
-
-/// Whether an event is the end of an offer's bridge on the caller's channel:
-/// the switch has finished ringing the agents, and the caller is still here
-/// to hear it. A bridge that was answered ends after the caller is gone and
-/// is never seen by the loop that reads this.
-pub fn is_offer_over(event: Value) -> Bool {
-  events.event_name(event) == Some("CHANNEL_EXECUTE_COMPLETE")
-  && doc.get_string(event, ["Application-Name"]) == Ok("bridge")
-}
-
-/// Whether an event is the switch saying the channel is up.
-///
-/// Two spellings, because a channel that was already answered when this
-/// action began -- a transfer into a queue, an earlier callflow action --
-/// never sends a second `CHANNEL_ANSWER`, but the switch still acknowledges
-/// having run the `answer` application.
-pub fn is_answered(event: Value) -> Bool {
-  category(event) == "call_event"
-  && !answer_error(event)
-  && case events.event_name(event) {
-    Some("CHANNEL_ANSWER") -> True
-    Some("CHANNEL_EXECUTE_COMPLETE") ->
-      doc.get_string(event, ["Application-Name"]) == Ok("answer")
-      // FreeSWITCH answer has no application response (`_none_`). The
-      // completion carries the channel's actual answer state, even when
-      // this was an idempotent answer of an already-answered channel.
-      && doc.get_string(event, ["Channel-Answer-State"]) == Ok("answered")
-    _ -> False
-  }
-}
-
-pub fn answer_error(event: Value) -> Bool {
-  case category(event), events.event_name(event) {
-    "error", _ ->
-      doc.get_string(event, ["Request", "Application-Name"]) == Ok("answer")
-    "call_event", Some("CHANNEL_EXECUTE_COMPLETE") ->
-      doc.get_string(event, ["Application-Name"]) == Ok("answer")
-      && {
-        case string_at(event, "Application-Response") {
-          Some("ERROR") | Some("FAIL") | Some("FAILURE") -> True
-          Some(response) -> string.starts_with(response, "-ERR")
-          None -> False
-        }
-        || string_at(event, "Application-Error-Code") != None
-        || string_at(event, "Application-Error-Msg") != None
-      }
-    _, _ -> False
-  }
+  Waiting(..waiting, media: now_playing)
 }
 
 fn own_event(waiting: Waiting, event: Value) -> Bool {
@@ -990,11 +809,14 @@ fn heard_own(waiting: Waiting, event: Value) -> Nil {
     "call_event", Some("CHANNEL_DESTROY") ->
       end_of(waiting, types.Hangup, "the caller hung up")
     "call_event", Some("CHANNEL_ANSWER") ->
-      wait(cued(waiting, on_event(waiting.media, event, waiting.runtime.now())))
+      wait(cued(
+        waiting,
+        media.on_event(waiting.media, event, waiting.runtime.now()),
+      ))
     "call_event", Some("CHANNEL_BRIDGE") -> answered_by(waiting, event)
     "call_event", Some("CHANNEL_EXECUTE_COMPLETE") -> {
       let now = waiting.runtime.now()
-      let waiting = case is_offer_over(event) {
+      let waiting = case media.is_offer_over(event) {
         True -> {
           system.log(
             "call "
@@ -1005,7 +827,7 @@ fn heard_own(waiting: Waiting, event: Value) -> Nil {
         }
         False -> waiting
       }
-      wait(cued(waiting, on_event(waiting.media, event, now)))
+      wait(cued(waiting, media.on_event(waiting.media, event, now)))
     }
     "callcenter", Some("member_position") ->
       wait(positioned(waiting, event, waiting.runtime.now()))
@@ -1226,7 +1048,7 @@ fn seen_through(through: Through, own: Bool, event: Value) -> Through {
           }
         "call_event", Some("CHANNEL_UNBRIDGE") -> Seen(True, word)
         "call_event", Some("CHANNEL_EXECUTE_COMPLETE") ->
-          case is_offer_over(event) {
+          case media.is_offer_over(event) {
             True -> Seen(True, word)
             False -> through
           }
@@ -1254,7 +1076,7 @@ fn not_through(waiting: Waiting, word: Value) -> Nil {
     Some("member_result") -> resulted(Waiting(..waiting, state: state), word)
     _ -> {
       let state = position_heard(state, word, now)
-      wait(cued(Waiting(..waiting, state: state), #(Held, Hold)))
+      wait(cued(Waiting(..waiting, state: state), #(media.Held, media.Hold)))
     }
   }
 }
@@ -1443,7 +1265,7 @@ fn ring_end(waiting: Waiting, event: Value) -> Option(RingEnd) {
   case own_event(waiting, event), category(event), events.event_name(event) {
     True, "call_event", Some("CHANNEL_DESTROY") -> Some(HungUp)
     True, "call_event", Some("CHANNEL_EXECUTE_COMPLETE") ->
-      case is_offer_over(event) {
+      case media.is_offer_over(event) {
         True -> Some(RingOver)
         False -> None
       }

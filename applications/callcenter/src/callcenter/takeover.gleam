@@ -27,8 +27,8 @@
 ////   breath and so did not start either;
 //// - it hangs the caller up when the agent's leg goes, which is today's
 ////   `hangup_after_bridge` -- unless the agent was passing the caller on:
-////   the end of the bridge waits `offer.transfer_wait_ms` for a sign of a
-////   transfer, read by the offer's own `offer.is_transfer_of`, exactly as an
+////   the end of the bridge waits `talk.transfer_wait_ms` for a sign of a
+////   transfer, read by the offer's own `talk.is_transfer_of`, exactly as an
 ////   offer does, and a transfer ends the watch without touching the caller.
 ////   A ring the dispatcher calls off is never answered, and its caller never
 ////   hung up, from then on (`overtaken`);
@@ -44,6 +44,8 @@
 //// an answer is something a test reads directly, without a switch
 //// underneath it.
 
+import callcenter/call/recovery
+import callcenter/call/talk
 import callcenter/offer
 import callcenter/recording
 import callcenter/system
@@ -110,7 +112,7 @@ pub type State {
     answered: Bool,
     /// The answered bridge has ended, and the watch is waiting a moment to
     /// see whether it was a transfer. The offer's own.
-    closing: Option(offer.Closing),
+    closing: Option(talk.Closing),
     /// Before an answer: the ring is over, or being called off, and the
     /// watch is only waiting to see how.
     ending: Option(Ending),
@@ -125,7 +127,7 @@ pub type State {
 /// A ring the watch knows is over or going, before anybody answered: the
 /// dispatcher called it off because the caller is leaving the queue or the
 /// agent was released (`offer.called_off`), or the caller's bridge ended
-/// with `ORIGINATOR_CANCEL` (`offer.originator_cancel`). Until `until`, a
+/// with `ORIGINATOR_CANCEL` (`talk.originator_cancel`). Until `until`, a
 /// monotonic millisecond, the caller's destroy is still `CallerGone`; after
 /// it the watch ends with `Failed(reason)`, which is nobody's miss. An
 /// answer counts only from one of the offer's own legs, and after a
@@ -169,7 +171,7 @@ pub fn beginning_for(request: Request) -> State {
 
 /// The agent on an answer nobody could name, which is the offer's own.
 pub fn unknown_agent() -> String {
-  offer.unknown_agent
+  talk.unknown_agent
 }
 
 /// One thing a watcher does to the world. Deciding them and doing them are
@@ -263,7 +265,7 @@ pub fn looked(
   channels: List(events.Channel),
   now: Int,
 ) -> Move {
-  case carried(channels, request.member.call_id), state.answered {
+  case recovery.carried(channels, request.member.call_id), state.answered {
     // On no switch. Whatever was going to happen to this caller has already
     // happened, and this node is the only thing left to say so.
     None, True ->
@@ -283,7 +285,7 @@ pub fn looked(
     // left the queue while the shard was moving, and their cancel is on its
     // way.
     Some(channel), False ->
-      case bridged(channel) {
+      case recovery.bridged(channel) {
         None -> going(state)
         Some(agent_call_id) -> {
           let marked = marked_agent(request, channel.doc)
@@ -299,7 +301,7 @@ pub fn looked(
                 agent_call_id,
                 agent_of(marked, request.agents),
                 option.is_some(marked),
-                answered_at(channel, request.offered_at, now),
+                recovery.answered_at(channel, request.offered_at, now),
               )
           }
         }
@@ -318,110 +320,15 @@ fn gone(request: Request, what: String) -> String {
   <> " when this node took the shard"
 }
 
-/// The caller's own channel, when a switch is carrying it.
-fn carried(
-  channels: List(events.Channel),
-  call_id: String,
-) -> Option(events.Channel) {
-  channels
-  |> list.filter(fn(channel) { channel.call_id == call_id })
-  |> list.first
-  |> option.from_result
-}
-
-/// The leg a channel is bridged to, when it is bridged to one.
-fn bridged(channel: events.Channel) -> Option(String) {
-  case channel.other_leg {
-    Some("") | None -> None
-    Some(other_leg) -> Some(other_leg)
-  }
-}
-
-/// Whether the switches say the caller is already through, and to which leg.
-pub fn already_through(
-  channels: List(events.Channel),
-  call_id: String,
-) -> Option(#(String, Option(String))) {
-  case carried(channels, call_id) {
-    None -> None
-    Some(channel) ->
-      case bridged(channel) {
-        None -> None
-        Some(other_leg) -> Some(#(other_leg, channel_agent(channel)))
-      }
-  }
-}
-
-/// When a bridge that left no event to read happened.
-///
-/// The offer that died wrote `Queue-Answered-Timestamp` on the caller's
-/// channel the moment it answered, so a channel carrying one says the second
-/// the caller was through and the CDR, the record and the reply all keep
-/// agreeing. A channel without one was bridged by an offer that did not get
-/// that far, and the nearest thing left is the second that offer began --
-/// which is on the record. Either is better than the second this node
-/// happened to look, which is a failover later and would be counted as talk
-/// time nobody talked. A timestamp from before that offer began is an earlier
-/// passage's answer, left by an action of the release before this one, which
-/// did not clear it when the caller joined.
-pub fn answered_at(channel: events.Channel, offered_at: Int, now: Int) -> Int {
-  case answered_var(channel.doc) {
-    Some(at) if at > 0 && at >= offered_at -> at
-    _unmarked ->
-      case offered_at > 0 {
-        True -> offered_at
-        False -> now
-      }
-  }
-}
-
-/// The agent the offer that died marked the caller's channel with -- on a
-/// channel's status or on one of the caller's events -- when it was that
-/// offer, in this passage, that marked it.
-///
-/// `Agent-ID` alone does not say. An action of the release before this one
-/// left the `Agent-ID` and `Queue-Answered-Timestamp` of an earlier passage's
-/// answer on the channel when the caller joined another queue: a caller the
-/// first queue's agent transferred into a second one carries that agent's
-/// name into the second queue. Read as this offer's mark, the takeover
-/// skipped the attribution and the recording for the agent who really
-/// answered and dated the answer by the first agent's second. The offer
-/// sets both variables in one `set`, so the mark is this offer's when its
-/// timestamp is no earlier than the second the offer began -- the record's,
-/// written on the node whose clock the offer answered by -- or, with no
-/// such second, than the second the caller joined.
+/// The agent the offer that died marked the caller's channel with, when it
+/// was that offer, in this passage, that marked it: see
+/// `recovery.marked_agent`.
 pub fn marked_agent(request: Request, carrier: Value) -> Option(String) {
-  let since = case request.offered_at > 0 {
-    True -> request.offered_at
-    False -> request.member.joined
-  }
-  case
-    doc.get_string(carrier, ["Custom-Channel-Vars", "Agent-ID"]),
-    answered_var(carrier)
-  {
-    Ok(""), _ | Error(Nil), _ -> None
-    Ok(agent_id), Some(at) if at >= since -> Some(agent_id)
-    Ok(_earlier), _ -> None
-  }
-}
-
-/// The `Queue-Answered-Timestamp` on a channel or an event: a number where
-/// this application wrote it, and the switch's text of one where the switch
-/// hands it back.
-fn answered_var(carrier: Value) -> Option(Int) {
-  let path = ["Custom-Channel-Vars", "Queue-Answered-Timestamp"]
-  case doc.get_int(carrier, path), doc.get_string(carrier, path) {
-    Ok(at), _ -> Some(at)
-    _, Ok(text) -> option.from_result(int.parse(text))
-    _, _ -> None
-  }
-}
-
-fn channel_agent(channel: events.Channel) -> Option(String) {
-  case doc.get_string(channel.doc, ["Custom-Channel-Vars", "Agent-ID"]) {
-    Ok("") | Error(Nil) -> None
-    Ok(agent_id) -> Some(agent_id)
-  }
+  recovery.marked_agent(
+    offered_at: request.offered_at,
+    joined: request.member.joined,
+    carrier: carrier,
+  )
 }
 
 /// One of the agents the record named, or nobody. A name from somewhere else
@@ -602,12 +509,12 @@ fn before_answer(
 
     // The ring is over.
     Some("CHANNEL_EXECUTE_COMPLETE"), True ->
-      case offer.is_bridge(event) {
+      case talk.is_bridge(event) {
         True -> ring_ended(request, state, event, now_ms)
         False -> going(state)
       }
     _other, True ->
-      case offer.is_bridge_error(event) {
+      case talk.is_bridge_error(event) {
         True -> ring_ended(request, state, event, now_ms)
         False -> going(state)
       }
@@ -708,7 +615,7 @@ fn overtaken(request: Request, state: State) -> Move {
 
 /// The caller's bridge ended with nobody through, which is the offer's ring
 /// over. What the switch said decides whose it was, as for an offer
-/// (`offer.miss`), and a cancel from the caller's side waits a moment for
+/// (`talk.miss`), and a cancel from the caller's side waits a moment for
 /// the caller's destroy, which is the caller leaving.
 fn ring_ended(
   request: Request,
@@ -716,25 +623,24 @@ fn ring_ended(
   event: Value,
   now_ms: Int,
 ) -> Move {
-  case state.ending, offer.miss(event) {
+  case state.ending, talk.miss(event) {
     // The end of the ring the dispatcher called off.
     Some(ending), _ ->
       case ending.reason == offer.called_off {
         True -> over(state, [Tell(types.Failed(ending.reason))])
         False -> going(state)
       }
-    None, offer.Cancelled ->
+    None, talk.Cancelled ->
       going(
         State(
           ..state,
           ending: Some(Ending(
-            reason: offer.originator_cancel,
+            reason: talk.originator_cancel,
             until: now_ms + offer.cancel_wait_ms,
           )),
         ),
       )
-    None, missed ->
-      over(state, [Tell(offer.miss_reply(missed, request.agents))])
+    None, missed -> over(state, [Tell(talk.miss_reply(missed, request.agents))])
   }
 }
 
@@ -745,7 +651,7 @@ fn ring_ended(
 /// hangs the caller up, which is today's `hangup_after_bridge`. An agent
 /// passing the caller on from their phone produces exactly those events, and
 /// a watcher that hung up at once hung up a caller on their way to the
-/// transfer's target. So the end waits `offer.transfer_wait_ms` for a sign of
+/// transfer's target. So the end waits `talk.transfer_wait_ms` for a sign of
 /// a transfer: the switch's transfer events for either leg, the agent's leg
 /// going with a transfer as its cause, or the caller bridged again to a leg
 /// that is not the agent's. A transfer ends the watch without touching the
@@ -762,7 +668,7 @@ fn after_answer(
   let from_caller = leg == Some(caller)
   let from_agent = option.is_some(leg) && leg == state.bridged_to
   case
-    offer.is_transfer_of(caller, state.bridged_to, event),
+    talk.is_transfer_of(caller, state.bridged_to, event),
     events.event_name(event)
   {
     True, _ -> transferred(state, now)
@@ -801,7 +707,7 @@ fn bridge_ended(state: State, now: Int, now_ms: Int) -> Move {
       going(
         State(
           ..state,
-          closing: Some(offer.closing(types.Completed, now, now_ms)),
+          closing: Some(talk.closing(types.Completed, now, now_ms)),
         ),
       )
   }
@@ -845,7 +751,7 @@ fn learn(request: Request, state: State, event: Value) -> State {
     Some(call_id) if call_id != request.member.call_id ->
       case
         state.bridged_to == None || state.bridged_to == Some(call_id),
-        offer.agent_of(event, request.agents)
+        talk.agent_of(event, request.agents)
       {
         True, Some(agent_id) ->
           State(..state, agent_id: Some(agent_id), bridged_to: Some(call_id))
@@ -875,7 +781,7 @@ fn answer(request: Request, state: State, event: Value, now: Int) -> Move {
     request,
     state,
     agent_call_id,
-    option.or(state.agent_id, offer.answering_agent(request.agents, event)),
+    option.or(state.agent_id, talk.answering_agent(request.agents, event)),
     from_caller && attributed(request, event),
     now,
   )
@@ -909,7 +815,7 @@ fn took(
     None ->
       case request.agents {
         [one] -> #(one, [])
-        _many -> #(offer.unknown_agent, [
+        _many -> #(talk.unknown_agent, [
           Complain(unnamed(request, agent_call_id)),
         ])
       }
@@ -953,7 +859,7 @@ fn unnamed(request: Request, agent_call_id: String) -> String {
   <> ", which named no agent of "
   <> string.join(request.agents, ", ")
   <> "; answering as "
-  <> offer.unknown_agent
+  <> talk.unknown_agent
 }
 
 fn leg(call_id: String, known: Option(String)) -> Option(String) {

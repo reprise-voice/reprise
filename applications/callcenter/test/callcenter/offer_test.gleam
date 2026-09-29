@@ -1,6 +1,7 @@
 //// What the switch's events say became of an offer, and what the agents'
 //// phones are given to ring.
 
+import callcenter/call/talk
 import callcenter/offer
 import callcenter/types
 import gleam/dict
@@ -33,155 +34,9 @@ fn bridge_completed(response: String) -> doc.Value {
   ])
 }
 
-pub fn cause_prefers_the_bridge_response_test() {
-  assert offer.cause(bridge_completed("USER_BUSY")) == "USER_BUSY"
-  assert offer.cause(
-      event([
-        #("Call-ID", doc.String(caller_leg)),
-        #("Hangup-Cause", doc.String("normal_clearing")),
-      ]),
-    )
-    == "NORMAL_CLEARING"
-  assert offer.cause(event([#("Call-ID", doc.String(caller_leg))]))
-    == "UNSPECIFIED"
-}
-
-pub fn a_busy_phone_test() {
-  assert offer.miss(bridge_completed("USER_BUSY")) == offer.WasBusy
-}
-
-pub fn a_rejected_call_test() {
-  assert offer.miss(bridge_completed("CALL_REJECTED")) == offer.WasRejected
-}
-
-pub fn nobody_picked_up_test() {
-  assert offer.miss(bridge_completed("NO_ANSWER")) == offer.NotAnswered
-  assert offer.miss(bridge_completed("NO_USER_RESPONSE")) == offer.NotAnswered
-  assert offer.miss(bridge_completed("ALLOTTED_TIMEOUT")) == offer.NotAnswered
-}
-
-/// A ring cancelled from the caller's side is nobody's miss: the caller hung
-/// up, or is leaving the queue some other way.
-pub fn a_cancel_from_the_callers_side_is_not_a_miss_test() {
-  assert offer.miss(bridge_completed("ORIGINATOR_CANCEL")) == offer.Cancelled
-  assert offer.miss_reply(offer.Cancelled, ["agent-a"])
-    == types.Failed(offer.originator_cancel)
-}
-
-/// A bridge that says nothing at all is a ring that ran out, not a fault.
-pub fn an_unspecified_bridge_is_a_no_answer_test() {
-  assert offer.miss(bridge_completed("UNSPECIFIED")) == offer.NotAnswered
-}
-
-pub fn anything_else_is_a_failure_test() {
-  assert offer.miss(bridge_completed("UNALLOCATED_NUMBER"))
-    == offer.Broke("UNALLOCATED_NUMBER")
-}
-
-pub fn one_agent_takes_the_blame_test() {
-  assert offer.miss_reply(offer.WasBusy, ["agent-a"]) == types.Busy("agent-a")
-  assert offer.miss_reply(offer.WasRejected, ["agent-a"])
-    == types.Rejected("agent-a")
-  assert offer.miss_reply(offer.NotAnswered, ["agent-a"])
-    == types.OfferNoAnswer(["agent-a"])
-}
-
-/// A simultaneous ring gets one cause for every phone, so a busy cannot be
-/// pinned on one of them: they are all reported as not having answered.
-pub fn many_agents_share_a_miss_test() {
-  let agents = ["agent-a", "agent-b"]
-  assert offer.miss_reply(offer.WasBusy, agents) == types.OfferNoAnswer(agents)
-  assert offer.miss_reply(offer.WasRejected, agents)
-    == types.OfferNoAnswer(agents)
-  assert offer.miss_reply(offer.NotAnswered, agents)
-    == types.OfferNoAnswer(agents)
-}
-
-pub fn a_failure_carries_its_cause_test() {
-  assert offer.miss_reply(offer.Broke("NO_ROUTE_DESTINATION"), ["agent-a"])
-    == types.Failed("NO_ROUTE_DESTINATION")
-}
-
-pub fn a_bridge_that_ended_cleanly_completed_test() {
-  assert offer.ended_as(bridge_completed("SUCCESS")) == types.Completed
-  assert offer.ended_as(bridge_completed("NORMAL_CLEARING")) == types.Completed
-  assert offer.ended_as(bridge_completed("MEDIA_TIMEOUT")) == types.FailedBridge
-}
-
-pub fn the_bridge_command_is_recognised_test() {
-  assert offer.is_bridge(bridge_completed("SUCCESS")) == True
-  assert offer.is_bridge(event([#("Application-Name", doc.String("play"))]))
-    == False
-  assert offer.is_bridge_error(
-      doc.object([
-        #("Event-Category", doc.String("error")),
-        #("Application-Name", doc.String("bridge")),
-      ]),
-    )
-    == True
-  assert offer.is_bridge_error(bridge_completed("SUCCESS")) == False
-}
-
 //
 // --- Which leg, and whose ---------------------------------------------------
 //
-
-/// The caller leg's bridge event says which channel answered, not whose it
-/// is; with one agent rung there is no question.
-pub fn one_agent_answered_test() {
-  let bridged =
-    event([
-      #("Event-Name", doc.String("CHANNEL_BRIDGE")),
-      #("Call-ID", doc.String(caller_leg)),
-      #("Other-Leg-Call-ID", doc.String(agent_leg)),
-    ])
-  assert offer.answering_agent(["agent-a"], bridged) == Some("agent-a")
-  assert offer.answering_agent(["agent-a", "agent-b"], bridged) == None
-}
-
-/// The agent's own leg carries the `Agent-ID` the endpoint was marked with.
-pub fn the_agent_leg_says_whose_it_is_test() {
-  let answered =
-    event([
-      #("Event-Name", doc.String("CHANNEL_ANSWER")),
-      #("Call-ID", doc.String(agent_leg)),
-      #("Other-Leg-Call-ID", doc.String(caller_leg)),
-      #(
-        "Custom-Channel-Vars",
-        doc.object([#("Agent-ID", doc.String("agent-b"))]),
-      ),
-    ])
-  assert offer.agent_of(answered, ["agent-a", "agent-b"]) == Some("agent-b")
-  assert offer.answering_agent(["agent-a", "agent-b"], answered)
-    == Some("agent-b")
-}
-
-/// A device with no `Agent-ID` still names its owner, which is the agent.
-pub fn the_owner_of_the_device_is_the_agent_test() {
-  let answered =
-    event([
-      #("Call-ID", doc.String(agent_leg)),
-      #(
-        "Custom-Channel-Vars",
-        doc.object([#("Owner-ID", doc.String("agent-a"))]),
-      ),
-    ])
-  assert offer.agent_of(answered, ["agent-a", "agent-b"]) == Some("agent-a")
-}
-
-/// A leg belonging to somebody who was not offered this caller is not an
-/// answer: another call of theirs may be going on at the same time.
-pub fn a_stranger_is_not_an_agent_test() {
-  let answered =
-    event([
-      #("Call-ID", doc.String(agent_leg)),
-      #(
-        "Custom-Channel-Vars",
-        doc.object([#("Owner-ID", doc.String("somebody-else"))]),
-      ),
-    ])
-  assert offer.agent_of(answered, ["agent-a", "agent-b"]) == None
-}
 
 //
 // --- What the phones are given ---------------------------------------------
@@ -216,99 +71,6 @@ pub fn the_caller_keeps_hearing_hold_music_while_the_phones_ring_test() {
   assert offer.ringback(holding(Some(""))) == call.HoldMusic
   assert offer.ringback(holding(Some("support-hold")))
     == call.Music("support-hold")
-}
-
-pub fn the_prefix_goes_in_front_of_the_name_test() {
-  let call =
-    doc.object([
-      #("Call-ID", doc.String(caller_leg)),
-      #("Caller-ID-Name", doc.String("Ada Lovelace")),
-    ])
-  assert doc.get_string(offer.prefixed(call, Some("Support: ")), [
-      "Caller-ID-Name",
-    ])
-    == Ok("Support: Ada Lovelace")
-  assert offer.prefixed(call, None) == call
-  assert offer.prefixed(call, Some("")) == call
-}
-
-/// A caller with no name at all still shows the queue they came from.
-pub fn a_prefix_with_no_name_test() {
-  let call = doc.object([#("Call-ID", doc.String(caller_leg))])
-  assert doc.get_string(offer.prefixed(call, Some("Support")), [
-      "Caller-ID-Name",
-    ])
-    == Ok("Support")
-}
-
-fn device_endpoint() -> doc.Value {
-  doc.object([
-    #("Invite-Format", doc.String("endpoint")),
-    #("Endpoint-ID", doc.String("device-one")),
-    #("Outbound-Caller-ID-Name", doc.String("Support: Ada Lovelace")),
-  ])
-}
-
-fn forwarded_endpoint() -> doc.Value {
-  doc.object([
-    #("Invite-Format", doc.String("loopback")),
-    #("Route", doc.String("+15555550123")),
-    #("To-DID", doc.String("+15555550123")),
-    #("Outbound-Caller-ID-Name", doc.String("Support: Ada Lovelace")),
-  ])
-}
-
-pub fn a_device_is_not_external_test() {
-  assert offer.is_external(device_endpoint()) == False
-  assert offer.is_external(forwarded_endpoint()) == True
-}
-
-/// Every endpoint carries the agent it rings, so the answer can be pinned on
-/// somebody whichever of them takes it.
-pub fn every_endpoint_carries_its_agent_test() {
-  let decorated =
-    offer.decorate(device_endpoint(), "agent-a", settings(None, None, None))
-  assert doc.get_string(decorated, ["Custom-Channel-Vars", "Agent-ID"])
-    == Ok("agent-a")
-}
-
-/// The queue's outbound caller ID is for the legs that leave the account;
-/// an agent's own desk phone keeps the caller's identity.
-pub fn the_outbound_caller_id_is_for_external_legs_test() {
-  let of = settings(None, Some("Acme Support"), Some("+15555550100"))
-
-  let device = offer.decorate(device_endpoint(), "agent-a", of)
-  assert doc.get_string(device, ["Outbound-Caller-ID-Name"])
-    == Ok("Support: Ada Lovelace")
-
-  let forwarded = offer.decorate(forwarded_endpoint(), "agent-a", of)
-  assert doc.get_string(forwarded, ["Outbound-Caller-ID-Name"])
-    == Ok("Acme Support")
-  assert doc.get_string(forwarded, ["Outbound-Caller-ID-Number"])
-    == Ok("+15555550100")
-}
-
-/// A queue with no outbound caller ID leaves the endpoint's own alone.
-pub fn no_outbound_caller_id_changes_nothing_test() {
-  let forwarded =
-    offer.decorate(forwarded_endpoint(), "agent-a", settings(None, None, None))
-  assert doc.get_string(forwarded, ["Outbound-Caller-ID-Name"])
-    == Ok("Support: Ada Lovelace")
-}
-
-/// One endpoint rings alone; more than one ring together, and that includes
-/// one agent's desk phone and softphone. Rung `single`, the second device
-/// would only ever have been tried after the first had rung out.
-pub fn every_endpoint_rings_at_once_test() {
-  let desk =
-    offer.decorate(device_endpoint(), "agent-a", settings(None, None, None))
-  let softphone =
-    offer.decorate(forwarded_endpoint(), "agent-a", settings(None, None, None))
-  let other =
-    offer.decorate(device_endpoint(), "agent-b", settings(None, None, None))
-  assert offer.strategy([desk]) == call.Single
-  assert offer.strategy([desk, softphone]) == call.Simultaneous
-  assert offer.strategy([desk, other]) == call.Simultaneous
 }
 
 //
@@ -918,22 +680,7 @@ pub fn a_ring_called_off_by_the_action_is_not_a_miss_test() {
       Heard(answered_at, bridge_completed("ORIGINATOR_CANCEL")),
       Silence(answered_at + 2),
     ])
-  assert effects == [offer.Tell(types.Failed(offer.originator_cancel))]
-}
-
-/// The two halves of "this is a queue call, not somebody dialling": what
-/// `kz_endpoint` is told when it builds the endpoint, and what `kapps_call`
-/// is told about the call the bridge goes out on. Both have to say
-/// `callcenter`, because both are read against the same list of modules
-/// whose calls are not direct -- and that is what makes a device forwarding
-/// on `direct_calls_only` refuse a caller who is in a queue.
-pub fn the_offer_says_which_application_is_ringing_test() {
-  assert doc.get_string(offer.properties(), ["source"]) == Ok("callcenter")
-  let sourced =
-    call.from_value(doc.object([#("Call-ID", doc.String(caller_leg))]))
-    |> offer.sourced
-  assert call.kvs_fetch(sourced, "context-source")
-    == Some(doc.String("callcenter"))
+  assert effects == [offer.Tell(types.Failed(talk.originator_cancel))]
 }
 
 //
@@ -1042,7 +789,7 @@ pub fn a_transfer_heard_after_the_unbridge_test() {
 }
 
 /// The agent's leg going with a transfer as its cause is a transfer on its
-/// own: `mod_reprise` reports a leg that sent a `REFER` that way.
+/// own: `mod_com_kazoo` reports a leg that sent a `REFER` that way.
 pub fn a_leg_that_ended_by_transferring_test() {
   list.each(["BLIND_TRANSFER", "ATTENDED_TRANSFER"], fn(cause) {
     let effects =
@@ -1108,26 +855,6 @@ pub fn a_caller_gone_while_the_end_is_read_test() {
 //
 // --- The legs the offer names -------------------------------------------------
 //
-
-/// Every endpoint is given its leg's call id, the offer's prefix and its
-/// place in the ring, and the offer can read back whose each one is.
-pub fn every_leg_is_named_before_it_rings_test() {
-  let desk =
-    offer.decorate(device_endpoint(), "agent-a", settings(None, None, None))
-  let mobile =
-    offer.decorate(forwarded_endpoint(), "agent-a", settings(None, None, None))
-  let other =
-    offer.decorate(device_endpoint(), "agent-b", settings(None, None, None))
-  let named = offer.named_legs([desk, mobile, other], "c0ffee")
-  assert list.map(named, doc.get_string(_, ["Outbound-Call-ID"]))
-    == [Ok("c0ffee-1"), Ok("c0ffee-2"), Ok("c0ffee-3")]
-  assert offer.legs_of(named)
-    == dict.from_list([
-      #("c0ffee-1", "agent-a"),
-      #("c0ffee-2", "agent-a"),
-      #("c0ffee-3", "agent-b"),
-    ])
-}
 
 /// The caller's bridge names a leg the offer named, so it names the agent:
 /// the answer goes out at once, with nothing to wait for.
@@ -1420,7 +1147,7 @@ pub fn the_callers_next_bridge_is_not_the_answer_test() {
       answered_at,
     )
   let next = offer.step(one, cancelled.state, bridged_to(operator_leg), 0)
-  assert next.effects == [offer.Tell(types.Failed(offer.originator_cancel))]
+  assert next.effects == [offer.Tell(types.Failed(talk.originator_cancel))]
   assert next.over
 }
 
@@ -1678,17 +1405,6 @@ pub fn a_running_ring_still_takes_a_leg_it_did_not_name_test() {
   let legs = dict.from_list([#("c0ffee-1", "agent-a")])
   assert offer.is_own_bridge(offer.ringing(legs), bridged_to(agent_leg))
   assert offer.is_own_bridge(offer.ringing(legs), bridged_to("c0ffee-1"))
-}
-
-/// The prefix is the offer's own and nobody else's, and the same whoever
-/// works it out: the offer ringing, or the dispatcher writing the record a
-/// takeover reads.
-pub fn the_leg_prefix_is_the_offers_test() {
-  let id = types.OfferId(call_id: caller_leg, serial: reference.new())
-  let other = types.OfferId(call_id: caller_leg, serial: reference.new())
-  assert offer.leg_prefix(id) == offer.leg_prefix(id)
-  assert offer.leg_prefix(id) != offer.leg_prefix(other)
-  assert string.length(offer.leg_prefix(id)) == 24
 }
 
 // --- A ring called off, and where the offer's own unbridge goes -------------
