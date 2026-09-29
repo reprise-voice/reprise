@@ -602,8 +602,11 @@ pub fn a_caller_leaving_a_pickup_leaves_the_supervisors_activity_test() {
         cluster.tell(c, dispatcher.Left("call-one", ExitKey))
         True
       },
+      // The caller's channel goes: the dispatcher leaves it to the actor,
+      // which says the caller left.
       fn(c) {
         cluster.channel_gone(c, "call-one")
+        cluster.tell(c, dispatcher.Left("call-one", Hangup))
         True
       },
     ],

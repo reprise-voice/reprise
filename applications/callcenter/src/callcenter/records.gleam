@@ -521,10 +521,28 @@ fn read_through(
   where: Where,
   doc_id: String,
 ) -> Result(Option(Value), #(Failure, String)) {
-  case store.read(where, doc_id) {
+  store.read(where, doc_id)
+  |> absent_as_none
+  |> result.map_error(failed)
+}
+
+/// A read of one document, with the document not being there -- or its
+/// database not being there, a month nothing was written to yet -- told
+/// apart from the datastore not answering: the first is `Ok(None)`, and
+/// anything else the datastore said is the error it was.
+///
+/// The writer and `read` both need the difference. A write that took a
+/// datastore that did not answer for a passage with no document would
+/// start the document over; a takeover that took it for a passage with no
+/// record would take an answered call for a caller who hung up, and a
+/// passage that is over for one to offer again.
+pub fn absent_as_none(
+  read: Result(Value, Error),
+) -> Result(Option(Value), Error) {
+  case read {
     Ok(document) -> Ok(Some(document))
     Error(NotFound) | Error(Invalid("db_not_found")) -> Ok(None)
-    Error(error) -> Error(failed(error))
+    Error(error) -> Error(error)
   }
 }
 
@@ -576,9 +594,9 @@ pub fn locate(
   result.unwrap(found, #(passage_id(member), None))
 }
 
-/// `locate` over a `lookup` that can fail, failing with it: the writer's,
-/// which must not take a datastore that did not answer for a passage with
-/// no document yet.
+/// `locate` over a `lookup` that can fail, failing with it: the writer's and
+/// `read`'s, neither of which may take a datastore that did not answer for a
+/// passage with no document yet.
 pub fn locate_through(
   member: Member,
   legacy: Bool,
@@ -672,22 +690,42 @@ pub fn offered(member: Member, agent_id: String, at: Int, id: OfferId) -> Nil {
 }
 
 /// How the last offer to an agent turned out: `answered`, `no_answer`,
-/// `busy`, `reject` or `cancelled`.
+/// `busy`, `reject` or `cancelled` -- the last also for an agent whose
+/// phone was ringing when somebody else answered.
 pub fn offer_outcome(member: Member, agent_id: String, outcome: String) -> Nil {
-  change_queue_call(member, fn(document) {
-    let offers = doc.get_list(document, ["offered_to"]) |> result.unwrap([])
-    doc.set(
-      document,
-      ["offered_to"],
-      doc.List(close_last(list.reverse(offers), agent_id, outcome, [])),
-    )
-  })
+  change_queue_call(member, offer_closed(_, agent_id, outcome, None))
+}
+
+/// The last offer to an agent failed: nothing rang (`no_endpoints`), the
+/// actor ringing it went (`offer_crashed`), or the switch refused the
+/// originate, whose cause is the reason. Its outcome is `failed`, with the
+/// reason beside it.
+pub fn offer_failed(member: Member, agent_id: String, reason: String) -> Nil {
+  change_queue_call(member, offer_closed(_, agent_id, "failed", Some(reason)))
+}
+
+/// The document with the agent's last offer that has no outcome given
+/// `outcome`, and the `reason` of a failure. A document with no such offer
+/// is left as it is: the outcome has been written, or the offer never was.
+pub fn offer_closed(
+  document: Value,
+  agent_id: String,
+  outcome: String,
+  reason: Option(String),
+) -> Value {
+  let offers = doc.get_list(document, ["offered_to"]) |> result.unwrap([])
+  doc.set(
+    document,
+    ["offered_to"],
+    doc.List(close_last(list.reverse(offers), agent_id, outcome, reason, [])),
+  )
 }
 
 fn close_last(
   newest_first: List(Value),
   agent_id: String,
   outcome: String,
+  reason: Option(String),
   seen: List(Value),
 ) -> List(Value) {
   case newest_first {
@@ -697,13 +735,42 @@ fn close_last(
         doc.get_string(offer, ["agent_id"]) == Ok(agent_id)
         && doc.get_string(offer, ["outcome"]) == Error(Nil)
       {
-        True ->
-          list.append(list.reverse(older), [
-            doc.set(offer, ["outcome"], doc.String(outcome)),
-            ..seen
-          ])
-        False -> close_last(older, agent_id, outcome, [offer, ..seen])
+        True -> {
+          let closed = doc.set(offer, ["outcome"], doc.String(outcome))
+          let closed = case reason {
+            Some(reason) -> doc.set(closed, ["reason"], doc.String(reason))
+            None -> closed
+          }
+          list.append(list.reverse(older), [closed, ..seen])
+        }
+        False -> close_last(older, agent_id, outcome, reason, [offer, ..seen])
       }
+  }
+}
+
+/// Every offer the document still has open given the outcome `cancelled`:
+/// whatever was ringing when the passage ended was called off with it.
+///
+/// A passage's record closes with none open. The outcomes are written as
+/// the offers end, and this is for those whose end nobody wrote: a ring
+/// whose node died before its last word, whose actor the successor found
+/// with the ring over.
+pub fn offers_settled(document: Value) -> Value {
+  case doc.get_list(document, ["offered_to"]) {
+    Ok(offers) ->
+      doc.set(
+        document,
+        ["offered_to"],
+        doc.List(
+          list.map(offers, fn(offer) {
+            case doc.get_string(offer, ["outcome"]) {
+              Ok(_outcome) -> offer
+              Error(Nil) -> doc.set(offer, ["outcome"], doc.String("cancelled"))
+            }
+          }),
+        ),
+      )
+    Error(Nil) -> document
   }
 }
 
@@ -791,6 +858,7 @@ pub fn closed(document: Value, result: EndResult, at: Int) -> Value {
       document
       |> doc.set(["ended"], doc.Int(at))
       |> doc.set(["result"], doc.String(result_to_string(result)))
+      |> offers_settled
   }
 }
 
@@ -806,6 +874,7 @@ pub fn cancellation(document: Value, reason: CancelReason, at: Int) -> Value {
   document
   |> doc.set(["cancelled"], doc.Int(at))
   |> doc.set(["cancel_reason"], doc.String(reason_to_string(reason)))
+  |> offers_settled
 }
 
 /// The recording of a queue call, when the queue or the agent asked for one:
@@ -895,12 +964,21 @@ pub type Passage {
 /// has work of its own. It is `open_doc` and not the cached one because a
 /// cache that answered with what this node believed before the failover
 /// would defeat the whole point.
-pub fn read(kz: Kazoo, member: Member) -> Option(Passage) {
+///
+/// `Ok(None)` is a passage with no document: the datastore said it is not
+/// there, or that the month's database is not (`absent_as_none`). Anything
+/// else it said is an `Error`, and is not the same thing. A takeover that
+/// took a datastore that did not answer for a passage with no record would
+/// settle a caller whose answered call ended unwatched as a hang-up, and
+/// offer again a caller whose passage the record says is over
+/// (`call/recovery`).
+pub fn read(kz: Kazoo, member: Member) -> Result(Option(Passage), Error) {
   let db = modb.db_name(member.account_id, at: Some(member.joined))
-  let #(_doc_id, found) =
-    locate(member, True, fn(doc_id) {
-      kz.datamgr.open_doc(db, doc_id) |> option.from_result
-    })
+  use #(_doc_id, found) <- result.map(
+    locate_through(member, True, fn(doc_id) {
+      kz.datamgr.open_doc(db, doc_id) |> absent_as_none
+    }),
+  )
   option.map(found, passage)
 }
 

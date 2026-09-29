@@ -128,7 +128,18 @@ pub type Message {
   /// A caller's channel is gone, seen by the activity actor or the sweep.
   /// The activity actor says it of every queue channel of the account that
   /// goes, agents' legs and callers already through included; only a caller
-  /// still waiting here is anything to this dispatcher.
+  /// still waiting here, with nobody being rung for them, is anything to
+  /// this dispatcher.
+  ///
+  /// A caller being rung for is their actor's to close. It hears the same
+  /// end, and it alone knows whether an agent answered first: an answer and
+  /// the caller's end are two channels' events, and the actor dates them
+  /// (`call/core`'s `Desertion`). In the lab of 2026-09-28
+  /// (e2e-260927-cca6), the dispatcher closed a caller as gone on this word.
+  /// The actor's `Answered` and `Ended` then found no offer, and an agent's
+  /// answered call was never counted. An actor that misses the end has its
+  /// own audit, and an actor that dies has its offer closed (`OfferDown`),
+  /// after which this word closes the caller.
   ChannelGone(call_id: String)
   /// A call answered on a node that died, whose `queue_call` record the
   /// sweep found still open. The member message was settled when it was
@@ -287,12 +298,17 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
     Left(call_id, reason) -> step(state, offers.leave(state, call_id, reason))
 
     ChannelGone(call_id) ->
-      case dict.has_key(state.waiting, call_id) {
+      case
+        dict.has_key(state.waiting, call_id),
+        dict.has_key(state.offers, call_id)
+      {
         // A caller whose channel is gone is an abandon, whatever the queue
         // believed. Requirement 0.6: no ghost calls.
-        True -> step(state, offers.leave(state, call_id, Hangup))
+        True, False -> step(state, offers.leave(state, call_id, Hangup))
+        // Being rung for: their actor says how it ends.
+        True, True -> actor.continue(state)
         // Nobody of ours: no pass for it.
-        False -> actor.continue(state)
+        False, _ -> actor.continue(state)
       }
 
     Orphaned(member, agent_id, agent_call_id, answered_at, picked_up, ended) -> {

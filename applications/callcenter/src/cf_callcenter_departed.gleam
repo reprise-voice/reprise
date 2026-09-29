@@ -11,6 +11,13 @@
 //// handing them back twice, and goes on to its one child, the branch's own
 //// flow.
 ////
+//// The mark is also how the actor that resumed the caller knows somebody
+//// took the resume. The actor stays and watches the channel
+//// (`core.Resumed`), and the first event carrying the mark ends the watch.
+//// It publishes a resume that shows no mark again, and after
+//// `core.resume_attempts` it hangs the caller up. So this writes the mark
+//// before the flow does anything else.
+////
 //// A node with no `handoff_id` marks nothing and goes on all the same: a
 //// caller is never held up by a mark.
 

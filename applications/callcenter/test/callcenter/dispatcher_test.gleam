@@ -8,6 +8,7 @@ import callcenter/status_query
 import callcenter/types.{
   Answered, Busy, CallerHangup, Completed, Ended, ExitKey, Failed, Hangup,
   OfferNoAnswer, OfferRinging, OnCall, Rejected, Timeout, Transferred,
+  WrappingUp,
 }
 import cf_callcenter
 import gleam/erlang/process
@@ -1443,15 +1444,58 @@ pub fn a_cancel_settles_the_caller_once_test() {
   assert cluster.settled(c) == ["call-one"]
 }
 
-/// A caller whose channel is gone leaves at once. acdc's ghost call, which
-/// requirement 0.6 says must not be possible here.
+/// A caller whose channel is gone leaves at once, with nobody being rung
+/// for them. acdc's ghost call, which requirement 0.6 says must not be
+/// possible here.
 pub fn a_dead_channel_leaves_the_queue_test() {
   let c = two_agent_queue()
+  cluster.agent_is(c, "ann", "on_break")
+  cluster.agent_is(c, "bob", "on_break")
   cluster.arrive(c, "call-one", "support", 0, 0)
+  assert cluster.all_ringing(c) == []
   cluster.channel_gone(c, "call-one")
 
   assert cluster.waiting(c) == []
   assert cluster.settled(c) == ["call-one"]
+  assert cluster.all_ringing(c) == []
+}
+
+/// A caller who hangs up while an agent is being rung for them is their
+/// actor's to close. The actor heard the same end, and knows whether the
+/// agent answered first. In the lab (e2e-260927-cca6), the dispatcher
+/// closed the caller as gone on the activity actor's word, and the actor's
+/// answer that followed found no offer: an answered call nobody counted.
+pub fn a_dead_channel_while_rung_for_is_the_actors_to_close_test() {
+  let c = two_agent_queue()
+  cluster.arrive(c, "call-one", "support", 0, 0)
+  cluster.reply(c, "call-one", OfferRinging(["ann"]))
+  cluster.channel_gone(c, "call-one")
+  assert cluster.waiting(c) == ["call-one"]
+  assert cluster.all_ringing(c) == ["ann"]
+  assert cluster.settled(c) == []
+
+  // The actor: Ann answered, and the caller hung up before the bridge.
+  cluster.reply(
+    c,
+    "call-one",
+    Answered("ann", "agent-leg", cluster.start_of_time),
+  )
+  cluster.reply(c, "call-one", Ended(CallerHangup, cluster.start_of_time))
+  assert cluster.settled(c) == ["call-one"]
+  assert cluster.waiting(c) == []
+  assert activity.of(cluster.account_id, "ann") == WrappingUp
+  activity.clear(cluster.account_id, "ann")
+}
+
+/// And when nobody answered, the actor says the caller left.
+pub fn a_dead_channel_while_rung_for_leaves_when_the_actor_says_test() {
+  let c = two_agent_queue()
+  cluster.arrive(c, "call-one", "support", 0, 0)
+  cluster.reply(c, "call-one", OfferRinging(["ann"]))
+  cluster.channel_gone(c, "call-one")
+  assert cluster.waiting(c) == ["call-one"]
+  cluster.left(c, "call-one", Hangup)
+  assert cluster.waiting(c) == []
   assert cluster.all_ringing(c) == []
 }
 

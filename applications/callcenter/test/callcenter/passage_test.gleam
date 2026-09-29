@@ -9,6 +9,7 @@ import callcenter/types
 import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
+import gleam/result
 import kazoo/doc
 import support/cluster
 
@@ -137,10 +138,12 @@ fn read(
   queue_id: String,
   joined: Int,
 ) -> Option(records.Passage) {
-  records.read(
-    c.kz,
-    cluster.member(call_id, queue_id, 0, cluster.start_of_time + joined),
-  )
+  let assert Ok(found) =
+    records.read(
+      c.kz,
+      cluster.member(call_id, queue_id, 0, cluster.start_of_time + joined),
+    )
+  found
 }
 
 /// The node dispatching the overflow died with Bob ringing. The redelivered
@@ -254,6 +257,6 @@ pub fn the_open_scan_finds_a_call_id_document_test() {
     records.locate(reconcile.rebuilt(call), True, lookup(c))
   assert id == call_id
   assert records.read(c.kz, reconcile.rebuilt(call))
-    |> option.map(fn(passage) { passage.agent_id })
-    == Some(Some("ann"))
+    |> result.map(option.map(_, fn(passage) { passage.agent_id }))
+    == Ok(Some(Some("ann")))
 }

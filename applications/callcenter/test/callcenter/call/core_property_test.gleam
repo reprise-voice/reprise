@@ -2,18 +2,30 @@
 ////
 //// Each script is a caller joining -- or, one script in four, a caller
 //// handed over whom the actor finds out about, with a random survey of the
-//// switch and a probe that may or may not answer, among the first steps --
-//// then forty inputs drawn at random from
-//// everything that can reach the actor -- rings, answers, legs going, keys,
-//// call-offs, a deleted queue, positions, `ecallmgr`'s word on originates,
-//// barriers, the callflow's acknowledgement, the next queue, an audit that
-//// finds the caller gone, and the clock
-//// -- and then the end of the call: every originate over, the caller gone,
-//// and the clock long past every deadline. Along the way and at the end the
-//// call has to keep what the design promises:
+//// switch, whose record may never read, and then every try asks, and a
+//// probe that may or may not answer, among the first steps -- then forty
+//// inputs drawn at random from everything that can reach the actor --
+//// rings, answers, legs going, keys, call-offs, a deleted queue, positions,
+//// `ecallmgr`'s word on originates, barriers, the marks' `noop`s, the
+//// callflow's acknowledgement, what the caller's channel says of a resume,
+//// the next queue, an audit that finds the caller gone, and the clock --
+//// then, one script in four, three quiet minutes of the clock alone, and
+//// then the end of the call: every originate over, the caller gone, and the
+//// clock long past every deadline. Along the way and at the end the call
+//// has to keep what the design promises:
 ////
 //// - it sends the caller only what its phase allows (`core.allowed`), and
 ////   nothing once it has departed or is done;
+//// - it bridges the caller to a leg only once it has marked them with that
+////   leg's agent, since the last ring it rang or was found in, and has
+////   heard the `noop` sent behind the marks complete -- or the wait for it
+////   is over -- however the answer was first heard: the marks are on the
+////   caller's CDR and date the answer for a node taking the call over, and
+////   the bridge's flush throws away marks the channel has not yet run. A
+////   step that ends the finding out about a caller handed over may bridge
+////   on what arrived meanwhile, and is held only to the agent;
+//// - the `noop` behind an answer's marks goes right behind them, and names
+////   the leg the call is waiting on;
 //// - one originate per offer, and only for the ring that asked for it;
 //// - every offer it rang ends in exactly one reply -- an answer is followed
 ////   by exactly one end -- or, for a caller who left while it rang, in the
@@ -22,7 +34,9 @@
 ////   still waiting to hear the end of;
 //// - the callflow is told to go on only after the passage's barrier, always
 ////   on the same branch, at most `continue_attempts` times, and resumed
-////   elsewhere at most once and only after that;
+////   elsewhere only after that, at most `resume_attempts` times, never in
+////   the step that hears the resumed flow's mark, and the caller is hung
+////   up with no agent only once the last resume went untaken;
 //// - the shard hears a caller leave at most once a passage;
 //// - a caller handed over is told the dispatcher of at most once for each
 ////   time they were, and an offer found going on for them ends like one the
@@ -43,7 +57,7 @@ import gleam/dict.{type Dict}
 import gleam/erlang/reference
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
 import gleam/string
 import kazoo/doc
 import kazoo/events
@@ -68,9 +82,9 @@ type World {
 /// One script: the inputs, each with the millisecond it comes at.
 fn a_script(seed: Int) -> List(#(Input, Int)) {
   let world = World(ms: 0, offers: [], rng: rng.seeded(seed))
-  let #(start, found, world) = case seed % 4 {
+  let #(start, found, again, world) = case seed % 4 {
     0 -> handed_over(world)
-    _ -> #(joining("h1", settings()), [], world)
+    _ -> #(joining("h1", settings()), [], [], world)
   }
   let #(inputs, world) =
     rng.upto(steps)
@@ -94,19 +108,43 @@ fn a_script(seed: Int) -> List(#(Input, Int)) {
       list.flatten([before, [#(input, ms)], after])
     })
     |> list.reverse
+  // One script in four then goes quiet for three minutes, the clock ticking
+  // every three seconds and nothing else heard: long enough for a caller on
+  // their way out to be resumed as often as they are and then given up.
+  let quiet_ms = case seed % 4 {
+    2 -> 180_000
+    _ -> 0
+  }
+  let quiet =
+    rng.upto(quiet_ms / 3000)
+    |> list.map(fn(n) { #(core.Tick, world.ms + { n + 1 } * 3000) })
   // The end of the call: every originate over, the caller gone, and the
-  // clock long past every deadline.
-  let end = world.ms + 1000
+  // clock long past every deadline. A caller still being found out about
+  // then runs out their tries, each tick one, with what the survey brings
+  // `again` coming in every try.
+  let end = world.ms + quiet_ms + 1000
   let over =
     list.map(world.offers, fn(offer) {
       #(originate_error(offer.0, "ORIGINATOR_CANCEL"), end)
     })
-  let ending = [
-    #(gone(call_id, "NORMAL_CLEARING"), end),
-    #(core.Tick, end + 20_000_000),
-    #(core.Tick, end + 40_000_000),
-  ]
-  list.flatten([list.reverse(inputs), over, ending])
+  let ticks = case again {
+    [] -> 2
+    _ -> core.recover_attempts + 2
+  }
+  let ending =
+    list.repeat(Nil, ticks)
+    |> list.index_map(fn(_, n) {
+      let at = end + { n + 1 } * 20_000_000
+      [#(core.Tick, at), ..list.map(again, fn(input) { #(input, at) })]
+    })
+    |> list.flatten
+  list.flatten([
+    list.reverse(inputs),
+    quiet,
+    over,
+    [#(gone(call_id, "NORMAL_CLEARING"), end)],
+    ending,
+  ])
 }
 
 /// A caller handed over: the rejoin, and what the survey and the probe
@@ -114,8 +152,13 @@ fn a_script(seed: Int) -> List(#(Input, Int)) {
 /// row -- bridged to one of the found legs, or to nobody -- and up to three
 /// legs of one offer, answered or not, with more or less of their ring left;
 /// the probe carries this passage's marks, or none, or never answers; the
-/// record says an answer, a close, or nothing.
-fn handed_over(world: World) -> #(Input, List(#(Input, Int)), World) {
+/// record says an answer, a close, or nothing, or could not be read. A
+/// record that could not be read never is: the survey comes `again` on
+/// every later try, and the last takes the caller as the switches find
+/// them.
+fn handed_over(
+  world: World,
+) -> #(Input, List(#(Input, Int)), List(Input), World) {
   let id = types.OfferId(call_id: call_id, serial: reference.new())
   let prefix = originate.leg_prefix(id)
   let #(count, rng) = rng.below(world.rng, 4)
@@ -172,11 +215,13 @@ fn handed_over(world: World) -> #(Input, List(#(Input, Int)), World) {
     True -> [caller_row, ..rows]
     False -> rows
   }
-  let #(recorded, rng) = rng.pick(rng, ["none", "none", "answered", "closed"])
+  let #(recorded, rng) =
+    rng.pick(rng, ["none", "none", "answered", "closed", "unreadable"])
   let record = case recorded {
-    "answered" -> Some(passage(Some(t0 - 20), None))
-    "closed" -> Some(passage(None, Some(t0 - 5)))
-    _ -> None
+    "answered" -> recovery.RecordRead(Some(passage(Some(t0 - 20), None)))
+    "closed" -> recovery.RecordRead(Some(passage(None, Some(t0 - 5))))
+    "unreadable" -> recovery.RecordUnreadable("timeout")
+    _ -> recovery.RecordRead(None)
   }
   let #(marked, rng) =
     rng.pick(rng, ["none", "none", "none", "departing", "departed"])
@@ -201,16 +246,17 @@ fn handed_over(world: World) -> #(Input, List(#(Input, Int)), World) {
   let #(surveyed_at, rng) = rng.below(rng, 6)
   let #(probed_at, rng) = rng.below(rng, 6)
   let #(answers, rng) = rng.chance(rng, 80)
+  let survey =
+    core.Surveyed(recovery.Survey(
+      channels: Some(events.Channels(channels: rows, complete: True)),
+      record: record,
+    ))
+  let again = case record {
+    recovery.RecordUnreadable(_) -> [survey]
+    recovery.RecordRead(_) -> []
+  }
   let found =
-    [
-      #(
-        core.Surveyed(recovery.Survey(
-          channels: Some(events.Channels(channels: rows, complete: True)),
-          record: record,
-        )),
-        surveyed_at + 1,
-      ),
-    ]
+    [#(survey, surveyed_at + 1)]
     |> list.append(case answers {
       True -> [#(probe, probed_at + 1)]
       False -> []
@@ -219,7 +265,7 @@ fn handed_over(world: World) -> #(Input, List(#(Input, Int)), World) {
     [] -> World(..world, rng: rng)
     _ -> World(..world, offers: [#(id, count)], rng: rng)
   }
-  #(core.Rejoined(joining_of("h1"), id), found, world)
+  #(core.Rejoined(joining_of("h1"), id), found, again, world)
 }
 
 fn joining_of(id: String) -> core.Joining {
@@ -275,10 +321,11 @@ fn an_input(world: World) -> #(Input, World) {
       ]),
       world,
     )
-    k if k < 77 -> {
+    k if k < 74 -> {
       let #(which, rng) = rng.pick(world.rng, ["h1", "h2"])
       #(noop_done(core.barrier_id(handoff(which))), World(..world, rng: rng))
     }
+    k if k < 77 -> a_resume_word(world)
     k if k < 79 -> #(event(call_id, "CHANNEL_TRANSFEREE", []), world)
     k if k < 83 ->
       case world.offers {
@@ -317,7 +364,10 @@ fn a_leg_event(world: World) -> #(Input, World) {
       let #(n, rng) = rng.below(rng, offer.1)
       let leg = leg_of(offer.0, n + 1)
       let #(what, rng) =
-        rng.pick(rng, ["create", "answer", "answer", "park", "gone", "blind"])
+        rng.pick(rng, [
+          "create", "answer", "answer", "park", "gone", "blind", "marks",
+          "marks",
+        ])
       let #(cause, rng) =
         rng.pick(rng, [
           "NO_ANSWER", "LOSE_RACE", "ORIGINATOR_CANCEL", "NORMAL_CLEARING",
@@ -327,12 +377,52 @@ fn a_leg_event(world: World) -> #(Input, World) {
         "create" -> event(leg, "CHANNEL_CREATE", [])
         "answer" -> event(leg, "CHANNEL_ANSWER", [])
         "park" -> call_script.parked(leg)
+        // The caller's `noop` behind the marks of an answer on this leg.
+        "marks" -> call_script.marks_ran(leg)
         "blind" -> gone(leg, "BLIND_TRANSFER")
         _ -> gone(leg, cause)
       }
       #(input, World(..world, rng: rng))
     }
   }
+}
+
+/// What the caller's channel says of a resume: the completion of the probe
+/// before one or of a probe after one, or an event of a resumed flow, each
+/// carrying a passage's `Queue-Departed` or none.
+fn a_resume_word(world: World) -> #(Input, World) {
+  let #(what, rng) = rng.pick(world.rng, ["before", "after", "flow"])
+  let #(attempt, rng) = rng.below(rng, core.resume_attempts)
+  let #(mark, rng) = rng.pick(rng, ["h1", "h2", ""])
+  let marks = case mark {
+    "" -> []
+    id -> [#(recovery.departed_var, doc.String(id))]
+  }
+  let completion = fn(msg_id) {
+    [
+      #("Application-Name", doc.String("noop")),
+      #("Application-Response", doc.String(msg_id)),
+    ]
+  }
+  let #(name, more) = case what {
+    "before" -> #(
+      "CHANNEL_EXECUTE_COMPLETE",
+      completion(core.resume_probe_id(handoff("h1"))),
+    )
+    "after" -> #(
+      "CHANNEL_EXECUTE_COMPLETE",
+      completion(core.resumed_probe_id(handoff("h1"), attempt + 1)),
+    )
+    _ -> #("CHANNEL_EXECUTE", [#("Application-Name", doc.String("playback"))])
+  }
+  #(
+    event(
+      call_id,
+      name,
+      list.append(more, [#("Custom-Channel-Vars", doc.object(marks))]),
+    ),
+    World(..world, rng: rng),
+  )
 }
 
 fn a_caller_bridge(world: World) -> #(Input, World) {
@@ -398,6 +488,7 @@ type Seen {
     barriers: Dict(String, Int),
     /// Continues sent, by handoff: the branches, in order.
     continues: Dict(String, List(String)),
+    /// Resumes published, by handoff: how many.
     resumes: Dict(String, Int),
     passages: Int,
     /// Callers handed over, and the dispatcher told where they stand.
@@ -405,8 +496,23 @@ type Seen {
     presents: Int,
     /// The offers told as found going on, by the step that told them.
     found: Dict(String, Int),
+    /// The agent the caller was last marked answered by (`Agent-ID`), since
+    /// the last ring rung or found: what a bridge has to find.
+    marked: Option(String),
+    /// The `Msg-ID` of the `noop` sent behind those marks, and whether its
+    /// completion has been heard since.
+    confirming: Option(String),
+    confirmed: Bool,
+    /// The effect before this one in the step.
+    previous: Option(Effect),
     problems: List(String),
   )
+}
+
+/// A ring rung or found: whatever the caller was marked with before is an
+/// earlier answer's.
+fn unmarked(seen: Seen) -> Seen {
+  Seen(..seen, marked: None, confirming: None, confirmed: False)
 }
 
 fn offer_key(id: types.OfferId) -> String {
@@ -431,13 +537,17 @@ fn run(seed: Int) -> #(Call, Seen) {
       rejoins: 0,
       presents: 0,
       found: dict.new(),
+      marked: None,
+      confirming: None,
+      confirmed: False,
+      previous: None,
       problems: [],
     )
   list.fold(a_script(seed), #(fresh(), start), fn(acc, entry) {
     let #(call, seen) = acc
     let #(input, ms) = entry
     let clock = at_ms(ms)
-    let seen = Seen(..seen, step: seen.step + 1)
+    let seen = Seen(..seen, step: seen.step + 1, previous: None)
     let seen = case input {
       core.Ring(request) ->
         Seen(
@@ -447,15 +557,26 @@ fn run(seed: Int) -> #(Call, Seen) {
       core.Joined(_) -> Seen(..seen, passages: seen.passages + 1)
       core.Rejoined(..) ->
         Seen(..seen, passages: seen.passages + 1, rejoins: seen.rejoins + 1)
+      core.Event(event) ->
+        case seen.confirming {
+          Some(msg_id) ->
+            case core.is_noop_done(event, msg_id) {
+              True -> Seen(..seen, confirmed: True)
+              False -> seen
+            }
+          None -> seen
+        }
       _ -> seen
     }
     let #(after, effects) = core.step(call, input, clock)
     let seen =
       list.fold(effects, seen, fn(seen, effect) {
-        check(call, after, input, seen, effect)
+        let seen = check(call, after, input, clock, seen, effect)
+        Seen(..seen, previous: Some(effect))
       })
     let seen = released(call, after, effects, seen)
     let seen = found_out(call, after, effects, seen)
+    let seen = watched(call, after, input, seen)
     let wait = core.wait_ms(after, clock)
     let seen = case wait >= 1 && wait <= 30_000 {
       True -> seen
@@ -560,7 +681,14 @@ fn problem(seen: Seen, what: String) -> Seen {
 }
 
 /// One effect, as the step that made it.
-fn check(before: Call, after: Call, input: Input, seen: Seen, effect: Effect) {
+fn check(
+  before: Call,
+  after: Call,
+  input: Input,
+  clock: core.Clock,
+  seen: Seen,
+  effect: Effect,
+) {
   let seen = case
     core.commands_caller(effect)
     && !core.allowed(before.phase, after.phase, effect)
@@ -589,6 +717,82 @@ fn check(before: Call, after: Call, input: Input, seen: Seen, effect: Effect) {
         _ -> problem(seen, "originated " <> key <> " unasked")
       }
       Seen(..seen, originated: dict.insert(seen.originated, key, seen.step))
+      |> unmarked
+    }
+    core.Mark(vars) ->
+      case list.key_find(vars, "Agent-ID") {
+        Ok(doc.String(agent)) ->
+          Seen(..seen, marked: Some(agent), confirmed: False)
+        _ -> seen
+      }
+    core.Confirm(msg_id) -> {
+      let seen = case seen.previous {
+        Some(core.Mark(vars)) ->
+          case list.key_find(vars, "Agent-ID") {
+            Ok(_) -> seen
+            Error(Nil) -> problem(seen, "confirmed marks that are no answer's")
+          }
+        _ -> problem(seen, "confirmed " <> msg_id <> " with no marks before")
+      }
+      let waiting_on = case after.phase {
+        core.Offering(ring: core.Parking(leg: leg, ..), ..) ->
+          Some(core.marks_id(leg))
+        _ -> None
+      }
+      let seen = case before.phase {
+        core.Recovering(..) -> seen
+        _ if waiting_on == Some(msg_id) -> seen
+        _ ->
+          problem(
+            seen,
+            "confirmed " <> msg_id <> " for no leg the call is waiting on",
+          )
+      }
+      Seen(..seen, confirming: Some(msg_id), confirmed: False)
+    }
+    core.Bridge(leg) -> {
+      let recovered = case before.phase {
+        core.Recovering(..) -> True
+        _ -> False
+      }
+      let seen = case leg_agent(before, after, leg), seen.marked {
+        Some(agent), Some(marked) if agent == marked -> seen
+        // The leg's offer is not on either side of the step -- a caller
+        // found out about and moved on by what arrived meanwhile -- and any
+        // answer's marks will do.
+        None, Some(_) if recovered -> seen
+        _, _ ->
+          problem(
+            seen,
+            "bridged the caller to "
+              <> leg
+              <> " marked with "
+              <> string.inspect(seen.marked),
+          )
+      }
+      // The marks' `noop` completed, or the wait for it is over. A caller
+      // found out about may be bridged on a completion heard meanwhile,
+      // which is the last actor's.
+      let waited_out = case input, before.phase {
+        core.Tick, core.Offering(ring: core.Parking(until_ms: until, ..), ..) ->
+          clock.now_ms >= until
+        _, _ -> False
+      }
+      let sent = seen.confirming == Some(core.marks_id(leg))
+      case recovered || sent && { seen.confirmed || waited_out } {
+        True -> seen
+        False ->
+          problem(
+            seen,
+            "bridged the caller to "
+              <> leg
+              <> " before its marks were seen to run ("
+              <> string.inspect(seen.confirming)
+              <> ", heard: "
+              <> string.inspect(seen.confirmed)
+              <> ")",
+          )
+      }
     }
     core.Tell(offer, reply) -> {
       let key = offer_key(offer)
@@ -602,6 +806,13 @@ fn check(before: Call, after: Call, input: Input, seen: Seen, effect: Effect) {
     core.Left(_) -> Seen(..seen, lefts: [seen.step, ..seen.lefts])
     core.Present(offer, presence) -> {
       let seen = Seen(..seen, presents: seen.presents + 1)
+      // A ring found going on: marks from before it are an earlier answer's.
+      // An actor that already knows the caller tells the dispatcher of the
+      // ring it has, which is no new one.
+      let seen = case before.phase, presence {
+        core.Recovering(..), types.PresentRinging(..) -> unmarked(seen)
+        _, _ -> seen
+      }
       let seen = case seen.presents > seen.rejoins {
         True -> problem(seen, "told the dispatcher more often than rejoined")
         False -> seen
@@ -661,13 +872,65 @@ fn check(before: Call, after: Call, input: Input, seen: Seen, effect: Effect) {
         False ->
           problem(seen, "resumed " <> handoff.id <> " before asking enough")
       }
-      let seen = case dict.get(seen.resumes, handoff.id) {
-        Ok(_) -> problem(seen, "resumed " <> handoff.id <> " twice")
-        Error(Nil) -> seen
+      let resumed = dict.get(seen.resumes, handoff.id) |> result_or(0)
+      let seen = case resumed >= core.resume_attempts {
+        True -> problem(seen, "resumed " <> handoff.id <> " too often")
+        False -> seen
       }
-      Seen(..seen, resumes: dict.insert(seen.resumes, handoff.id, seen.step))
+      let seen = case marked(before, input) {
+        True ->
+          problem(seen, "resumed " <> handoff.id <> " as its mark was heard")
+        False -> seen
+      }
+      Seen(..seen, resumes: dict.insert(seen.resumes, handoff.id, resumed + 1))
     }
+    // The one hang-up of a caller no agent answered: a watch giving up.
+    core.HangUpCaller ->
+      case before.phase {
+        core.Resumed(passage: passage, ..) ->
+          case
+            dict.get(seen.resumes, passage.handoff.id) |> result_or(0)
+            == core.resume_attempts
+          {
+            True -> seen
+            False ->
+              problem(
+                seen,
+                "hung up " <> passage.handoff.id <> " with resumes untried",
+              )
+          }
+        _ -> seen
+      }
     _ -> seen
+  }
+}
+
+/// Whether the input carries the mark of the passage the call is resuming:
+/// `Queue-Departed` naming it, on an event of the caller's channel.
+fn marked(call: Call, input: Input) -> Bool {
+  case call.phase, input {
+    core.Resuming(passage: passage, ..), core.Event(event)
+    | core.Resumed(passage: passage, ..), core.Event(event)
+    ->
+      events.call_id(event) == Some(call_id)
+      && events.custom_channel_var(event, recovery.departed_var)
+      == Some(passage.handoff.id)
+    _, _ -> False
+  }
+}
+
+/// A call watching its resume is done with it in the step that hears the
+/// resumed flow's mark.
+fn watched(before: Call, after: Call, input: Input, seen: Seen) -> Seen {
+  case before.phase, marked(before, input), after.phase {
+    core.Resumed(..), True, core.Done -> seen
+    core.Resumed(..), True, _ ->
+      problem(
+        seen,
+        "heard its resume taken and went on to "
+          <> call_script.phase_name(after),
+      )
+    _, _, _ -> seen
   }
 }
 
@@ -676,6 +939,19 @@ fn result_or(read: Result(a, Nil), default: a) -> a {
     Ok(value) -> value
     Error(Nil) -> default
   }
+}
+
+/// The agent a leg rings, as the offer on either side of a step names it.
+fn leg_agent(before: Call, after: Call, leg: String) -> Option(String) {
+  [before.phase, after.phase]
+  |> list.find_map(fn(phase) {
+    case phase {
+      core.Offering(offer: offer, ..) | core.Connected(offer: offer, ..) ->
+        dict.get(offer.legs, leg)
+      _ -> Error(Nil)
+    }
+  })
+  |> option.from_result
 }
 
 /// A reply, against the replies its offer has had.
@@ -782,6 +1058,70 @@ pub fn every_script_keeps_the_promises_test() {
   })
 }
 
+/// Some scripts ask about a caller whose record never reads until the tries
+/// run out, and the last try takes them as the switches find them, or the
+/// property above proves nothing of it.
+pub fn the_scripts_reach_the_last_try_test() {
+  let last = core.recover_attempts
+  let reached =
+    rng.upto(scripts)
+    |> list.count(fn(seed) {
+      a_script(seed)
+      |> list.fold(#(fresh(), False), fn(acc, entry) {
+        let #(call, reached) = acc
+        let #(after, _) = core.step(call, entry.0, at_ms(entry.1))
+        let reached = case call.phase, after.phase {
+          core.Recovering(..), core.Recovering(..) -> reached
+          core.Recovering(
+            attempt: attempt,
+            survey: Some(recovery.Survey(
+              record: recovery.RecordUnreadable(_),
+              ..,
+            )),
+            ..,
+          ),
+            _
+            if attempt == last
+          -> True
+          _, _ -> reached
+        }
+        #(after, reached)
+      })
+      |> fn(result) { result.1 }
+    })
+  assert reached > 0
+}
+
+/// Some scripts publish a resume again and some give a caller up, or the
+/// promises about resumes above prove less than they say.
+pub fn the_scripts_resume_again_and_give_up_test() {
+  let tallies =
+    rng.upto(scripts)
+    |> list.map(fn(seed) {
+      a_script(seed)
+      |> list.fold(#(fresh(), 0, False), fn(acc, entry) {
+        let #(call, resumes, gave_up) = acc
+        let #(after, effects) = core.step(call, entry.0, at_ms(entry.1))
+        let resumed =
+          list.count(effects, fn(effect) {
+            case effect {
+              core.Resume(..) -> True
+              _ -> False
+            }
+          })
+        let gave = case call.phase {
+          core.Resumed(..) -> list.contains(effects, core.HangUpCaller)
+          _ -> False
+        }
+        #(after, resumes + resumed, gave_up || gave)
+      })
+    })
+  let again = list.count(tallies, fn(tally) { tally.1 >= 2 })
+  let given_up = list.count(tallies, fn(tally) { tally.2 })
+  assert #(again > 0, given_up > 0, again, given_up)
+    == #(True, True, again, given_up)
+}
+
 /// The scripts reach every phase, or the property above proves less than it
 /// says.
 pub fn the_scripts_reach_every_phase_test() {
@@ -800,7 +1140,7 @@ pub fn the_scripts_reach_every_phase_test() {
   list.each(
     [
       "waiting", "ringing", "parking", "connecting", "connected", "leaving",
-      "departed", "recovering", "resuming", "done",
+      "departed", "recovering", "resuming", "resumed", "done",
     ],
     fn(name) {
       case list.contains(reached, name) {

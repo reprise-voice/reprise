@@ -404,7 +404,7 @@ pub fn replied(state: State, id: OfferId, reply: OfferReply) -> State {
           system.log_error(
             "the pickup of call " <> id.call_id <> " failed: " <> reason,
           )
-          tell(state, id, Error(reason)) |> unanswered(offer, "cancelled")
+          tell(state, id, Error(reason)) |> failed(offer, reason)
         }
         Ended(result, at) -> ended(state, offer, result, at)
         // Routed to `arrival.present` before a pickup's replies are.
@@ -495,6 +495,14 @@ fn unanswered(state: State, offer: Offer, outcome: String) -> State {
   forget(state, offer)
 }
 
+/// The supervisor's phone never rang, or its ring broke: the same, with the
+/// offer `failed` and why, as an agent's is.
+fn failed(state: State, offer: Offer, reason: String) -> State {
+  records.offer_failed(offer.member, supervisor_of(offer), reason)
+  offers.close_if_superseded(state, offer, answered: False)
+  forget(state, offer)
+}
+
 /// The picked-up call is over: the record closed and `member_result`
 /// published, with no agent counters and no wrap-up.
 fn ended(state: State, offer: Offer, result: EndResult, at: Int) -> State {
@@ -577,7 +585,7 @@ pub fn expired(state: State, offer: Offer, now: Int) -> State {
 /// caller waits on; after one the call is closed as one whose end was lost.
 fn closed_unwatched(state: State, offer: Offer, now: Int) -> State {
   case offer.connected {
-    None -> unanswered(state, offer, "cancelled")
+    None -> failed(state, offer, offer_down)
     Some(_answered) -> ended(state, offer, FailedBridge, now)
   }
 }

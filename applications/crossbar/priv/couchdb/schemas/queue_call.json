@@ -72,19 +72,24 @@
                         "type": "string"
                     },
                     "outcome": {
-                        "description": "How the offer ended",
+                        "description": "How the offer ended: cancelled is a ring called off, by the caller leaving, somebody else answering, or the passage ending around it; failed is an offer that never rang or broke, and says why in reason",
                         "enum": [
                             "answered",
                             "no_answer",
                             "busy",
                             "reject",
-                            "cancelled"
+                            "cancelled",
+                            "failed"
                         ],
                         "type": "string"
                     },
                     "pickup": {
                         "description": "The phone rung was a supervisor's, for a pickup, and not an agent's",
                         "type": "boolean"
+                    },
+                    "reason": {
+                        "description": "Why a failed offer failed: no_endpoints, offer_crashed, offer_down, or the switch's cause",
+                        "type": "string"
                     }
                 },
                 "type": "object"

@@ -90,9 +90,13 @@ dispatches. It keeps five rules.
    own view, from the same connection as the node's member queue consumers,
    so a node loses its membership in the instant it loses its shards. The
    names to ask about come from `kz_nodes` -- every node in this zone it has
-   heard running `callcenter`, and this node -- and nothing else does:
-   `kz_nodes` hears of a node dying 12 to 45 seconds late and of one starting
-   15 to 40 seconds late.
+   heard running `callcenter`, and this node -- and from the members at the
+   last look, and nothing else decides: `kz_nodes` hears of a node dying 12
+   to 45 seconds late and of one starting 15 to 40 seconds late. The members
+   are asked about again because `kz_nodes` can forget a node that is there.
+   A restarted node's old entry runs out after the new one's queue is
+   consumed and before its first heartbeat is heard, and the node would
+   drop out and back in, taking its shards on a round trip.
 2. **The assignment** is computed by every node from the members alone
    (`shards.assign`). Each member ranks every shard by
    `erlang:phash2({Member, Shard})`, and the shards are dealt in order, each
@@ -1150,9 +1154,10 @@ it asks, which come to its own address, `pid://<actor>/<queue>` on the
 node's reply listener (`callcenter/call/replies`) -- and performs the
 effects from its one process. The call is always in one phase, and what it
 may send the caller follows from the phase alone (`core.allowed`, held by a
-property test): media only while waiting, the bridge only as it connects,
-marks and the recording only while connected, the departure's marks and
-barrier only as it leaves.
+property test): media only while waiting; the answer's marks, and the
+`noop` that shows they ran, only as a leg answers; the bridge only out of
+the wait that follows, never in the step that marked; the recording only
+while connected; the departure's marks and barrier only as it leaves.
 
 **Waiting.** The queue's greeting, then hold (`kz_endless_playback`, whose
 input callback reads the exit keys while it plays), and the announcements;
@@ -1178,26 +1183,50 @@ chose them:
 | `Msg-ID` | the leg prefix, which the answer echoes |
 
 The caller hears their hold all through. The first leg to answer decides
-the call, and the caller's channel is marked with the agent and the second
-then, while they are still on hold: a `set` is an application, and a
-channel in a bridge runs none. The caller is bridged once the leg's
-originate has finished with it -- the leg's `park` is heard, or the
-originate's own success, or 150 ms have gone by, the switch running that
-`park` within 40 ms of the answer -- because a leg bridged sooner is taken
-back out of the bridge by that `park` (the lab of 2026-09-27,
-`e2e-260927-cca2`). The wait is kept short: until the bridge the agent's
-leg is on its own, and the switch refuses a blind transfer from it. The bridge is on the caller's control
-queue: a `noop` that flushes the hold, then `connect_leg` run at once, not
-queued, so that the caller's queue keeps running, with `Park-After-Pickup`,
-which `ecallmgr` sets on both channels through the switch's API before the
-bridge. So the caller parks rather than hangs up when the agent's leg goes,
-and the agent's leg parks when the caller goes, and is hung up by the actor.
-The caller's own `CHANNEL_BRIDGE` naming the leg is the connection: the
-recording starts, and the dispatcher hears `Answered`. A bridge that has not
-shown in five seconds is hung up, and the caller is put back on hold. Either
-side hanging up between the answer and the bridge ends the call as the
-answered call it is: the dispatcher hears the answer and its end, and the
-other side is hung up.
+the call, however its answer is heard first: its `CHANNEL_ANSWER`, its
+`park`, which only an answered leg runs, or the originate's own success.
+One channel's events can come out of order, and the originate's answer
+comes by another road. The caller's channel is marked with the agent and
+the second then, while they are still on hold. The marks are on the
+caller's CDR, and they are what a node taking the call over dates the
+answer by.
+
+A `set` sent with `Insert-At: now` is not run as `ecallmgr` takes it.
+`mod_com_kazoo` queues it on the caller's channel as a priority private
+event and answers `+OK`, and the channel runs it the next time it looks,
+within a frame of its hold. The bridge's flush empties that queue
+(`uuid_break <caller> all`), so marks sent in the same breath as the bridge
+are lost whenever the flush gets there first. So a `noop` goes at once
+behind the marks, with a known `Msg-ID` (`callcenter-marked-<leg>`). The
+channel runs the commands sent it at once in the order they came, and the
+`noop`'s completion says the marks have run.
+
+The caller is bridged once that completion is heard and the leg's
+originate has finished with it: the leg's `park` is heard, or the
+originate's own success, or 150 ms have gone by since the marks went out,
+the switch running that `park` within 40 ms of the answer. A leg bridged
+sooner is taken back out of the bridge by that `park` (the lab of
+2026-09-27, `e2e-260927-cca2`). Marks not seen to run in those 150 ms are
+waited for no longer: the bridge goes out, with a log that they may be
+lost. The wait is kept short: until the bridge the agent's leg is on its
+own, and the switch refuses a blind transfer from it. A caller heard
+bridged to that leg while it waits is through, and waits no more: only a
+caller found parked is, whom the last actor had bridged after its own marks
+ran, dying before the survey listed the bridge. Bridged to anybody else's
+channel, something that is not the queue has taken the caller.
+
+The bridge is on the caller's control queue: a `noop` that flushes the
+hold, then `connect_leg` run at once, not queued, so that the caller's
+queue keeps running, with `Park-After-Pickup`, which `ecallmgr` sets on
+both channels through the switch's API before the bridge. So the caller
+parks rather than hangs up when the agent's leg goes, and the agent's leg
+parks when the caller goes, and is hung up by the actor. The caller's own
+`CHANNEL_BRIDGE` naming the leg is the connection: the recording starts,
+and the dispatcher hears `Answered`. A bridge that has not shown in five
+seconds is hung up, and the caller is put back on hold. Either side
+hanging up between the answer and the bridge ends the call as the answered
+call it is: the dispatcher hears the answer and its end, and the other
+side is hung up.
 
 **The race.** An answer, a key, a clock running out and a call-off can all be
 in flight at once. Whichever the actor handles first stands: a leg that
@@ -1262,6 +1291,27 @@ through `callflow.resume` on whichever callflow node takes it, with
 over later does not hand them back twice. A branch with nowhere to go hangs
 the caller up.
 
+**A resume nobody takes.** Nothing on the bus says a resume was taken. The
+callflow node that takes one first asks the switches whether the channel is
+up, and when that fails it drops the resume without a word
+(`cf_route_resume:handle_if_up`). Or no node takes it at all. The shard
+settled the caller's member as they left and their callflow is gone, so
+only the actor can notice. It stays after the resume and watches the
+caller's channel (`Resumed`). `callcenter_departed` writes the passage's
+`Queue-Departed` mark before the flow runs anything else, and every event
+carries the channel's variables, so the first event with the mark ends the
+watch. So do the channel's end, a late `member_continuing`, and the caller
+joining a queue again. If no mark shows in eight seconds (`resume_ack_ms`),
+the actor probes the channel with a `noop` run at once, whose completion
+carries its variables. A completion without the mark, or no completion in
+three seconds, means nobody took the resume, and the actor publishes it
+again. The wait is long on purpose. A resume published again while the
+first is still starting would run the branch twice on one channel. After
+the third try (`resume_attempts`), about half a minute on, the actor logs
+an error and hangs the caller up. The caller has heard silence since the
+departure's barrier flushed their hold, the queue has no hold to give them
+any more, and a caller who is hung up can call back.
+
 **Quarantine.** An actor that crashes is not restarted: the dispatcher
 joins its caller to a new one, which finds out where they stand
 (*Takeover*). A call whose actors keep crashing is one this code cannot get
@@ -1289,7 +1339,7 @@ A caller handed to an actor that does not know them is *Takeover*'s.
 | What | When |
 |---|---|
 | the channel table, against `query_account_channels` | start, media node expiry, queue document change, every `reconcile_interval_s` |
-| a waiting caller whose channel is on no switch | `CHANNEL_DESTROY`, and every `reconcile_interval_s` through `channel_status` |
+| a waiting caller whose channel is on no switch | `CHANNEL_DESTROY`, and every `reconcile_interval_s` through `channel_status`: the dispatcher closes the caller itself only while nobody is being rung for them. With an offer out, the caller's actor decides, since it alone knows whether an agent answered first (the lab of 2026-09-28, `e2e-260927-cca6`) |
 | a caller, or a connected agent's leg, whose end was never heard | their actor's audit, every thirty seconds, through `channel_status` |
 | an offer that never came back | the agent's ring timeout plus `offer_grace_s` |
 | a wrap-up, a per-agent delay | the dispatcher's own second-by-second tick |
@@ -1355,7 +1405,7 @@ handed out before (its `redelivered` flag, and nothing else), a caller handed
 on from a dispatcher of this node that ended, or one whose actor ended while
 they waited -- joins their actor `resumed`, and nobody is rung for them until
 the actor has said where they stand (`Present`), or for `present_wait_s`
-(thirty seconds) if it never does. A first delivery is asked nothing: finding
+(sixty seconds) if it never does. A first delivery is asked nothing: finding
 out is the price of a failover, not of a call.
 
 An actor already running the caller's passage knows, and says so at once:
@@ -1375,7 +1425,10 @@ it is the dispatcher that is new. One that has just started finds out
 - **the record**: the `queue_call` document of the member's own passage,
   found by the call id, queue and join second the member carries
   (*Documents and views*). A caller who timed out of one queue into another
-  has the second queue's record read, not the first queue's closed one.
+  has the second queue's record read, not the first queue's closed one. A
+  document, or a month database, the datastore says is not there is no
+  record; one it did not answer for is a record not read, which is not the
+  same thing (below).
 
 Everything that arrives meanwhile -- a key, a hang-up, a leg answering --
 waits, and is heard once the call has been classified; a ring asked for
@@ -1388,10 +1441,10 @@ stands, and every leg of theirs it does not keep is hung up:
 | the record closed, by an end or a cancel | the queue is done with them, and only the settle was lost: `PresentOver`, and the member is settled |
 | `Queue-Departed` naming this passage | the callflow has them back: settled on the branch the departure's mark names |
 | the caller bridged to a channel that is not one of their legs | a pickup or a transfer: settled as a transfer |
-| the caller bridged to one of their legs | connected: marked again, `PresentConnected`, and the end heard as any call's |
+| the caller bridged to one of their legs | connected, dated by the last actor's marks when they name the leg's agent: not marked again, since the last actor marked them before it bridged them, and a command sent to a caller in a bridge runs inside it, if at all, holding the agent while it does; `PresentConnected`, and the end heard as any call's |
 | `Queue-Departing` naming this passage | the departure is taken up again at its barrier, and the caller handed back on `Queue-Departing-Branch` |
-| the record answered, and the caller through to nobody | the call ended while nothing watched it: `PresentConnected`, and its end told at once |
-| one of their legs answered and parked | bridged at once: `PresentRinging`, and the answer told as any |
+| the record answered, and the caller through to nobody | the call ended while nothing watched it: `PresentConnected`, and its end told at once, as the agent's; a caller the probe reached is parked alone, and is hung up |
+| one of their legs answered and parked | marked again at once, dated by the last actor's marks when they name the leg's agent, and bridged once the marks are seen to run: `PresentRinging`, and the answer told as any |
 | legs of one offer ringing with at least three seconds of it left | the ring is taken on: `PresentRinging`, and its end told as any ring's |
 | none of that | waiting: a hold queued behind whatever was playing, and `PresentWaiting` |
 
@@ -1399,8 +1452,57 @@ Bridged is two rows naming each other: the caller's `other_leg` is the
 channel and the channel's is the caller. The caller's own row keeps the
 other leg of a bridge that has ended, and a leg that is not bridged names
 itself. A caller the probe did not reach and whom not every switch answered
-about is asked about again, three times, and then taken to be waiting:
-nothing is hung up on a guess.
+about is asked about again, six times, and then taken to be waiting:
+nothing is hung up on a guess. So is a caller the probe reached, whose own
+switch did not answer, and whose record has an offer out or an answer. The
+legs start on the caller's switch, so the listing can say nothing of their
+ring or their conversation. A node that has just started asks nobody for
+its first 15 to 40 seconds, until `kz_nodes` has heard of the `ecallmgr`s.
+In the lab of 2026-09-28 (`e2e-260927-cca7`), a holder that took its own
+shard back 16 seconds after a restart took a ringing caller to be waiting,
+and rang their agent a second time. Each try waits out its eight seconds
+before the next, so the six span 48 seconds.
+
+**A record that could not be read** is not taken for one that is not
+there. Taken so, a takeover during a datastore outage would settle a caller
+whose answered call ended unwatched as a hang-up, losing its end and its
+agent's counters, and offer again a caller whose passage is over and whose
+member came round only because its settle was lost. So every row the
+record decides waits on it: gone or ended unwatched, and, since the
+record's close is asked before anything the switch says, every row for a
+caller whose channel is up. A survey that did not come in within its try
+did not read the record either. The caller is asked about again on the same six
+tries, and a datastore that answers within them decides them as it would
+have at once. One that does not is taken, on the last try, for no record:
+the caller is where the probe and the switches alone put them, and only a
+caller they cannot place either is taken to be waiting. Waiting would put a
+caller in a conversation on hold, offer a caller who has gone and keep one
+the callflow has back; the switches' word gets wrong only what the record
+alone knows. Asking for longer would leave the caller unwatched for longer:
+nobody rings for them, a departure half done keeps them in silence, and the
+phones found ringing are nobody's.
+
+**Parked, or passed on.** A caller whose record has an answer and who is
+through to nobody had their conversation end while nothing watched it, and
+the listing cannot say how. The bridge's `Park-After-Pickup` parks the
+caller when the agent's leg goes, so a caller whose agent hung up in the
+gap between the old holder's death and the new actor's survey is parked,
+in silence, and nothing but their actor will ever hang them up. A caller
+the agent passed on is running the transfer's callflow. The probe tells the
+two apart. It goes to the control queue the callflow action handed over
+with the caller, which `ecallmgr` addresses to the one control process that
+took the caller into the queue (`pid://`, delivered to that process and no
+other). That process stops when anything else takes the channel: a
+transfer's `CHANNEL_TRANSFEREE`, or another callflow's `usurp_control`. So
+a caller the probe reached is still the queue's, and, through to nobody,
+is parked alone: they are hung up. A caller the probe did not reach is left
+as they are. Either way the dispatcher hears the call's end as the agent's
+(`agent_hangup`). What makes the hang-up safe is the control process, not
+the probe's completion: a probe sent while the caller was still bridged is
+held by the switch until the bridge ends, and can complete after a transfer
+has parked them; but the hang-up goes through the same control process as
+the probe, and a transfer has stopped it, so it only ever reaches a caller
+the queue still commands.
 
 The dispatcher takes a ring or a call its actor found as an offer of its own,
 under the id the actor names, and hears its end from the actor as it hears
@@ -1492,6 +1594,11 @@ What still does not survive the node:
   the shard was moving is recorded as a little longer than it was. The CDR
   would say; reading one means knowing what it is keyed by in the queue call's
   month database.
+- **what only the record knows, through a longer datastore outage.** A
+  caller handed over whose record no try read in 48 seconds is taken as the
+  switches find them (above). An answered call that ended unwatched in
+  that time is settled as a hang-up, its end and its agent's counters lost,
+  and a passage that was over, whose settle was lost, is taken up again.
 - **a call answered in a month the scan no longer reads.** It looks at the
   current month only, so a call answered at ten to midnight on the last day of
   one, whose holder died after it, is not found.
@@ -1517,6 +1624,19 @@ overflow queue, or joins the same queue again, has a second document with its
 own queue, offers, answer and end. Per-queue reports count each passage under
 its own queue, and the open-call view finds the answered second passage of a
 caller whose first was cancelled.
+
+Every offer is an `offered_to` entry, and every entry gets an outcome:
+- `answered`;
+- `no_answer`, `busy` or `reject`;
+- `cancelled`, a ring called off, by the caller leaving, by somebody else
+  answering a ring-all, or by the passage ending around it;
+- `failed`, an offer that never rang or broke, with its `reason`:
+  `no_endpoints`, `offer_crashed`, `offer_down` for a pickup, or the
+  switch's cause.
+
+The end or cancel of a passage marks any entry still without one
+`cancelled`, which covers a ring whose last word died with its node. A
+closed record has no offer open.
 
 Earlier releases keyed the document by the call id alone, and a re-entry
 reused it. Such a document is still read and written for the passage it

@@ -599,7 +599,7 @@ pub fn live(kz: Kazoo, left: fn(Member, CancelReason) -> Nil) -> Io {
     survey: fn(member: Member) {
       recovery.Survey(
         channels: snapshots.channels(member.account_id),
-        record: records.read(kz, member),
+        record: records.read(kz, member) |> recovery.record,
       )
     },
     audit: fn(call_ids) {
@@ -624,6 +624,8 @@ pub fn perform(
     core.Hold(moh), Some(caller) -> announce.resume_hold(caller, moh)
     core.Bridge(leg), Some(caller) -> bridge(context, caller, leg)
     core.Mark(vars), Some(caller) -> command(context, caller, set_now(vars))
+    core.Confirm(msg_id), Some(caller) ->
+      command(context, caller, noop(msg_id, "now"))
     core.Record(agent_id, at), Some(caller) ->
       case context.member {
         Some(member) -> {
@@ -678,6 +680,7 @@ pub fn perform(
     core.Continue(handoff, branch), _ -> continue(context, handoff, branch)
     core.Resume(handoff, branch), _ -> resume(context, handoff, branch)
     core.Log(message), _ -> system.log(message)
+    core.LogError(message), _ -> system.log_error(message)
     // A command for a caller this actor never had the call of: nothing to
     // send it to.
     _, None -> Nil
@@ -726,6 +729,9 @@ fn noop(msg_id: String, insert_at: String) -> Value {
 
 /// A `set` of the caller's variables, run at once rather than queued: a
 /// mark that waits behind the hold would be thrown away by the next flush.
+/// "At once" is the switch's next look at the channel, not `ecallmgr`
+/// taking it, and a flush before then throws it away all the same, so a
+/// mark that has to survive one is followed by `core.Confirm`.
 fn set_now(vars: List(#(String, Value))) -> Value {
   doc.object([
     #("Application-Name", doc.String("set")),
@@ -930,9 +936,10 @@ pub fn resume_flow(branches: Value, branch: String) -> Option(Value) {
 /// What a caller is resumed with: the `callcenter_departed` action, which
 /// marks the channel `Queue-Departed` for the passage as the queue's action
 /// would have -- so that a node taking the caller over later finds them
-/// handed back already, and does not hand them back twice -- and goes on to
-/// its one child, the branch's flow. `None` when the branch has nowhere to
-/// go.
+/// handed back already, and does not hand them back twice, and so that this
+/// actor, watching the channel (`core.Resumed`), sees the resume was taken
+/// -- and goes on to its one child, the branch's flow. `None` when the
+/// branch has nowhere to go.
 pub fn resumed_flow(handoff: core.Handoff, branch: String) -> Option(Value) {
   resume_flow(handoff.branches, branch)
   |> option.map(fn(flow) {
@@ -946,7 +953,9 @@ pub fn resumed_flow(handoff: core.Handoff, branch: String) -> Option(Value) {
 
 /// The callflow action's node is gone: the caller goes on at the branch on
 /// whichever callflow node takes the resume. A branch with nowhere to go is
-/// the end of the callflow, which hangs up.
+/// the end of the callflow, which hangs up. The core publishes this again
+/// while it does not see the resume taken; the hang-up here ends the watch
+/// with the channel.
 fn resume(context: Context, handoff: core.Handoff, branch: String) -> Nil {
   case context.member, resumed_flow(handoff, branch) {
     None, _ -> Nil

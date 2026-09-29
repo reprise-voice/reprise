@@ -13,9 +13,9 @@ import gleam/option.{type Option, None, Some}
 import kazoo/doc.{type Value}
 import kazoo/events
 import support/call_script.{
-  answer_marks, at, at_ms, bridged_to, call_id, event, fresh, gone, handoff, key,
-  last, noop_done, offer, parked, phase_name, ring, script, settings, t0,
-  waiting,
+  answer_marking, at, at_ms, bridged_to, call_id, event, fresh, gone, handoff,
+  key, last, marks_ran, noop_done, offer, parked, phase_name, ring, script,
+  settings, t0, waiting,
 }
 
 const prefix = "0a1b2c3d4e5f6a7b8c9d0e1f"
@@ -91,6 +91,10 @@ fn surveyed(
   rows: List(events.Channel),
   record: Option(records.Passage),
 ) -> Input {
+  surveyed_as(rows, recovery.RecordRead(record))
+}
+
+fn surveyed_as(rows: List(events.Channel), record: recovery.Recorded) -> Input {
   core.Surveyed(recovery.Survey(
     channels: Some(events.Channels(channels: rows, complete: True)),
     record: record,
@@ -205,13 +209,13 @@ pub fn an_unanswered_probe_times_out_test() {
 /// Nothing found out -- no survey, no probe -- is asked again, and after
 /// `recover_attempts` the caller is taken to be waiting.
 pub fn nothing_found_out_is_asked_again_test() {
+  let ticks =
+    list.repeat(Nil, core.recover_attempts)
+    |> list.index_map(fn(_, n) {
+      #(core.Tick, at_ms({ n + 1 } * core.recover_ms))
+    })
   let #(call, done) =
-    script(fresh(), [
-      #(rejoin("h1", found_as()), at(0)),
-      #(core.Tick, at_ms(core.recover_ms)),
-      #(core.Tick, at_ms(2 * core.recover_ms)),
-      #(core.Tick, at_ms(3 * core.recover_ms)),
-    ])
+    script(fresh(), [#(rejoin("h1", found_as()), at(0)), ..ticks])
   assert nth(done, 1)
     == Ok([core.Probe(recovery.probe_id("h1", 2)), core.Survey])
   assert nth(done, 2)
@@ -222,6 +226,182 @@ pub fn nothing_found_out_is_asked_again_test() {
     core.Present(None, types.PresentWaiting),
   ] = last(done)
   assert phase_name(call) == "waiting"
+}
+
+/// A node that has just started asks its switches nothing and hears back
+/// at once, while the caller's own channel answers the probe. With an
+/// agent ringing on the record, that is not taken to be waiting: the next
+/// try waits out this one's time, so that the tries span what the node
+/// takes to hear of its switches, and the listing that comes in then
+/// finds the ring.
+pub fn a_listing_nobody_answered_is_asked_again_in_time_test() {
+  let record =
+    Some(records.Passage(
+      offer: Some(records.Offered(
+        agents: ["ann"],
+        at: t0,
+        leg_prefix: Some(prefix),
+        pickup: False,
+      )),
+      answered: None,
+      agent_id: None,
+      agent_call_id: None,
+      picked_up: False,
+      ended: None,
+      cancelled: None,
+    ))
+  let nobody =
+    core.Surveyed(recovery.Survey(
+      channels: None,
+      record: recovery.RecordRead(record),
+    ))
+  let #(call, done) =
+    script(fresh(), [
+      #(rejoin("h1", found_as()), at(0)),
+      #(nobody, at_ms(100)),
+      #(probe_done(1, []), at_ms(100)),
+      #(core.Tick, at_ms(core.recover_ms - 1)),
+      #(core.Tick, at_ms(core.recover_ms)),
+      #(
+        surveyed([caller_row(None), leg_row("1", "ann", False, None)], record),
+        at_ms(core.recover_ms + 100),
+      ),
+      #(probe_done(2, []), at_ms(core.recover_ms + 100)),
+    ])
+  // Nothing before the attempt's time is up.
+  assert nth(done, 1) == Ok([])
+  assert nth(done, 2) == Ok([])
+  assert nth(done, 3) == Ok([])
+  assert nth(done, 4)
+    == Ok([core.Probe(recovery.probe_id("h1", 2)), core.Survey])
+  // The ring is found and taken on, and nobody is rung again.
+  assert phase_name(call) == "ringing"
+  assert !list.any(list.flatten(done), fn(effect) {
+    case effect {
+      core.Originate(..) -> True
+      _ -> False
+    }
+  })
+}
+
+// --- A record that could not be read -------------------------------------------
+
+/// A caller gone, whose record the datastore did not answer for, is asked
+/// about again rather than settled as a hang-up. The record read on the
+/// next try has an answer nothing closed, and the call is closed as the
+/// call it was: the dispatcher hears its answer and its end.
+pub fn a_record_not_read_is_asked_again_test() {
+  let id = found_as()
+  let #(call, done) =
+    script(fresh(), [
+      #(rejoin("h1", id), at(0)),
+      #(surveyed_as([], recovery.RecordUnreadable("timeout")), at(1)),
+      #(core.Tick, at_ms(1000 + core.probe_ms)),
+      #(core.Tick, at_ms(core.recover_ms)),
+      #(surveyed([], answered_record(t0 - 30)), at_ms(core.recover_ms + 100)),
+      #(core.Tick, at_ms(core.recover_ms + 100 + core.probe_ms)),
+    ])
+  // Nothing concluded on the first try, and the next is at its end.
+  assert nth(done, 1) == Ok([])
+  assert nth(done, 2) == Ok([])
+  assert nth(done, 3)
+    == Ok([core.Probe(recovery.probe_id("h1", 2)), core.Survey])
+  let assert [present, ended, core.Log(_)] = last(done)
+  assert present
+    == core.Present(Some(id), types.PresentConnected("ann", "", t0 - 30, False))
+  assert ended == core.Tell(id, types.Ended(types.CallerHangup, t0 + 11))
+  assert !list.contains(list.flatten(done), core.Left(types.Hangup))
+  assert core.finished(call)
+}
+
+/// Every try's survey lists `rows` and could not read the record, and the
+/// probe is answered with `vars`, or never. Each try runs out its time
+/// before the next; the last is classified as soon as it can be.
+fn never_read(
+  rows: List(events.Channel),
+  vars: Option(List(#(String, String))),
+) -> #(core.Call, List(List(core.Effect)), types.OfferId) {
+  let id = found_as()
+  let tries =
+    list.repeat(Nil, core.recover_attempts)
+    |> list.index_map(fn(_, n) {
+      let start = n * core.recover_ms
+      let survey = [
+        #(
+          surveyed_as(rows, recovery.RecordUnreadable("timeout")),
+          at_ms(start + 100),
+        ),
+      ]
+      let probe = case vars {
+        Some(vars) -> [#(probe_done(n + 1, vars), at_ms(start + 100))]
+        None -> []
+      }
+      let tick = case vars, n + 1 == core.recover_attempts {
+        Some(_), True -> []
+        _, _ -> [#(core.Tick, at_ms(start + core.recover_ms))]
+      }
+      list.flatten([survey, probe, tick])
+    })
+    |> list.flatten
+  let #(call, done) = script(fresh(), [#(rejoin("h1", id), at(0)), ..tries])
+  #(call, done, id)
+}
+
+/// A record no try could read is taken, on the last try, for no record,
+/// and the caller is where the probe and the switches alone put them:
+/// taking them all to be waiting would put a caller in a conversation on
+/// hold, offer one who has gone, and keep one the callflow has back. Only
+/// a caller the switches cannot place either is taken to be waiting.
+pub fn a_record_never_read_is_taken_as_the_switches_find_it_test() {
+  let bridged = [
+    caller_row(Some(leg("1"))),
+    leg_row("1", "ann", True, Some(call_id)),
+  ]
+  let departed = [
+    #(recovery.departed_var, "h1"),
+    #(recovery.departing_branch_var, "timeout"),
+  ]
+  // The last try is classified at 40.1 seconds.
+  let cases = [
+    #(bridged, Some([]), "connected", fn(id) {
+      [
+        core.Present(
+          Some(id),
+          types.PresentConnected("ann", leg("1"), t0 + 40, False),
+        ),
+      ]
+    }),
+    #([], None, "done", fn(_id) { [core.Left(types.Hangup)] }),
+    #([caller_row(None)], Some(departed), "done", fn(_id) {
+      [core.Left(types.Timeout)]
+    }),
+    #([caller_row(None)], Some([]), "waiting", fn(_id) {
+      [
+        core.Hold(Some("support-hold")),
+        core.Present(None, types.PresentWaiting),
+      ]
+    }),
+  ]
+  list.each(cases, fn(case_) {
+    let #(rows, vars, phase, expected) = case_
+    let #(call, done, id) = never_read(rows, vars)
+    let assert [core.Log(_), ..found] = last(done)
+    assert found == expected(id)
+    assert phase_name(call) == phase
+    // Before it, every try only asked.
+    let asked =
+      done
+      |> list.take(list.length(done) - 1)
+      |> list.flatten
+    assert list.all(asked, fn(effect) {
+      case effect {
+        core.Probe(_) | core.Survey -> True
+        _ -> False
+      }
+    })
+    assert list.count(asked, fn(effect) { effect == core.Survey })
+      == core.recover_attempts
+  })
 }
 
 // --- The call as it is found --------------------------------------------------
@@ -275,10 +455,11 @@ pub fn a_ring_found_is_taken_on_test() {
     script(call, [
       #(event(leg("1"), "CHANNEL_ANSWER", []), at(4)),
       #(parked(leg("1")), at(4)),
+      #(marks_ran(leg("1")), at(4)),
       #(bridged_to(leg("1")), at(4)),
     ])
-  assert list.take(done, 2)
-    == [[answer_marks("ann", t0 + 4)], [core.Bridge(leg("1"))]]
+  assert list.take(done, 3)
+    == [answer_marking("ann", t0 + 4, leg("1")), [], [core.Bridge(leg("1"))]]
   assert list.contains(
     last(done),
     core.Tell(id, types.Answered("ann", leg("1"), t0 + 4)),
@@ -286,23 +467,130 @@ pub fn a_ring_found_is_taken_on_test() {
   assert phase_name(call) == "connected"
 }
 
-/// A leg found answered is long parked, and the caller is marked and
-/// bridged at once.
-pub fn a_parked_leg_found_is_bridged_test() {
+/// A leg found answered is long parked. The caller is marked at once, on
+/// the second the last actor's marks say it answered, or now when they say
+/// nothing of its agent, and bridged once the marks are seen to run: the
+/// last actor's may not have, and marks that did are only written again.
+/// The dispatcher hears the answer on that same second.
+pub fn a_parked_leg_found_is_marked_then_bridged_test() {
   let rows = [caller_row(None), leg_row("1", "ann", True, Some(leg("1")))]
-  let #(call, done, id) = recovered(rows, None, [])
+  let cases = [
+    #("unmarked", [], t0 + 1),
+    #(
+      "marked by its agent",
+      [#("Agent-ID", "ann"), #("Queue-Answered-Timestamp", "63799999998")],
+      t0 - 2,
+    ),
+    #(
+      "marked by another agent",
+      [#("Agent-ID", "bob"), #("Queue-Answered-Timestamp", "63799999998")],
+      t0 + 1,
+    ),
+  ]
+  list.each(cases, fn(case_) {
+    let #(name, marks, answered) = case_
+    let #(call, done, id) = recovered(rows, None, marks)
+    assert last(done)
+      == [
+        core.Present(Some(id), types.PresentRinging(["ann"], t0 + 13, False)),
+        ..answer_marking("ann", answered, leg("1"))
+      ]
+      as name
+    assert phase_name(call) == "parking" as name
+
+    let #(call, done) =
+      script(call, [
+        #(marks_ran(leg("1")), at(1)),
+        #(bridged_to(leg("1")), at(2)),
+      ])
+    assert list.first(done) == Ok([core.Bridge(leg("1"))]) as name
+    assert list.contains(
+      last(done),
+      core.Tell(id, types.Answered("ann", leg("1"), answered)),
+    )
+      as name
+    assert phase_name(call) == "connected" as name
+  })
+}
+
+/// The completion of the last actor's `noop` behind its marks, heard while
+/// the caller was being found out about, is the proof that those marks ran,
+/// and they name the same agent: the caller is bridged in the step that
+/// finds the leg parked, and the marks sent again then may be thrown away
+/// by the bridge's flush without the CDR losing the agent.
+pub fn marks_seen_to_run_while_finding_out_test() {
+  let rows = [caller_row(None), leg_row("1", "ann", True, Some(leg("1")))]
+  let id = found_as()
+  let #(call, done) =
+    script(fresh(), [
+      #(rejoin("h1", id), at(0)),
+      #(marks_ran(leg("1")), at(0)),
+      #(surveyed(rows, None), at(1)),
+      #(probe_done(1, []), at(1)),
+    ])
   assert last(done)
-    == [
-      core.Present(Some(id), types.PresentRinging(["ann"], t0 + 13, False)),
-      answer_marks("ann", t0 + 1),
-      core.Bridge(leg("1")),
-    ]
+    == list.flatten([
+      [core.Present(Some(id), types.PresentRinging(["ann"], t0 + 13, False))],
+      answer_marking("ann", t0 + 1, leg("1")),
+      [core.Bridge(leg("1"))],
+    ])
   assert phase_name(call) == "connecting"
 }
 
+/// A caller found parked whom the last actor had in fact bridged -- it sent
+/// the bridge and died before the survey listed it -- is through to their
+/// agent once their own bridge to the leg is heard, held while finding out
+/// or heard after: nothing but the queue bridges a caller to their own leg.
+/// The leg is not hung up, and the dispatcher hears the answer. A bridge to
+/// anybody else's channel is still something else taking the caller.
+pub fn a_caller_found_parked_and_bridged_to_the_leg_test() {
+  let rows = [caller_row(None), leg_row("1", "ann", True, Some(leg("1")))]
+  let cases = [
+    #("to the leg, held while finding out", True, leg("1"), "connected"),
+    #("to the leg, heard after", False, leg("1"), "connected"),
+    #("to another channel, held while finding out", True, "pickup", "done"),
+    #("to another channel, heard after", False, "pickup", "done"),
+  ]
+  list.each(cases, fn(case_) {
+    let #(name, held, other, ends) = case_
+    let id = found_as()
+    let #(call, done) = case held {
+      True ->
+        script(fresh(), [
+          #(rejoin("h1", id), at(0)),
+          #(bridged_to(other), at(0)),
+          #(surveyed(rows, None), at(1)),
+          #(probe_done(1, []), at(1)),
+        ])
+      False ->
+        script(fresh(), [
+          #(rejoin("h1", id), at(0)),
+          #(surveyed(rows, None), at(1)),
+          #(probe_done(1, []), at(1)),
+          #(bridged_to(other), at(1)),
+        ])
+    }
+    let effects = list.flatten(done)
+    assert phase_name(call) == ends as name
+    let answered = core.Tell(id, types.Answered("ann", leg("1"), t0 + 1))
+    let took = core.Left(types.Transfer)
+    assert #(list.contains(effects, answered), list.contains(effects, took))
+      == case ends {
+        "connected" -> #(True, False)
+        _ -> #(False, True)
+      }
+      as name
+    assert !list.contains(effects, core.Bridge(leg("1"))) as name
+    assert list.contains(effects, core.HangUpLegs([leg("1")]))
+      == { ends == "done" }
+      as name
+  })
+}
+
 /// A call found connected is watched to its end, and the dispatcher told
-/// who is talking. The caller is not marked again: a channel in a bridge
-/// runs no `set`.
+/// who is talking. The caller is not marked again: the last actor marked
+/// them before it bridged them, and a command sent to a caller in a bridge
+/// would run inside it, if at all, holding the agent while it did.
 pub fn a_call_found_connected_test() {
   let rows = [
     caller_row(Some(leg("1"))),
@@ -369,8 +657,7 @@ pub fn a_caller_found_elsewhere_is_let_go_test() {
   assert core.finished(call)
 }
 
-/// A passage the record closed is over for the queue; one answered and
-/// through to nobody ended unwatched, and its end is told now.
+/// A passage the record closed is over for the queue.
 pub fn a_passage_found_over_test() {
   let closed =
     Some(records.Passage(
@@ -385,14 +672,61 @@ pub fn a_passage_found_over_test() {
   let #(call, done, _id) = recovered([caller_row(None)], closed, [])
   assert last(done) == [core.Present(None, types.PresentOver)]
   assert core.finished(call)
+}
 
-  let #(call, done, id) =
-    recovered([caller_row(None)], answered_record(t0 - 30), [])
-  let assert [present, told, core.Log(_)] = last(done)
-  assert present
-    == core.Present(Some(id), types.PresentConnected("ann", "", t0 - 30, False))
-  assert told == core.Tell(id, types.Ended(types.AgentHangup, t0 + 1))
-  assert core.finished(call)
+/// A passage answered and through to nobody ended while nothing watched
+/// it, and its end is told now, as the agent's.
+///
+/// A caller the probe reached is parked alone, on the control process that
+/// took them into the queue, where the agent's end left them -- the bridge
+/// parks the caller rather than hanging them up -- and nothing else will
+/// hang them up: they are hung up, with any leg of theirs left over. A
+/// caller the probe never reached may be in the callflow a transfer took
+/// them to, and only their legs are hung up.
+pub fn a_passage_found_ended_unwatched_test() {
+  let left_over = leg_row("1", "ann", True, Some(leg("1")))
+  let cases = [
+    // the rows, whether the probe answers: what is hung up, and when the
+    // call is taken to have ended
+    #([caller_row(None)], True, [core.HangUpCaller], t0 + 1),
+    #(
+      [caller_row(None), left_over],
+      True,
+      [core.HangUpLegs([leg("1")]), core.HangUpCaller],
+      t0 + 1,
+    ),
+    #([caller_row(None)], False, [], t0 + 4),
+    #(
+      [caller_row(None), left_over],
+      False,
+      [core.HangUpLegs([leg("1")])],
+      t0 + 4,
+    ),
+  ]
+  list.each(cases, fn(case_) {
+    let #(rows, answers, hung_up, ended) = case_
+    let id = found_as()
+    let probe = case answers {
+      True -> #(probe_done(1, []), at(1))
+      False -> #(core.Tick, at_ms(1000 + core.probe_ms))
+    }
+    let #(call, done) =
+      script(fresh(), [
+        #(rejoin("h1", id), at(0)),
+        #(surveyed(rows, answered_record(t0 - 30)), at(1)),
+        probe,
+      ])
+    let assert [core.Log(_), ..told] = list.reverse(last(done))
+    assert list.reverse(told)
+      == list.append(hung_up, [
+        core.Present(
+          Some(id),
+          types.PresentConnected("ann", "", t0 - 30, False),
+        ),
+        core.Tell(id, types.Ended(types.AgentHangup, ended)),
+      ])
+    assert core.finished(call)
+  })
 }
 
 // --- A rejoin to an actor that knows -----------------------------------------

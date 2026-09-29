@@ -93,8 +93,8 @@ pub fn recovering(state: State, member: Member, recovered: Bool) -> State {
 
 /// How long a caller handed over waits for their actor to say where they
 /// stand before they are rung like anybody else: the actor gives its survey
-/// eight seconds, and asks three times.
-pub const present_wait_s = 30
+/// eight seconds, and asks six times (`core.recover_attempts`).
+pub const present_wait_s = 60
 
 /// Tell the caller's actor they joined, and watch it while they wait. An
 /// actor that cannot be started is a caller nothing commands: logged, and

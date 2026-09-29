@@ -3,13 +3,15 @@
 
 import callcenter/call/recovery.{
   Answered, Closed, Connected, Departed, Departing, Found, Gone, Moved, Parked,
-  Ringing, Survey, Talked, Unanswered, Unknown, Waiting,
+  RecordRead, RecordUnreadable, Ringing, Survey, Talked, Unanswered, Unknown,
+  Waiting,
 }
 import callcenter/records
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import kazoo/doc.{type Value}
 import kazoo/events
+import kazoo/kazoo
 
 const caller = "caller-leg"
 
@@ -113,11 +115,52 @@ fn record(
   ))
 }
 
+/// A passage nothing has happened to yet.
+fn open_passage() -> records.Passage {
+  records.Passage(
+    offer: None,
+    answered: None,
+    agent_id: None,
+    agent_call_id: None,
+    picked_up: False,
+    ended: None,
+    cancelled: None,
+  )
+}
+
+/// A finding's name, for the tables.
+fn name(finding: recovery.Finding) -> String {
+  case finding {
+    Gone -> "gone"
+    recovery.Finished(..) -> "finished"
+    Closed -> "closed"
+    Departed(_) -> "departed"
+    Moved -> "moved"
+    Connected(..) -> "connected"
+    Departing(_) -> "departing"
+    Talked(..) -> "talked"
+    Parked(..) -> "parked"
+    Ringing(_) -> "ringing"
+    Waiting -> "waiting"
+    Unknown -> "unknown"
+  }
+}
+
+/// The finding, the record read as `record`.
 fn classify(
   probe: recovery.Probe,
   rows: List(events.Channel),
   complete: Bool,
   record: Option(records.Passage),
+) -> #(recovery.Finding, List(String)) {
+  classify_with(probe, rows, complete, RecordRead(record))
+}
+
+fn classify_with(
+  probe: recovery.Probe,
+  rows: List(events.Channel),
+  complete: Bool,
+  record: recovery.Recorded,
 ) -> #(recovery.Finding, List(String)) {
   recovery.classify(Found(
     call_id: caller,
@@ -170,10 +213,188 @@ pub fn a_caller_not_found_on_a_partial_answer_is_unknown_test() {
     == #(Unknown, [])
 }
 
+/// The probe reached the caller, but their own switch did not answer: the
+/// legs start on the caller's switch, so the listing says nothing of their
+/// ring or their conversation. A record with an offer out or an answer is
+/// `Unknown`, since a ring nobody can see must not be rung again over
+/// itself, nor a conversation nobody can see be closed. A record with
+/// nothing going on is waiting, and what the record or the marks say alone
+/// still stands. A node that has just started asks nobody (the lab of
+/// 2026-09-28).
+pub fn a_caller_whose_switch_did_not_answer_test() {
+  let ringing =
+    Some(records.Passage(
+      offer: Some(records.Offered(
+        agents: ["ann"],
+        at: now - 5,
+        leg_prefix: Some(offer),
+        pickup: False,
+      )),
+      answered: None,
+      agent_id: None,
+      agent_call_id: None,
+      picked_up: False,
+      ended: None,
+      cancelled: None,
+    ))
+  let cases = [
+    #(ringing, Unknown),
+    #(record(Some(now - 30), None, None), Unknown),
+    #(record(None, None, None), Waiting),
+    #(None, Waiting),
+    #(record(Some(now - 30), Some(now - 1), None), Closed),
+  ]
+  list.each(cases, fn(case_) {
+    let #(record, finding) = case_
+    assert classify(quiet(), [], False, record) == #(finding, [])
+    // Nobody answering at all is the same.
+    assert recovery.classify(Found(
+        call_id: caller,
+        handoff_id: handoff,
+        joined: joined,
+        probe: quiet(),
+        survey: Survey(channels: None, record: RecordRead(record)),
+        now: now,
+      ))
+      == #(finding, [])
+  })
+  // Every switch answered: nothing is ringing, whatever the record says.
+  assert classify(quiet(), [], True, ringing) == #(Waiting, [])
+  // The caller's own switch answered: its listing stands.
+  let assert #(Ringing([leg]), []) =
+    classify(quiet(), [caller_row(None), ringing_leg()], False, ringing)
+  assert leg.agent_id == "ann"
+}
+
 /// A channel the switches list is up, whether or not the probe was
 /// answered: its control process may be what has gone.
 pub fn a_listed_caller_is_up_without_the_probe_test() {
   assert classify(Unanswered, [caller_row(None)], True, None) == #(Waiting, [])
+}
+
+// --- A record that could not be read ---------------------------------------------
+
+/// What `records.read` answered, as the survey carries it: a passage with no
+/// document is a record read and empty, and anything else the datastore
+/// said is a record not read.
+pub fn a_read_is_a_record_or_not_test() {
+  let passage = records.Passage(..open_passage(), answered: Some(now - 30))
+  let cases = [
+    #(Ok(Some(passage)), RecordRead(Some(passage))),
+    #(Ok(None), RecordRead(None)),
+    #(Error(kazoo.Unavailable), RecordUnreadable("unavailable")),
+    #(Error(kazoo.Invalid("timeout")), RecordUnreadable("timeout")),
+    #(Error(kazoo.Invalid("econnrefused")), RecordUnreadable("econnrefused")),
+  ]
+  list.each(cases, fn(case_) {
+    let #(read, record) = case_
+    assert recovery.record(read) == record
+  })
+}
+
+/// Wherever the record decides where the caller stands, a record that could
+/// not be read is `Unknown`, and nothing is hung up on it: the actor asks
+/// again. Taken for no record, as the last try takes it (`unread_as_none`),
+/// it is what the probe and the switches alone say.
+///
+/// Each case is the probe, the rows, whether every switch answered, the
+/// record as it would read, and what is found with it and with none.
+pub fn an_unreadable_record_is_unknown_test() {
+  let answered = record(Some(now - 30), None, None)
+  let over = record(Some(now - 30), Some(now - 1), None)
+  let cancelled = record(None, None, Some(now - 1))
+  let ringing =
+    Some(
+      records.Passage(
+        ..open_passage(),
+        offer: Some(records.Offered(
+          agents: ["ann"],
+          at: now - 5,
+          leg_prefix: Some(offer),
+          pickup: False,
+        )),
+      ),
+    )
+  let departed = probe([#(recovery.departed_var, handoff)])
+  let parked = leg(offer, "1", "ann", True, now + 5)
+  let through = bridged_leg(offer, "2", "bob", True, now + 5, Some(caller))
+  let cases = [
+    // Gone: an answer nothing closed is a call that ended.
+    #(Unanswered, [ringing_leg()], True, answered, "finished", "gone"),
+    #(Unanswered, [ringing_leg()], True, over, "gone", "gone"),
+    // Over for the queue, whatever the switch still has.
+    #(
+      quiet(),
+      [caller_row(None), ringing_leg()],
+      True,
+      cancelled,
+      "closed",
+      "ringing",
+    ),
+    #(departed, [caller_row(None)], True, cancelled, "closed", "departed"),
+    // Answered, and through to nobody: not bridged again, not offered.
+    #(quiet(), [caller_row(None), parked], True, answered, "talked", "parked"),
+    #(quiet(), [caller_row(None)], True, answered, "talked", "waiting"),
+    // The caller's own switch did not answer: busy or not is the record's.
+    #(quiet(), [], False, ringing, "unknown", "waiting"),
+    #(quiet(), [], False, record(None, None, None), "waiting", "waiting"),
+    // What the switch alone decides still waits on the record's word.
+    #(
+      quiet(),
+      [caller_row(Some(offer <> "-2")), through],
+      True,
+      answered,
+      "connected",
+      "connected",
+    ),
+    #(quiet(), [caller_row(None)], True, None, "waiting", "waiting"),
+  ]
+  list.each(cases, fn(case_) {
+    let #(probe, rows, complete, read, with_record, with_none) = case_
+    assert name(classify(probe, rows, complete, read).0) == with_record
+    assert classify_with(probe, rows, complete, RecordUnreadable("timeout"))
+      == #(Unknown, [])
+    let unread =
+      Found(
+        call_id: caller,
+        handoff_id: handoff,
+        joined: joined,
+        probe: probe,
+        survey: Survey(
+          channels: Some(events.Channels(channels: rows, complete: complete)),
+          record: RecordUnreadable("timeout"),
+        ),
+        now: now,
+      )
+    let taken =
+      recovery.classify(
+        Found(..unread, survey: recovery.unread_as_none(unread.survey)),
+      )
+    assert taken == classify(probe, rows, complete, None)
+    assert name(taken.0) == with_none
+  })
+}
+
+/// A record read stays as it was read when unread ones are taken for none.
+pub fn a_read_record_is_not_taken_for_none_test() {
+  let read =
+    Survey(channels: None, record: RecordRead(record(Some(now), None, None)))
+  assert recovery.unread_as_none(read) == read
+}
+
+/// A survey that did not come in in time read no record either: the probe
+/// alone, answered with no marks, is not a caller waiting.
+pub fn no_survey_is_no_record_read_test() {
+  let assert RecordUnreadable(_) = recovery.nothing().record
+  assert recovery.classify(Found(
+      call_id: caller,
+      handoff_id: handoff,
+      joined: joined,
+      probe: quiet(),
+      survey: recovery.nothing(),
+      now: now,
+    ))
+    == #(Unknown, [])
 }
 
 // --- Over for the queue ----------------------------------------------------------
@@ -274,10 +495,121 @@ pub fn a_departing_caller_is_handed_back_test() {
 
 /// An answer the record has, and the caller through to nobody: the call
 /// ended while nothing watched it. An answered leg then is not bridged.
+///
+/// Whether the caller is parked is the probe. One it reached is on the
+/// control process that took them into the queue, in no bridge: parked
+/// where the agent's end left them, whatever marks their channel carries
+/// and whatever their row says of a bridge that has ended. One it did not
+/// reach -- a transfer's callflow has the channel, and the process the
+/// probe went to has stopped -- is not parked, listed on a partial answer
+/// or a whole one.
 pub fn an_answer_through_to_nobody_has_talked_test() {
-  let rows = [caller_row(None), leg(offer, "1", "ann", True, now + 5)]
-  assert classify(quiet(), rows, True, record(Some(now - 30), None, None))
-    == #(Talked("ann", now - 30, False), [offer <> "-1"])
+  let answered_leg = leg(offer, "1", "ann", True, now + 5)
+  let marks =
+    probe([
+      #("Agent-ID", "ann"),
+      #("Queue-Answered-Timestamp", "63800000070"),
+    ])
+  let picked_up =
+    Some(records.Passage(
+      offer: None,
+      answered: Some(now - 30),
+      agent_id: Some("sue"),
+      agent_call_id: None,
+      picked_up: True,
+      ended: None,
+      cancelled: None,
+    ))
+  let answered = record(Some(now - 30), None, None)
+  let cases = [
+    // probe, caller's row, the rest, whole listing, record: finding, stale
+    #(
+      quiet(),
+      caller_row(None),
+      [answered_leg],
+      True,
+      answered,
+      Talked("ann", now - 30, False, parked: True),
+      [offer <> "-1"],
+    ),
+    #(
+      marks,
+      caller_row(None),
+      [],
+      True,
+      answered,
+      Talked("ann", now - 30, False, parked: True),
+      [],
+    ),
+    #(
+      quiet(),
+      caller_row(Some(offer <> "-1")),
+      [],
+      True,
+      answered,
+      Talked("ann", now - 30, False, parked: True),
+      [],
+    ),
+    #(
+      quiet(),
+      caller_row(None),
+      [],
+      False,
+      answered,
+      Talked("ann", now - 30, False, parked: True),
+      [],
+    ),
+    #(
+      quiet(),
+      caller_row(None),
+      [],
+      True,
+      picked_up,
+      Talked("sue", now - 30, True, parked: True),
+      [],
+    ),
+    #(
+      Unanswered,
+      caller_row(None),
+      [answered_leg],
+      True,
+      answered,
+      Talked("ann", now - 30, False, parked: False),
+      [offer <> "-1"],
+    ),
+    #(
+      Unanswered,
+      caller_row(Some(offer <> "-1")),
+      [],
+      True,
+      answered,
+      Talked("ann", now - 30, False, parked: False),
+      [],
+    ),
+    #(
+      Unanswered,
+      caller_row(None),
+      [],
+      False,
+      answered,
+      Talked("ann", now - 30, False, parked: False),
+      [],
+    ),
+    #(
+      Unanswered,
+      caller_row(None),
+      [],
+      True,
+      picked_up,
+      Talked("sue", now - 30, True, parked: False),
+      [],
+    ),
+  ]
+  list.each(cases, fn(case_) {
+    let #(probe, caller, others, complete, record, finding, stale) = case_
+    assert classify(probe, [caller, ..others], complete, record)
+      == #(finding, stale)
+  })
 }
 
 /// A leg that answered and parks, the caller not through to it: bridged,
@@ -290,10 +622,32 @@ pub fn an_answered_leg_is_parked_test() {
     leg(offer, "2", "bob", False, now + 5),
     leg(older, "1", "cat", False, now + 1),
   ]
-  let assert #(Parked(found, ring), stale) = classify(quiet(), rows, True, None)
+  let assert #(Parked(found, at, ring), stale) =
+    classify(quiet(), rows, True, None)
   assert found.call_id == offer <> "-1"
+  assert at == now
   assert list.map(ring, fn(leg) { leg.call_id }) == [offer <> "-2"]
   assert stale == [older <> "-1"]
+}
+
+/// A parked leg is dated as a connected one is: by the last actor's marks,
+/// which went on the caller's channel as the leg answered, when they name
+/// its agent, and by now when they name nobody or somebody else.
+pub fn a_parked_leg_is_dated_by_its_marks_test() {
+  let rows = [caller_row(None), leg(offer, "1", "ann", True, now + 5)]
+  let cases = [
+    #("marked by its agent", [#("Agent-ID", "ann")], now - 4),
+    #("marked by another agent", [#("Agent-ID", "bob")], now),
+    #("not marked", [], now),
+  ]
+  list.each(cases, fn(case_) {
+    let #(name, agent, dated) = case_
+    let marks =
+      list.append(agent, [#("Queue-Answered-Timestamp", "63800000096")])
+    let assert #(Parked(_, at, _), _) = classify(probe(marks), rows, True, None)
+      as name
+    assert at == dated as name
+  })
 }
 
 /// Phones ringing with time left: the newest offer's are taken on, and the
@@ -335,7 +689,7 @@ pub fn only_named_legs_count_once_test() {
   assert recovery.leg_ids(
       Survey(
         channels: Some(events.Channels(channels: rows, complete: True)),
-        record: None,
+        record: RecordRead(None),
       ),
       caller,
     )

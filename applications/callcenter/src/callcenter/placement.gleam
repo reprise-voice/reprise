@@ -101,8 +101,9 @@ pub type Hooks {
     /// Make this node a member, handing the wants it hears to the subject,
     /// and answer the function that makes it one no longer.
     join: fn(Subject(Message)) -> Result(fn() -> Nil, String),
-    /// The members, as the broker sees them now.
-    members: fn() -> Result(List(String), String),
+    /// The members, as the broker sees them now, the members at the last
+    /// look being among those asked about (`members.worth_asking`).
+    members: fn(List(String)) -> Result(List(String), String),
     /// Declare a shard's member queue and answer how many callers wait on it
     /// and how many consumers it has.
     probe: fn(Int) -> Result(#(Int, Int), String),
@@ -206,7 +207,7 @@ pub fn hooks(count: Int, start_offer: shard.StartOffer) -> Hooks {
       |> listener.start
       |> result.map(fn(server) { fn() { listener.stop(server) } })
     },
-    members: fn() { members.now(node) },
+    members: fn(known) { members.now(node, known) },
     probe: fn(shard_id) { shards.declare(shards.member_queue(shard_id)) },
     take: fn(shard_id) { shard.take_using(shard_id, shard_hooks) },
     adopt: shard.tree,
@@ -402,7 +403,7 @@ fn leave(state: State) -> State {
 }
 
 fn look(state: State) -> State {
-  case state.hooks.members() {
+  case state.hooks.members(state.members) {
     // No broker to ask: every probe would say the same.
     Error(_reason) -> state
     Ok(members) -> {

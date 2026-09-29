@@ -653,6 +653,9 @@ pub fn replied(state: State, id: OfferId, reply: OfferReply) -> State {
           system.log_error(
             "offer for call " <> call_id <> " failed: " <> reason,
           )
+          list.each(offer.agents, fn(agent_id) {
+            records.offer_failed(offer.member, agent_id, reason)
+          })
           // Not a miss: nothing rang, so nobody missed anything, and the
           // caller is offered again on the next pass. The agents are left
           // alone for a moment all the same, since whatever could not ring
@@ -722,9 +725,13 @@ fn answered(
     #("Answered-Timestamp", doc.Int(at)),
   ])
 
-  // Everybody else the offer was ringing has lost the race and goes free.
+  // Everybody else the offer was ringing has lost the race and goes free,
+  // their phones called off with it.
   let losers = list.filter(offer.agents, fn(other) { other != agent_id })
-  list.each(losers, fn(other) { activity.clear(state.config.account_id, other) })
+  list.each(losers, fn(other) {
+    records.offer_outcome(member, other, "cancelled")
+    activity.clear(state.config.account_id, other)
+  })
 
   State(
     ..state,

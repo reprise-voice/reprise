@@ -153,6 +153,18 @@ pub fn answer_marks(agent_id: String, at: Int) -> core.Effect {
   ])
 }
 
+/// What an answer on `leg` sends the caller: the marks, then the `noop`
+/// whose completion shows they ran.
+pub fn answer_marking(agent_id: String, at: Int, leg: String) -> List(Effect) {
+  [answer_marks(agent_id, at), core.Confirm(core.marks_id(leg))]
+}
+
+/// The `noop` behind the marks of an answer on `leg` completed: the marks
+/// have run.
+pub fn marks_ran(leg: String) -> Input {
+  noop_done(core.marks_id(leg))
+}
+
 pub fn bridged_to(leg: String) -> Input {
   event(call_id, "CHANNEL_BRIDGE", [#("Other-Leg-Call-ID", doc.String(leg))])
 }
@@ -257,6 +269,7 @@ pub fn phase_name(call: Call) -> String {
     core.Leaving(..) -> "leaving"
     core.Departed(..) -> "departed"
     core.Resuming(..) -> "resuming"
+    core.Resumed(..) -> "resumed"
     core.Recovering(..) -> "recovering"
     core.Done -> "done"
   }

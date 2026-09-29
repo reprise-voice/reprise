@@ -819,16 +819,31 @@ fn hand_over(
 ) -> Bool {
   case ended {
     Some(_) ->
-      case still_open(records.read(kz, rebuilt(call))) {
-        True -> give(call, ended, count)
-        False -> {
+      case records.read(kz, rebuilt(call)) {
+        Ok(found) ->
+          case still_open(found) {
+            True -> give(call, ended, count)
+            False -> {
+              system.log(
+                "call "
+                <> call.call_id
+                <> " of account "
+                <> call.account_id
+                <> " has been closed since the scan read it, or is not there:"
+                <> " leaving it",
+              )
+              False
+            }
+          }
+        Error(error) -> {
           system.log(
             "call "
             <> call.call_id
             <> " of account "
             <> call.account_id
-            <> " has been closed since the scan read it, or cannot be read:"
-            <> " leaving it",
+            <> " cannot be read ("
+            <> kazoo.error_to_string(error)
+            <> "): leaving it for the next scan",
           )
           False
         }
@@ -844,8 +859,9 @@ fn hand_over(
 /// it and handing a record over. A dispatcher -- this node's own, or one on
 /// the node that handed the shard over -- that closed the call in between has
 /// written its end by now, and a second close would be a second
-/// `member_result` and a second wrap-up. A document that cannot be read is
-/// not closed on a guess either: the next scan comes back to it.
+/// `member_result` and a second wrap-up. A document no longer there is not
+/// closed either, and one that cannot be read is not closed on a guess
+/// (`hand_over`): the next scan comes back to it.
 pub fn still_open(found: Option(records.Passage)) -> Bool {
   case found {
     Some(records.Passage(ended: None, cancelled: None, ..)) -> True

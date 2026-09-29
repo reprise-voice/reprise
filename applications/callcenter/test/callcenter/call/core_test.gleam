@@ -12,9 +12,10 @@ import gleam/option.{None, Some}
 import kazoo/call as kcall
 import kazoo/doc
 import support/call_script.{
-  answer_marks, at, at_ms, bridged_to, call_id, event, fresh, gone, handoff,
-  joining, key, last, leg_of, noop_done, offer, originate_error,
-  originate_success, parked, phase_name, ring, script, settings, t0, waiting,
+  answer_marking, answer_marks, at, at_ms, bridged_to, call_id, event, fresh,
+  gone, handoff, joining, key, last, leg_of, marks_ran, noop_done, offer,
+  originate_error, originate_success, parked, phase_name, ring, script, settings,
+  t0, waiting,
 }
 
 // --- Joining -----------------------------------------------------------------
@@ -119,36 +120,55 @@ pub fn a_ring_that_cannot_go_out_test() {
 /// A leg answers: the caller is bridged to it, and once their own channel
 /// says so the call is connected, and the dispatcher hears the answer,
 /// dated by the leg's. The caller is marked as the leg answers, while still
-/// on hold, and bridged once the leg's originate has parked it: a leg
-/// bridged sooner is taken back out of the bridge by that `park`.
+/// on hold, with a `noop` sent at once behind the marks, and is bridged
+/// once that `noop` has completed and the leg's originate has parked it,
+/// in either order. A leg bridged sooner is taken back out of the bridge by
+/// that `park`, and marks not yet run are thrown away by the bridge's
+/// flush.
 pub fn an_answer_connects_test() {
   let #(id, endpoints) = offer(["ann", "bob"])
   let leg = leg_of(id, 2)
-  let #(call, done) =
-    script(waiting(), [
-      #(ring(id, ["ann", "bob"], endpoints, True), at(10)),
-      #(event(leg, "CHANNEL_ANSWER", []), at(14)),
-      #(parked(leg), at(14)),
-      #(bridged_to(leg), at(15)),
-    ])
-  assert done
-    == [
-      [
-        core.Originate(id, endpoints, 15),
-        core.Tell(id, types.OfferRinging(["ann", "bob"])),
-      ],
-      [answer_marks("bob", t0 + 14)],
-      [core.Bridge(leg)],
-      [
-        core.Record("bob", t0 + 14),
-        core.Tell(id, types.Answered("bob", leg, t0 + 14)),
-      ],
-    ]
-  assert phase_name(call) == "connected"
+  let cases = [
+    #("marks, then park", [marks_ran(leg), parked(leg)]),
+    #("park, then marks", [parked(leg), marks_ran(leg)]),
+  ]
+  list.each(cases, fn(case_) {
+    let #(name, heard) = case_
+    let #(call, done) =
+      script(
+        waiting(),
+        list.flatten([
+          [
+            #(ring(id, ["ann", "bob"], endpoints, True), at(10)),
+            #(event(leg, "CHANNEL_ANSWER", []), at(14)),
+          ],
+          list.map(heard, fn(input) { #(input, at(14)) }),
+          [#(bridged_to(leg), at(15))],
+        ]),
+      )
+    assert done
+      == [
+        [
+          core.Originate(id, endpoints, 15),
+          core.Tell(id, types.OfferRinging(["ann", "bob"])),
+        ],
+        answer_marking("bob", t0 + 14, leg),
+        [],
+        [core.Bridge(leg)],
+        [
+          core.Record("bob", t0 + 14),
+          core.Tell(id, types.Answered("bob", leg, t0 + 14)),
+        ],
+      ]
+      as name
+    assert phase_name(call) == "connected" as name
+  })
 }
 
 /// A leg whose `park` is never heard is taken to be parked after
-/// `park_wait_ms`, and a `park` heard before the answer is the answer.
+/// `park_wait_ms`, once its marks have run; and a `park` heard before the
+/// answer is the answer: the caller is marked, the leg's answer after it
+/// changes nothing, and the caller is bridged once the marks have run.
 pub fn a_leg_parked_unheard_or_early_test() {
   let #(id, endpoints) = offer(["ann"])
   let leg = leg_of(id, 1)
@@ -156,10 +176,11 @@ pub fn a_leg_parked_unheard_or_early_test() {
     script(waiting(), [
       #(ring(id, ["ann"], endpoints, False), at(10)),
       #(event(leg, "CHANNEL_ANSWER", []), at_ms(12_000)),
+      #(marks_ran(leg), at_ms(12_020)),
       #(core.Tick, at_ms(12_000 + core.park_wait_ms - 1)),
       #(core.Tick, at_ms(12_000 + core.park_wait_ms)),
     ])
-  assert list.drop(done, 2) == [[], [core.Bridge(leg)]]
+  assert list.drop(done, 2) == [[], [], [core.Bridge(leg)]]
   assert phase_name(call) == "connecting"
 
   let #(call, done) =
@@ -167,13 +188,16 @@ pub fn a_leg_parked_unheard_or_early_test() {
       #(ring(id, ["ann"], endpoints, False), at(10)),
       #(parked(leg), at(12)),
       #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+      #(marks_ran(leg), at(12)),
     ])
-  assert list.drop(done, 1) == [[core.Bridge(leg)], []]
+  assert list.drop(done, 1)
+    == [answer_marking("ann", t0 + 12, leg), [], [core.Bridge(leg)]]
   assert phase_name(call) == "connecting"
 }
 
 /// ecallmgr's `originate_resp` naming the leg is the answer when it comes
-/// before the leg's own event; the leg's event after it changes nothing.
+/// before the leg's own event: the caller is marked, the leg's event after
+/// it changes nothing, and the caller is bridged once the marks have run.
 pub fn the_originate_says_who_answered_test() {
   let #(id, endpoints) = offer(["ann"])
   let leg = leg_of(id, 1)
@@ -182,9 +206,132 @@ pub fn the_originate_says_who_answered_test() {
       #(ring(id, ["ann"], endpoints, False), at(10)),
       #(originate_success(id, leg), at(12)),
       #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+      #(marks_ran(leg), at(12)),
     ])
-  assert list.drop(done, 1) == [[core.Bridge(leg)], []]
+  assert list.drop(done, 1)
+    == [answer_marking("ann", t0 + 12, leg), [], [core.Bridge(leg)]]
   assert phase_name(call) == "connecting"
+}
+
+/// Marks not seen to run are waited for until `park_wait_ms`, and no longer:
+/// the agent's leg is on its own until the bridge. The caller is bridged
+/// then all the same, and the operator told the marks may be lost. The
+/// completion of any other `noop` -- a play's end, the bridge's own flush,
+/// the marks of another leg -- is not theirs, and one that comes after the
+/// bridge changes nothing.
+pub fn marks_never_seen_to_run_test() {
+  let #(id, endpoints) = offer(["ann", "bob"])
+  let leg = leg_of(id, 1)
+  let #(call, done) =
+    script(waiting(), [
+      #(ring(id, ["ann", "bob"], endpoints, False), at(10)),
+      #(event(leg, "CHANNEL_ANSWER", []), at_ms(12_000)),
+      #(parked(leg), at_ms(12_040)),
+      #(
+        event(call_id, "CHANNEL_EXECUTE_COMPLETE", [
+          #("Application-Name", doc.String("noop")),
+        ]),
+        at_ms(12_050),
+      ),
+      #(noop_done("callcenter-flush-" <> leg), at_ms(12_060)),
+      #(marks_ran(leg_of(id, 2)), at_ms(12_070)),
+      #(core.Tick, at_ms(12_000 + core.park_wait_ms - 1)),
+      #(core.Tick, at_ms(12_000 + core.park_wait_ms)),
+      #(marks_ran(leg), at_ms(12_200)),
+    ])
+  assert list.drop(done, 2) |> list.take(5) == [[], [], [], [], []]
+  let assert [core.Log(_), core.Bridge(bridged)] =
+    list.drop(done, 7) |> list.first |> result_or([])
+  assert bridged == leg
+  assert last(done) == []
+  assert phase_name(call) == "connecting"
+}
+
+/// However the answer is first heard -- the leg's `CHANNEL_ANSWER`, its
+/// `park`, or its originate's success -- and in whatever order the rest
+/// comes, the caller is marked with the agent and the second exactly once,
+/// with the `noop` that shows the marks ran right behind them; the bridge
+/// goes out only in a later step, once that `noop` has completed; and the
+/// dispatcher hears the answer on the second of the marks. The marks are on
+/// the caller's CDR, and they are what a node taking the call over dates
+/// the answer by.
+pub fn every_answer_is_marked_before_the_bridge_test() {
+  let #(id, endpoints) = offer(["ann", "bob"])
+  let leg = leg_of(id, 2)
+  let answer = event(leg, "CHANNEL_ANSWER", [])
+  let originated = originate_success(id, leg)
+  let park = parked(leg)
+  let marks = marks_ran(leg)
+  let cases = [
+    #("answer, marks, park", [answer, marks, park]),
+    #("answer, park, marks", [answer, park, marks]),
+    #("answer, marks, originate", [answer, marks, originated]),
+    #("answer, originate, marks", [answer, originated, marks]),
+    #("answer, marks, nothing", [answer, marks, Tick]),
+    #("park, marks, answer", [park, marks, answer]),
+    #("park, answer, marks", [park, answer, marks]),
+    #("park, originate, marks", [park, originated, marks]),
+    #("originate, marks, park", [originated, marks, park]),
+    #("originate, answer, marks", [originated, answer, marks]),
+    #("originate, park, marks", [originated, park, marks]),
+  ]
+  list.each(cases, fn(case_) {
+    let #(name, heard) = case_
+    // Ten milliseconds apart, well inside the wait; the tick, past it.
+    let steps =
+      list.index_map(heard, fn(input, n) {
+        case input {
+          Tick -> #(input, at_ms(14_000 + core.park_wait_ms + n * 10))
+          _ -> #(input, at_ms(14_000 + n * 10))
+        }
+      })
+    let #(call, done) =
+      script(
+        waiting(),
+        list.flatten([
+          [#(ring(id, ["ann", "bob"], endpoints, False), at(10))],
+          steps,
+          [#(bridged_to(leg), at(15))],
+        ]),
+      )
+    let done = list.drop(done, 1)
+    let marked =
+      step_of(done, fn(effects) { list.any(effects, is_answer_mark) })
+    let bridged =
+      step_of(done, fn(effects) { list.contains(effects, core.Bridge(leg)) })
+    let ran =
+      step_of(list.map(heard, fn(input) { [input] }), list.contains(_, marks))
+    assert list.filter(list.flatten(done), is_answer_mark)
+      == [answer_marks("bob", t0 + 14)]
+      as name
+    assert list.drop(done, marked) |> list.first
+      == Ok(answer_marking("bob", t0 + 14, leg))
+      as name
+    assert marked < ran && ran <= bridged as name
+    assert list.contains(
+      list.flatten(done),
+      core.Tell(id, types.Answered("bob", leg, t0 + 14)),
+    )
+      as name
+    assert phase_name(call) == "connected" as name
+  })
+}
+
+fn is_answer_mark(effect: core.Effect) -> Bool {
+  case effect {
+    core.Mark(vars) -> list.any(vars, fn(var) { var.0 == "Agent-ID" })
+    _ -> False
+  }
+}
+
+/// The index of the first step whose effects are so, or -1.
+fn step_of(done: List(List(a)), so: fn(List(a)) -> Bool) -> Int {
+  list.index_fold(done, -1, fn(found, effects, n) {
+    case found < 0 && so(effects) {
+      True -> n
+      False -> found
+    }
+  })
 }
 
 /// The race is decided by whichever the actor handles first. An answer
@@ -200,10 +347,20 @@ pub fn an_answer_before_the_exit_key_stands_test() {
       #(core.CallOff(id), at(12)),
       #(parked(leg), at(12)),
       #(key("#"), at(12)),
+      #(marks_ran(leg), at(12)),
+      #(key("#"), at(12)),
       #(bridged_to(leg), at(12)),
     ])
-  assert list.drop(done, 1) |> list.take(5)
-    == [[answer_marks("ann", t0 + 12)], [], [], [core.Bridge(leg)], []]
+  assert list.drop(done, 1) |> list.take(7)
+    == [
+      answer_marking("ann", t0 + 12, leg),
+      [],
+      [],
+      [],
+      [],
+      [core.Bridge(leg)],
+      [],
+    ]
   assert phase_name(call) == "connected"
 }
 
@@ -377,7 +534,8 @@ pub fn a_queue_deleted_while_ringing_test() {
 /// decided the call, so it is an answered call the agent ended: the
 /// dispatcher hears the answer and its end, and the caller is hung up, as a
 /// connected caller is when the agent hangs up on them. The same whether
-/// the bridge had gone out or the leg was still being parked.
+/// the bridge had gone out or was still waiting for the leg's `park`, the
+/// marks' `noop`, or both.
 pub fn the_agent_leaves_before_the_bridge_test() {
   let #(id, endpoints) = offer(["ann"])
   let leg = leg_of(id, 1)
@@ -386,24 +544,29 @@ pub fn the_agent_leaves_before_the_bridge_test() {
     core.Tell(id, types.Answered("ann", leg, t0 + 12)),
     core.Tell(id, types.Ended(types.AgentHangup, t0 + 12)),
   ]
-  let #(call, done) =
-    script(waiting(), [
-      #(ring(id, ["ann"], endpoints, False), at(10)),
-      #(event(leg, "CHANNEL_ANSWER", []), at(12)),
-      #(parked(leg), at(12)),
-      #(gone(leg, "NORMAL_CLEARING"), at(12)),
-    ])
-  assert last(done) == ended
-  assert core.finished(call)
-
-  let #(call, done) =
-    script(waiting(), [
-      #(ring(id, ["ann"], endpoints, False), at(10)),
-      #(event(leg, "CHANNEL_ANSWER", []), at(12)),
-      #(gone(leg, "NORMAL_CLEARING"), at(12)),
-    ])
-  assert last(done) == ended
-  assert core.finished(call)
+  let cases = [
+    #("bridging", [parked(leg), marks_ran(leg)]),
+    #("parked, marks not run", [parked(leg)]),
+    #("marks run, not parked", [marks_ran(leg)]),
+    #("answered", []),
+  ]
+  list.each(cases, fn(case_) {
+    let #(name, heard) = case_
+    let #(call, done) =
+      script(
+        waiting(),
+        list.flatten([
+          [
+            #(ring(id, ["ann"], endpoints, False), at(10)),
+            #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+          ],
+          list.map(heard, fn(input) { #(input, at(12)) }),
+          [#(gone(leg, "NORMAL_CLEARING"), at(12))],
+        ]),
+      )
+    assert last(done) == ended as name
+    assert core.finished(call) as name
+  })
 }
 
 /// The caller hangs up after the answer and before the bridge: an answered
@@ -432,6 +595,7 @@ pub fn the_caller_leaves_before_the_bridge_test() {
       #(ring(id, ["ann"], endpoints, False), at(10)),
       #(event(leg, "CHANNEL_ANSWER", []), at(12)),
       #(parked(leg), at(12)),
+      #(marks_ran(leg), at(12)),
       #(gone(call_id, "NORMAL_CLEARING"), at(13)),
     ])
   assert last(done) == ended
@@ -446,11 +610,12 @@ pub fn a_bridge_that_never_shows_test() {
     script(waiting(), [
       #(ring(id, ["ann"], endpoints, False), at(10)),
       #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+      #(marks_ran(leg), at(12)),
       #(parked(leg), at(12)),
       #(Tick, at_ms(12_000 + core.connect_ms - 1)),
       #(Tick, at_ms(12_000 + core.connect_ms)),
     ])
-  assert list.drop(done, 3)
+  assert list.drop(done, 4)
     == [
       [],
       [
@@ -488,6 +653,7 @@ fn connected() -> #(Call, types.OfferId, String) {
     script(waiting(), [
       #(ring(id, ["ann"], endpoints, False), at(10)),
       #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+      #(marks_ran(leg), at(12)),
       #(parked(leg), at(12)),
       #(bridged_to(leg), at(12)),
     ])
@@ -626,7 +792,7 @@ pub fn a_barrier_that_never_completes_test() {
 /// The callflow is asked again while it does not answer, and after
 /// `continue_attempts` the caller's channel is asked whether the action took
 /// them after all; with no word from it in `probe_ms`, the caller is resumed
-/// at the branch elsewhere.
+/// at the branch elsewhere, and watched until the resume is seen taken.
 pub fn a_callflow_that_never_answers_test() {
   let barrier = core.barrier_id(handoff("h1"))
   let probe = core.resume_probe_id(handoff("h1"))
@@ -653,7 +819,8 @@ pub fn a_callflow_that_never_answers_test() {
     [core.Resume(h, "exit_key"), core.Log(_)] -> h == handoff("h1")
     _ -> False
   }
-  assert core.finished(call)
+  assert phase_name(call) == "resumed"
+  assert !core.finished(call)
 }
 
 /// Before a resume, the caller's channel says whether the action took them
@@ -694,7 +861,213 @@ pub fn a_callflow_whose_word_was_lost_test() {
       list.append(departing, [#(answer([]), at_ms(asked + 20))]),
     )
   let assert [core.Resume(_, "exit_key"), core.Log(_)] = last(done)
+  assert phase_name(call) == "resumed"
+}
+
+// --- Resumed -------------------------------------------------------------------
+
+/// A caller resumed at `exit_key` after the action never answered, and the
+/// monotonic millisecond the resume went out at.
+fn resumed() -> #(Call, Int) {
+  let barrier = core.barrier_id(handoff("h1"))
+  let asked = 10_000 + 3 * core.continue_ack_ms
+  let resumed_at = asked + core.probe_ms
+  let #(call, done) =
+    script(waiting(), [
+      #(key("#"), at(10)),
+      #(noop_done(barrier), at(10)),
+      #(Tick, at_ms(10_000 + core.continue_ack_ms)),
+      #(Tick, at_ms(10_000 + 2 * core.continue_ack_ms)),
+      #(Tick, at_ms(asked)),
+      #(Tick, at_ms(resumed_at)),
+    ])
+  let assert [core.Resume(_, "exit_key"), core.Log(_)] = last(done)
+  #(call, resumed_at)
+}
+
+/// An event of the caller's channel, carrying these channel variables.
+fn marked(
+  name: String,
+  more: List(#(String, doc.Value)),
+  marks: List(#(String, doc.Value)),
+) -> core.Input {
+  event(
+    call_id,
+    name,
+    list.append(more, [#("Custom-Channel-Vars", doc.object(marks))]),
+  )
+}
+
+/// The completion of the probe with this `Msg-ID`, carrying these channel
+/// variables.
+fn probe_done(msg_id: String, marks: List(#(String, doc.Value))) -> core.Input {
+  marked(
+    "CHANNEL_EXECUTE_COMPLETE",
+    [
+      #("Application-Name", doc.String("noop")),
+      #("Application-Response", doc.String(msg_id)),
+    ],
+    marks,
+  )
+}
+
+fn departed_mark(handoff_id: String) -> List(#(String, doc.Value)) {
+  [#("Queue-Departed", doc.String(handoff_id))]
+}
+
+fn is_resume(effect: core.Effect) -> Bool {
+  case effect {
+    core.Resume(..) -> True
+    _ -> False
+  }
+}
+
+/// A resume is taken when a flow has the caller: any event of their
+/// channel carrying `Queue-Departed` of this passage -- the resumed flow's
+/// `callcenter_departed` writes it first, and everything the flow does
+/// after carries it -- ends the watch, and so do the channel's end, the
+/// action's own word come late, and the caller joining a queue again. A
+/// mark of another passage, an unmarked event, another passage's word and
+/// the completion of a probe not out yet say nothing.
+pub fn a_resume_seen_taken_ends_the_watch_test() {
+  let #(call, t) = resumed()
+  let probe = core.resumed_probe_id(handoff("h1"), 1)
+  [
+    #(
+      "the mark written",
+      [
+        marked(
+          "CHANNEL_EXECUTE_COMPLETE",
+          [#("Application-Name", doc.String("set"))],
+          departed_mark("h1"),
+        ),
+      ],
+      "done",
+    ),
+    #(
+      "the flow going on",
+      [
+        marked(
+          "CHANNEL_EXECUTE",
+          [#("Application-Name", doc.String("playback"))],
+          departed_mark("h1"),
+        ),
+      ],
+      "done",
+    ),
+    #(
+      "the probe finding it",
+      [Tick, probe_done(probe, departed_mark("h1"))],
+      "done",
+    ),
+    #("the channel gone", [gone(call_id, "NORMAL_CLEARING")], "done"),
+    #("the action's word late", [core.Continuing("h1")], "done"),
+    #("the next queue", [joining("h2", settings())], "waiting"),
+    #(
+      "another passage's mark",
+      [marked("CHANNEL_EXECUTE", [], departed_mark("h0"))],
+      "resumed",
+    ),
+    #("no mark", [marked("CHANNEL_EXECUTE", [], [])], "resumed"),
+    #("another passage's word", [core.Continuing("h0")], "resumed"),
+    #("a probe not out", [probe_done(probe, [])], "resumed"),
+  ]
+  |> list.each(fn(row) {
+    let #(what, inputs, phase) = row
+    // A tick goes at `resume_ack_ms`, when the probe is due; the rest just
+    // after it.
+    let #(after, done) =
+      script(
+        call,
+        list.index_map(inputs, fn(input, n) {
+          #(input, at_ms(t + core.resume_ack_ms + n * 20))
+        }),
+      )
+    let effects = list.flatten(done)
+    assert #(what, phase_name(after)) == #(what, phase)
+    assert #(what, list.any(effects, is_resume)) == #(what, False)
+    assert #(what, list.contains(effects, core.HangUpCaller)) == #(what, False)
+  })
+}
+
+/// A resume not seen taken -- its channel answering the probe without the
+/// mark, or not answering it -- is published again, `resume_attempts` times
+/// in all, each given `resume_ack_ms` before the probe; after the last the
+/// caller is hung up rather than left in silence, and the error logged.
+pub fn a_resume_nobody_takes_test() {
+  let h = handoff("h1")
+  let #(call, t) = resumed()
+  let #(call, _t, outcomes) =
+    list.fold(one_to(core.resume_attempts), #(call, t, []), fn(acc, attempt) {
+      let #(call, t, outcomes) = acc
+      let due = t + core.resume_ack_ms
+      let probe = core.resumed_probe_id(h, attempt)
+      // Odd tries find a channel with no mark; even ones, no answer at all.
+      let #(no, no_at) = case attempt % 2 {
+        1 -> #(probe_done(probe, []), due + 20)
+        _ -> #(Tick, due + core.probe_ms)
+      }
+      let #(call, done) =
+        script(call, [
+          #(Tick, at_ms(due - 1)),
+          #(Tick, at_ms(due)),
+          #(no, at_ms(no_at)),
+        ])
+      let assert [[], [core.Probe(asked)], outcome] = done
+      assert asked == probe
+      #(call, no_at, list.append(outcomes, [outcome]))
+    })
+  let #(again, last_try) = list.split(outcomes, core.resume_attempts - 1)
+  list.each(again, fn(outcome) {
+    let assert [core.Resume(resumed, "exit_key"), core.Log(_)] = outcome
+    assert resumed == h
+  })
+  let assert [[core.HangUpCaller, core.LogError(_)]] = last_try
   assert core.finished(call)
+}
+
+/// 1 to `count`.
+fn one_to(count: Int) -> List(Int) {
+  list.repeat(Nil, count) |> list.index_map(fn(_, n) { n + 1 })
+}
+
+/// The watch sleeps until its next deadline: the probe at `resume_ack_ms`,
+/// then the probe's answer at `probe_ms`.
+pub fn a_resumed_call_sleeps_to_its_deadline_test() {
+  let #(call, t) = resumed()
+  assert core.wait_ms(call, at_ms(t)) == core.resume_ack_ms
+  let #(call, _) = script(call, [#(Tick, at_ms(t + core.resume_ack_ms))])
+  assert core.wait_ms(call, at_ms(t + core.resume_ack_ms)) == core.probe_ms
+}
+
+/// Only a call already resumed asks its channel whether the resume was
+/// taken -- the step that publishes a resume does not -- and only one whose
+/// last resume nobody took hangs its caller up with no agent, as it gives
+/// the caller up.
+pub fn what_a_resumed_call_may_send_test() {
+  let #(call, _) = resumed()
+  let assert core.Resumed(passage: passage, ..) = call.phase
+  let departed = core.Departed(passage, core.ExitKey, 1, 0)
+  let resuming = core.Resuming(passage, core.ExitKey, "probe", 0)
+  let watching = core.Resumed(passage, core.ExitKey, 1, None, 0)
+  let probing = core.Resumed(passage, core.ExitKey, 1, Some("probe"), 0)
+  [
+    #(departed, resuming, core.Probe("probe"), True),
+    #(watching, probing, core.Probe("probe"), True),
+    #(resuming, watching, core.Probe("probe"), False),
+    #(departed, watching, core.Probe("probe"), False),
+    #(probing, core.Done, core.HangUpCaller, True),
+    #(probing, probing, core.HangUpCaller, False),
+    #(resuming, core.Done, core.HangUpCaller, False),
+    #(departed, core.Done, core.HangUpCaller, False),
+    #(watching, watching, core.Hold(None), False),
+    #(watching, watching, core.Mark([]), False),
+  ]
+  |> list.each(fn(row) {
+    let #(before, after, effect, allowed) = row
+    assert #(before, after, effect, core.allowed(before, after, effect))
+      == #(before, after, effect, allowed)
+  })
 }
 
 /// The clocks: `max_wait_time` leaves on `timeout`, the no-agent wait on
@@ -936,6 +1309,7 @@ pub fn a_connected_call_is_audited_test() {
     script(waiting(), [
       #(ring(id, ["ann"], endpoints, False), at(10)),
       #(event(leg, "CHANNEL_ANSWER", []), at(12)),
+      #(marks_ran(leg), at(12)),
       #(parked(leg), at(12)),
       #(bridged_to(leg), at(12)),
     ])
@@ -1000,7 +1374,10 @@ pub fn what_is_steady_test() {
   let #(parking, _) =
     script(both_seen, [#(event(leg_of(id, 1), "CHANNEL_ANSWER", []), at(12))])
   assert !core.steady(parking)
-  let #(connecting, _) = script(parking, [#(parked(leg_of(id, 1)), at(12))])
+  let #(unmarked, _) = script(parking, [#(parked(leg_of(id, 1)), at(12))])
+  assert !core.steady(unmarked)
+  let #(connecting, _) = script(unmarked, [#(marks_ran(leg_of(id, 1)), at(12))])
+  assert phase_name(connecting) == "connecting"
   assert !core.steady(connecting)
   let #(connected, _) =
     script(connecting, [#(bridged_to(leg_of(id, 1)), at(12))])

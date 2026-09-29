@@ -159,7 +159,9 @@ pub fn a_ring_binds_its_legs_and_originates_once_test() {
 }
 
 /// `ecallmgr`'s answer names the offer by the prefix it was sent under,
-/// and a success names the leg that answered: the caller is bridged to it.
+/// and a success names the leg that answered: the caller is marked with its
+/// agent and the second, with the `noop` that shows the marks ran behind
+/// them, and bridged to the leg once that `noop` has completed.
 pub fn an_originate_answer_names_its_offer_test() {
   let did = process.new_subject()
   let replies = process.new_subject()
@@ -181,6 +183,24 @@ pub fn an_originate_answer_names_its_offer_test() {
         #("Call-ID", doc.String(prefix <> "-1")),
       ]),
     ),
+  )
+  assert done(did)
+    == [
+      Performed(
+        core.Mark([
+          #("Agent-ID", doc.String("ann")),
+          #("Queue-Answered-Timestamp", doc.Int(cluster.start_of_time)),
+        ]),
+      ),
+      Performed(core.Confirm(core.marks_id(prefix <> "-1"))),
+    ]
+
+  process.send(
+    to,
+    event(call_id, "CHANNEL_EXECUTE_COMPLETE", [
+      #("Application-Name", doc.String("noop")),
+      #("Application-Response", doc.String(core.marks_id(prefix <> "-1"))),
+    ]),
   )
   assert done(did) == [Performed(core.Bridge(prefix <> "-1"))]
 }
@@ -307,7 +327,7 @@ pub fn a_caller_handed_over_is_found_out_about_test() {
     actor.Io(..io(did), survey: fn(_member) {
       recovery.Survey(
         channels: Some(events.Channels(channels: rows, complete: True)),
-        record: None,
+        record: recovery.RecordRead(None),
       )
     })
   let assert Ok(started) = actor.start(io, cluster.account_id, call_id, 0)
