@@ -126,6 +126,14 @@ pub type Message {
   /// a clock, a hang-up, a bridge somebody else made. Settled as the
   /// caller's cancel settled it, and their dispatcher told.
   CallerLeft(member: types.Member, reason: types.CancelReason)
+  /// A caller's actor says the caller is leaving a queue on a branch it
+  /// hands them back on. Their dispatcher is told, as of a caller who left,
+  /// but the member is kept: the actor settles it once it has handed them
+  /// back (`Settle`), and a shard that ends before gives it back to the
+  /// broker, for whoever takes the shard next to hand the caller back. It
+  /// is not the dispatcher's any more, and a dispatcher started again is
+  /// not handed it.
+  CallerDeparting(member: types.Member, reason: types.CancelReason)
   /// A dispatcher is done with a caller -- their call has ended, or they
   /// have left -- and their member may be settled. Nothing when it already was,
   /// and nothing when the delivery held for the call is not this one: a
@@ -324,9 +332,23 @@ pub fn hooks(count: Int, start_offer: StartOffer) -> Hooks {
     calls: fn(shard, to) {
       Some(calls.supervised(
         shard,
-        call_actor.live(system.live(), fn(member, reason) {
-          process.send(to, CallerLeft(member, reason))
-        }),
+        call_actor.live(
+          system.live(),
+          call_actor.Shard(
+            left: fn(member, reason) {
+              process.send(to, CallerLeft(member, reason))
+            },
+            departing: fn(member, reason) {
+              process.send(to, CallerDeparting(member, reason))
+            },
+            handed_back: fn(member: types.Member) {
+              process.send(
+                to,
+                Settle(member.account_id, member.call_id, member.delivery),
+              )
+            },
+          ),
+        ),
       ))
     },
     consumer: fn(shard, to) {
@@ -859,6 +881,9 @@ fn act(state: State, message: Message) -> actor.Next(State, Message) {
       actor.continue(state)
     }
 
+    CallerDeparting(caller, reason) ->
+      actor.continue(departing(state, caller, reason))
+
     CallerLeft(caller, reason) -> {
       let #(_settled, state) =
         cancelled(
@@ -1235,6 +1260,47 @@ fn cancelled(
 fn later_passage(held: Entry, queue_id: String, by: Int) -> Bool {
   { queue_id != "" && held.queue_id != "" && queue_id != held.queue_id }
   || held.joined_at > by
+}
+
+/// A caller on their way out: their dispatcher lets them go, and their
+/// member is kept, no longer the dispatcher's, until it is settled. Only
+/// the member of the passage leaving: one held under another delivery is a
+/// later passage of the call, and its own.
+fn departing(
+  state: State,
+  caller: types.Member,
+  reason: types.CancelReason,
+) -> State {
+  let key = #(caller.account_id, caller.call_id)
+  case find(state.holding, key) {
+    Ok(held) if held.delivery == caller.delivery -> {
+      case dict.get(state.dispatchers, caller.account_id) {
+        Ok(to) -> process.send(to, dispatcher.Departing(caller.call_id, reason))
+        Error(Nil) -> Nil
+      }
+      system.log(
+        "member call "
+        <> caller.call_id
+        <> " of account "
+        <> caller.account_id
+        <> " is leaving shard "
+        <> int.to_string(state.shard)
+        <> " on "
+        <> records.reason_to_string(reason)
+        <> ": held until it is handed back",
+      )
+      State(
+        ..state,
+        holding: list.map(state.holding, fn(entry) {
+          case entry.key == key {
+            True -> Entry(..entry, member: None)
+            False -> entry
+          }
+        }),
+      )
+    }
+    _other_or_none -> state
+  }
 }
 
 fn left(state: State, account_id: String, call_id: String, reason: String) {

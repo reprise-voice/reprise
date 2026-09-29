@@ -69,6 +69,7 @@ pub opaque type Message {
   WillPresent(call_id: String, presence: Option(Presence), done: Subject(Nil))
   Presentations(done: Subject(List(Presented)))
   ActorDied(done: Subject(Nil))
+  ActorEnded(done: Subject(Nil))
   Tell(told: Told)
   Adopt(adoption: Adoption, done: Subject(Result(Pid, String)))
   Told(done: Subject(List(Told)))
@@ -88,8 +89,10 @@ type State {
     /// dispatcher's ceiling looks at whether it is still there.
     processes: List(Pid),
     /// The one process standing for every waiting caller's actor, which the
-    /// dispatcher watches while they wait.
+    /// dispatcher watches while they wait, and what ends it as an actor
+    /// that is done ends.
     actor: Pid,
+    actor_end: Subject(Nil),
     /// Call id to what a resumed join of it is answered with: nothing at
     /// all for `None`.
     presences: Dict(String, Option(Presence)),
@@ -99,6 +102,7 @@ type State {
 }
 
 pub fn new() -> Fake {
+  let stand_in = ender()
   let assert Ok(started) =
     actor.new(
       State(
@@ -107,7 +111,8 @@ pub fn new() -> Fake {
         failure: Ok(Nil),
         once: False,
         processes: [],
-        actor: sleeper(),
+        actor: stand_in.0,
+        actor_end: stand_in.1,
         presences: dict.new(),
         presented: [],
       ),
@@ -237,8 +242,25 @@ pub fn actor_died(fake: Fake) -> Nil {
   process.sleep(20)
 }
 
-fn sleeper() -> Pid {
-  process.spawn_unlinked(fn() { process.sleep_forever() })
+/// The waiting callers' actors end as an actor that is done ends:
+/// normally.
+pub fn actor_ended(fake: Fake) -> Nil {
+  process.call(fake.subject, 5000, ActorEnded)
+  process.sleep(20)
+}
+
+/// A process that waits until it is told to end, and then ends normally.
+fn ender() -> #(Pid, Subject(Nil)) {
+  let reply = process.new_subject()
+  let pid =
+    process.spawn_unlinked(fn() {
+      let stop = process.new_subject()
+      process.send(reply, stop)
+      let _ = process.receive_forever(stop)
+      Nil
+    })
+  let assert Ok(stop) = process.receive(reply, 1000)
+  #(pid, stop)
 }
 
 /// Answer an adoption, as the actor watching it would.
@@ -292,7 +314,14 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
     ActorDied(done) -> {
       process.kill(state.actor)
       process.send(done, Nil)
-      actor.continue(State(..state, actor: sleeper()))
+      let #(pid, end) = ender()
+      actor.continue(State(..state, actor: pid, actor_end: end))
+    }
+    ActorEnded(done) -> {
+      process.send(state.actor_end, Nil)
+      process.send(done, Nil)
+      let #(pid, end) = ender()
+      actor.continue(State(..state, actor: pid, actor_end: end))
     }
     Tell(told) ->
       actor.continue(State(..state, told: list.append(state.told, [told])))

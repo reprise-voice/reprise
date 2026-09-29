@@ -869,12 +869,18 @@ pub fn cancelled(member: Member, reason: CancelReason, at: Int) -> Nil {
 
 /// The document as a caller leaving without an agent leaves it: when, and
 /// why -- `queue_deleted` for a caller the dispatcher took out of a queue
-/// that was deleted.
+/// that was deleted. A passage cancelled already keeps its second and its
+/// reason: a node that takes a caller over on their way out cancels it
+/// again, later, and on a branch that may not say which reason it was.
 pub fn cancellation(document: Value, reason: CancelReason, at: Int) -> Value {
-  document
-  |> doc.set(["cancelled"], doc.Int(at))
-  |> doc.set(["cancel_reason"], doc.String(reason_to_string(reason)))
-  |> offers_settled
+  case doc.get_int(document, ["cancelled"]) {
+    Ok(_) -> offers_settled(document)
+    Error(_) ->
+      document
+      |> doc.set(["cancelled"], doc.Int(at))
+      |> doc.set(["cancel_reason"], doc.String(reason_to_string(reason)))
+      |> offers_settled
+  }
 }
 
 /// The recording of a queue call, when the queue or the agent asked for one:
@@ -952,6 +958,9 @@ pub type Passage {
     /// Set once the passage is over, whichever way it went.
     ended: Option(Int),
     cancelled: Option(Int),
+    /// Why a passage that was cancelled was: `exit_key`, `timeout` and the
+    /// rest (`reason_to_string`).
+    cancel_reason: Option(String),
   )
 }
 
@@ -996,6 +1005,8 @@ pub fn passage(document: Value) -> Passage {
     picked_up: doc.get_bool(document, ["picked_up"]) |> result.unwrap(False),
     ended: doc.get_int(document, ["ended"]) |> option.from_result,
     cancelled: doc.get_int(document, ["cancelled"]) |> option.from_result,
+    cancel_reason: doc.get_string(document, ["cancel_reason"])
+      |> option.from_result,
   )
 }
 

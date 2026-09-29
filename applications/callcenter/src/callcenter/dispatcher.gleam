@@ -121,6 +121,11 @@ pub type Message {
   /// dispatcher's own -- take them out of the queue, release whoever was
   /// being rung for them, close their record.
   Left(call_id: String, reason: CancelReason)
+  /// The caller is leaving on a branch their actor hands them back on, told
+  /// and not asked: taken out of the queue as a caller who left is, but
+  /// their member kept until the actor has handed them back
+  /// (`offers.depart`).
+  Departing(call_id: String, reason: CancelReason)
   /// The caller's actor's answer, naming the offer it is about.
   Reply(offer: OfferId, reply: OfferReply)
   /// A caller's actor this dispatcher monitors has ended. See `offers.down`.
@@ -242,6 +247,7 @@ pub fn start(
       offers: dict.new(),
       actors: dict.new(),
       presenting: dict.new(),
+      departing: dict.new(),
       pickups: dict.new(),
       busy: dict.new(),
       delayed: dict.new(),
@@ -311,6 +317,9 @@ fn act(state: State, message: Message) -> actor.Next(State, Message) {
 
     Left(call_id, reason) -> step(state, offers.leave(state, call_id, reason))
 
+    Departing(call_id, reason) ->
+      step(state, offers.depart(state, call_id, reason))
+
     ChannelGone(call_id) ->
       case
         dict.has_key(state.waiting, call_id),
@@ -366,7 +375,10 @@ fn act(state: State, message: Message) -> actor.Next(State, Message) {
     OfferDown(process.ProcessDown(pid: pid, reason: reason, ..)) ->
       case shut_down(reason) {
         True ->
-          step(state, offers.let_go(state, pid) |> arrival.actor_down(pid))
+          step(
+            state,
+            offers.let_go(state, pid) |> arrival.actor_down(pid, False),
+          )
         False -> actor_ended(state, pid, reason)
       }
 
@@ -716,13 +728,15 @@ fn actor_ended(
   pid: Pid,
   reason: process.ExitReason,
 ) -> actor.Next(State, Message) {
+  let crashed = reason != process.Normal
   case pickup.down(state, pid, string.inspect(reason)) {
-    Ok(after) -> actor.continue(arrival.actor_down(after, pid) |> pass.run)
+    Ok(after) ->
+      actor.continue(arrival.actor_down(after, pid, crashed) |> pass.run)
     Error(Nil) ->
       case offers.down(state, pid, string.inspect(reason)) {
-        Ok(after) -> step(state, arrival.actor_down(after, pid))
+        Ok(after) -> step(state, arrival.actor_down(after, pid, crashed))
         // Settled already: nearly every offer's end is this.
-        Error(Nil) -> step(state, arrival.actor_down(state, pid))
+        Error(Nil) -> step(state, arrival.actor_down(state, pid, crashed))
       }
   }
 }

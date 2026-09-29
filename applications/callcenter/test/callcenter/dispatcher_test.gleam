@@ -886,6 +886,81 @@ pub fn an_actor_shut_down_leaves_its_call_to_whoever_has_it_next_test() {
   })
 }
 
+// --- Callers on their way out ------------------------------------------------
+
+/// A caller with nobody to take them: both agents logged out.
+fn nobody_to_ring() -> cluster.Cluster {
+  let c = two_agent_queue()
+  cluster.agent_is(c, "ann", "logged_out")
+  cluster.agent_is(c, "bob", "logged_out")
+  c
+}
+
+/// A caller leaving on a branch their actor hands them back on is taken out
+/// of the queue at once, as a caller who left is, but their member is not
+/// settled here: the actor has it settled once it has handed them back, and
+/// a shard that ends before gives it back to the broker, for whoever takes
+/// the shard next to hand them back. Their actor is watched meanwhile. One
+/// that crashes is replaced by one that finds them on their way out -- and
+/// the caller is not put back in the queue -- and one that ends as it
+/// should is forgotten.
+pub fn a_departing_caller_is_settled_by_their_actor_test() {
+  let c = nobody_to_ring()
+  cluster.arrive(c, "call-one", "support", 0, 0)
+  process.send(c.dispatcher, dispatcher.Departing("call-one", ExitKey))
+  cluster.sync(c)
+  assert cluster.waiting(c) == []
+  assert cluster.settled(c) == []
+
+  fake_calls.actor_died(c.calls)
+  cluster.sync(c)
+  assert fake_calls.joined(c.calls)
+    == [#("call-one", False), #("call-one", True)]
+  assert cluster.waiting(c) == []
+  assert cluster.settled(c) == []
+
+  fake_calls.actor_ended(c.calls)
+  fake_calls.actor_died(c.calls)
+  cluster.sync(c)
+  assert list.length(fake_calls.joined(c.calls)) == 2
+  assert cluster.settled(c) == []
+}
+
+/// A caller handed over whose actor finds them on their way out is let go
+/// of here, as a caller who left is, and not settled: the actor hands them
+/// back, and has their member settled once it has. Their actor is watched
+/// as any departing caller's is.
+pub fn a_caller_handed_over_on_their_way_out_is_let_go_test() {
+  let c = nobody_to_ring()
+  cluster.presents(c, "call-one", types.PresentLeaving)
+  cluster.redelivered(c, "call-one", "support", 0, 0)
+  assert cluster.waiting(c) == []
+  assert cluster.settled(c) == []
+
+  fake_calls.actor_died(c.calls)
+  cluster.sync(c)
+  assert fake_calls.joined(c.calls)
+    == [#("call-one", True), #("call-one", True)]
+}
+
+/// A caller who joins a queue again was handed back from the one they were
+/// leaving: that departure is over, and an actor that crashes after is the
+/// new passage's, whose caller waits and is joined to a new actor as any
+/// waiting caller is -- once, not again for the passage they left.
+pub fn a_departure_is_over_once_the_caller_joins_again_test() {
+  let c = nobody_to_ring()
+  cluster.arrive(c, "call-one", "support", 0, 0)
+  process.send(c.dispatcher, dispatcher.Departing("call-one", ExitKey))
+  cluster.sync(c)
+  cluster.arrive(c, "call-one", "support", 0, 5)
+  assert cluster.waiting(c) == ["call-one"]
+
+  fake_calls.actor_died(c.calls)
+  cluster.sync(c)
+  assert fake_calls.joined(c.calls)
+    == [#("call-one", False), #("call-one", False), #("call-one", True)]
+}
+
 /// A dispatcher the node stood still since it started does nothing more
 /// for its shard, which may be another node's by then (`callcenter/stall`):
 /// the end of a call it had answered is not taken, so nothing is closed or

@@ -147,6 +147,24 @@ pub type Context {
     /// call's publisher drops its work by once the node has stood still
     /// since (`callcenter/stall`).
     since: Int,
+    /// The member of every passage the actor has had, by the passage's
+    /// handoff id: the one whose departure is over (`HandedBack`) may not be
+    /// the one the caller is in now.
+    members: Dict(String, Member),
+  )
+}
+
+/// What the actor tells the caller's shard.
+pub type Shard {
+  Shard(
+    /// The caller left the queue and is nothing more of its: settle their
+    /// member, and tell their dispatcher.
+    left: fn(Member, CancelReason) -> Nil,
+    /// The caller is leaving on a branch the actor hands them back on: tell
+    /// their dispatcher, and keep their member.
+    departing: fn(Member, CancelReason) -> Nil,
+    /// The caller has been handed back, or is gone: settle the member kept.
+    handed_back: fn(Member) -> Nil,
   )
 }
 
@@ -214,6 +232,9 @@ type State {
     steadying: List(Subject(Nil)),
     /// When the actor started, in the VM's monotonic milliseconds.
     since: Int,
+    /// The member of every passage the actor has had and not handed back,
+    /// by the passage's handoff id.
+    members: Dict(String, Member),
     /// Whether the node has stood still since then, and the actor stopped
     /// acting for the call (`callcenter/stall`).
     fenced: Bool,
@@ -251,6 +272,7 @@ pub fn start(
         steadying: [],
         since: io.monotonic_ms(),
         fenced: False,
+        members: dict.new(),
       )
       |> bind(call_id)
     actor.initialised(state)
@@ -321,6 +343,17 @@ fn act(state: State, message: Message) -> actor.Next(State, Message) {
           let state = State(..state, call: call)
           let context = context(state, request, now)
           list.each(effects, carry_out(state, context, _))
+          // A passage handed back is settled, and its member forgotten.
+          let state =
+            State(
+              ..state,
+              members: list.fold(effects, state.members, fn(members, effect) {
+                case effect {
+                  core.HandedBack(id) -> dict.delete(members, id)
+                  _ -> members
+                }
+              }),
+            )
           let state = steadied(state)
           case core.finished(call) {
             True -> actor.stop()
@@ -518,6 +551,7 @@ fn joined(
     member: Some(member),
     caller: Some(call.from_value(member.call)),
     reply_to: Some(reply_to),
+    members: dict.insert(state.members, member.handoff_id, member),
   )
 }
 
@@ -608,6 +642,7 @@ fn context(state: State, request: Option(OfferRequest), now: Int) -> Context {
     grace_s: state.io.grace_s,
     now: now,
     since: state.since,
+    members: state.members,
   )
 }
 
@@ -633,9 +668,10 @@ fn sleep(state: State, clock: core.Clock) -> State {
 
 // --- The node ----------------------------------------------------------------
 
-/// The actor's reach on a node. `left` is the shard's: a caller who left a
-/// queue is settled there and the dispatcher told.
-pub fn live(kz: Kazoo, left: fn(Member, CancelReason) -> Nil) -> Io {
+/// The actor's reach on a node. `shard` is the caller's shard's: a caller
+/// who left or is leaving a queue is told there, which tells the
+/// dispatcher, and their member settled there.
+pub fn live(kz: Kazoo, shard: Shard) -> Io {
   Io(
     now: modb.now,
     monotonic_ms: monotonic_ms,
@@ -671,7 +707,7 @@ pub fn live(kz: Kazoo, left: fn(Member, CancelReason) -> Nil) -> Io {
       perform(
         context,
         effect,
-        left,
+        shard,
         publishers.of_call(context.call_id, context.since),
       )
     },
@@ -688,7 +724,7 @@ pub fn live(kz: Kazoo, left: fn(Member, CancelReason) -> Nil) -> Io {
 pub fn perform(
   context: Context,
   effect: core.Effect,
-  left: fn(Member, CancelReason) -> Nil,
+  shard: Shard,
   publish: Publish,
 ) -> Nil {
   case effect, context.caller {
@@ -757,8 +793,23 @@ pub fn perform(
     core.Survey, _ | core.Audit(_), _ -> Nil
     core.Left(reason), _ ->
       case context.member {
-        Some(member) -> left(member, reason)
+        Some(member) -> shard.left(member, reason)
         None -> Nil
+      }
+    // The member of the passage leaving, which a passage joined since --
+    // one held while the caller was being found out about -- may have
+    // replaced in the context.
+    core.Departing(id, reason), _ ->
+      case dict.get(context.members, id) {
+        Ok(member) -> shard.departing(member, reason)
+        Error(Nil) -> Nil
+      }
+    // The member of the passage the departure was out of, which the one
+    // they have just joined may have replaced in the context.
+    core.HandedBack(id), _ ->
+      case dict.get(context.members, id) {
+        Ok(member) -> shard.handed_back(member)
+        Error(Nil) -> Nil
       }
     core.Continue(handoff, branch), _ ->
       publish(fn() { continue(context, handoff, branch) })

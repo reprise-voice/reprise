@@ -12,10 +12,10 @@ import gleam/option.{None, Some}
 import kazoo/call as kcall
 import kazoo/doc
 import support/call_script.{
-  answer_marking, answer_marks, at, at_ms, bridged_to, call_id, event, fresh,
-  gone, handoff, joining, key, last, leg_of, marks_ran, noop_done, offer,
-  originate_error, originate_success, parked, phase_name, ring, script, settings,
-  t0, waiting,
+  answer_marking, answer_marks, at, at_ms, bridged_to, call_id, departure_marked,
+  event, fresh, gone, handoff, joining, key, last, leg_of, marks_ran, noop_done,
+  offer, originate_error, originate_success, parked, phase_name, ring, script,
+  settings, t0, waiting,
 }
 
 // --- Joining -----------------------------------------------------------------
@@ -379,9 +379,9 @@ pub fn the_exit_key_before_an_answer_stands_test() {
     == [
       [
         core.HangUpLegs([leg]),
-        core.Left(types.ExitKey),
+        core.Departing("h1", types.ExitKey),
         departing("h1", "exit_key"),
-        core.Barrier(core.barrier_id(handoff("h1"))),
+        core.Confirm(core.departure_marks_id(handoff("h1"))),
       ],
       [core.HangUpLegs([leg])],
     ]
@@ -521,7 +521,7 @@ pub fn a_queue_deleted_while_ringing_test() {
       [
         core.HangUpLegs([leg]),
         departing("h1", "no_agents"),
-        core.Barrier(core.barrier_id(handoff("h1"))),
+        core.Confirm(core.departure_marks_id(handoff("h1"))),
       ],
       [core.Tell(id, types.Failed(core.called_off_reason))],
     ]
@@ -749,14 +749,19 @@ pub fn a_leg_being_transferred_is_left_alone_test() {
 
 // --- Leaving -------------------------------------------------------------------
 
-/// Leaving: the mark and the barrier; the callflow is told to go on only
-/// once the barrier completes, and the call is done once it says it has the
-/// caller.
+/// Leaving: the shard told the caller is leaving, the marks and the `noop`
+/// that shows they ran, and the barrier only once it has -- the barrier's
+/// flush would throw away marks not yet run, and they are what a node taking
+/// the caller over on their way out finds them by. The callflow is told to
+/// go on only once the barrier completes, and the call is done once it says
+/// it has the caller: the shard settles the member it kept then.
 pub fn leaving_through_the_barrier_test() {
   let barrier = core.barrier_id(handoff("h1"))
   let #(call, done) =
     script(waiting(), [
       #(key("#"), at(10)),
+      #(noop_done(barrier), at(10)),
+      #(departure_marked("h1"), at(10)),
       #(noop_done("something-else"), at(10)),
       #(noop_done(barrier), at(10)),
       #(core.Continuing("h1"), at(10)),
@@ -764,15 +769,41 @@ pub fn leaving_through_the_barrier_test() {
   assert done
     == [
       [
-        core.Left(types.ExitKey),
+        core.Departing("h1", types.ExitKey),
         departing("h1", "exit_key"),
-        core.Barrier(barrier),
+        core.Confirm(core.departure_marks_id(handoff("h1"))),
       ],
       [],
-      [core.Continue(handoff("h1"), "exit_key")],
+      [core.Barrier(barrier)],
       [],
+      [core.Continue(handoff("h1"), "exit_key")],
+      [core.HandedBack("h1")],
     ]
   assert core.finished(call)
+}
+
+/// Marks not seen to run in `marks_wait_ms` do not keep the caller: the
+/// barrier goes out all the same, and that is logged.
+pub fn departure_marks_never_seen_to_run_test() {
+  let #(call, done) =
+    script(waiting(), [
+      #(key("#"), at(10)),
+      #(Tick, at_ms(10_000 + core.marks_wait_ms - 1)),
+      #(Tick, at_ms(10_000 + core.marks_wait_ms)),
+    ])
+  assert list.drop(done, 1)
+    == [
+      [],
+      [
+        core.Log(
+          "call "
+          <> call_id
+          <> ": the departure's marks were not seen to run; barring anyway",
+        ),
+        core.Barrier(core.barrier_id(handoff("h1"))),
+      ],
+    ]
+  assert phase_name(call) == "leaving"
 }
 
 /// A barrier that never completes does not keep the caller: the callflow is
@@ -781,6 +812,7 @@ pub fn a_barrier_that_never_completes_test() {
   let #(_call, done) =
     script(waiting(), [
       #(key("#"), at(10)),
+      #(departure_marked("h1"), at(10)),
       #(Tick, at_ms(10_000 + core.barrier_ms)),
     ])
   assert case last(done) {
@@ -800,6 +832,7 @@ pub fn a_callflow_that_never_answers_test() {
   let #(call, done) =
     script(waiting(), [
       #(key("#"), at(10)),
+      #(departure_marked("h1"), at(10)),
       #(noop_done(barrier), at(10)),
       #(Tick, at_ms(10_000 + core.continue_ack_ms)),
       #(Tick, at_ms(10_000 + 2 * core.continue_ack_ms)),
@@ -807,7 +840,7 @@ pub fn a_callflow_that_never_answers_test() {
       #(Tick, at_ms(asked + core.probe_ms - 1)),
       #(Tick, at_ms(asked + core.probe_ms)),
     ])
-  assert list.drop(done, 1) |> list.take(5)
+  assert list.drop(done, 2) |> list.take(5)
     == [
       [core.Continue(handoff("h1"), "exit_key")],
       [core.Continue(handoff("h1"), "exit_key")],
@@ -832,6 +865,7 @@ pub fn a_callflow_whose_word_was_lost_test() {
   let asked = 10_000 + 3 * core.continue_ack_ms
   let departing = [
     #(key("#"), at(10)),
+    #(departure_marked("h1"), at(10)),
     #(noop_done(barrier), at(10)),
     #(Tick, at_ms(10_000 + core.continue_ack_ms)),
     #(Tick, at_ms(10_000 + 2 * core.continue_ack_ms)),
@@ -852,7 +886,7 @@ pub fn a_callflow_whose_word_was_lost_test() {
         #(answer([#("Queue-Departed", doc.String("h1"))]), at_ms(asked + 20)),
       ]),
     )
-  let assert [core.Log(_)] = last(done)
+  let assert [core.Log(_), core.HandedBack("h1")] = last(done)
   assert core.finished(call)
 
   let #(call, done) =
@@ -875,6 +909,7 @@ fn resumed() -> #(Call, Int) {
   let #(call, done) =
     script(waiting(), [
       #(key("#"), at(10)),
+      #(departure_marked("h1"), at(10)),
       #(noop_done(barrier), at(10)),
       #(Tick, at_ms(10_000 + core.continue_ack_ms)),
       #(Tick, at_ms(10_000 + 2 * core.continue_ack_ms)),
@@ -1022,7 +1057,8 @@ pub fn a_resume_nobody_takes_test() {
     let assert [core.Resume(resumed, "exit_key"), core.Log(_)] = outcome
     assert resumed == h
   })
-  let assert [[core.HangUpCaller, core.LogError(_)]] = last_try
+  let assert [[core.HangUpCaller, core.LogError(_), core.HandedBack("h1")]] =
+    last_try
   assert core.finished(call)
 }
 
@@ -1075,7 +1111,7 @@ pub fn what_a_resumed_call_may_send_test() {
 pub fn the_clocks_run_out_test() {
   let #(call, done) = script(waiting(), [#(Tick, at(300))])
   assert case last(done) {
-    [core.Left(types.Timeout), core.Mark(_), core.Barrier(_)] -> True
+    [core.Departing("h1", types.Timeout), core.Mark(_), core.Confirm(_)] -> True
     _ -> False
   }
   assert phase_name(call) == "leaving"
@@ -1086,7 +1122,8 @@ pub fn the_clocks_run_out_test() {
       #(Tick, at(65)),
     ])
   assert case last(done) {
-    [core.Left(types.NoAgentTimeout), core.Mark(_), core.Barrier(_)] -> True
+    [core.Departing("h1", types.NoAgentTimeout), core.Mark(_), core.Confirm(_)] ->
+      True
     _ -> False
   }
   assert phase_name(call) == "leaving"
@@ -1100,7 +1137,7 @@ pub fn a_queue_deleted_while_waiting_test() {
     == [
       [
         departing("h1", "no_agents"),
-        core.Barrier(core.barrier_id(handoff("h1"))),
+        core.Confirm(core.departure_marks_id(handoff("h1"))),
       ],
     ]
 }
@@ -1218,10 +1255,12 @@ pub fn the_next_queue_test() {
   let #(call, done) =
     script(waiting(), [
       #(key("#"), at(10)),
+      #(departure_marked("h1"), at(10)),
       #(noop_done(barrier), at(10)),
       #(joining("h2", settings()), at(11)),
     ])
-  assert last(done) == [core.Play("welcome")]
+  // The passage left is handed back: the callflow has the caller again.
+  assert last(done) == [core.Play("welcome"), core.HandedBack("h1")]
   assert case call.phase {
     core.Waiting(passage, media.Playing(_)) -> passage.handoff.id == "h2"
     _ -> False

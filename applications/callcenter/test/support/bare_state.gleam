@@ -49,6 +49,7 @@ pub fn new() -> State {
     offers: dict.new(),
     actors: dict.new(),
     presenting: dict.new(),
+    departing: dict.new(),
     pickups: dict.new(),
     busy: dict.new(),
     delayed: dict.new(),

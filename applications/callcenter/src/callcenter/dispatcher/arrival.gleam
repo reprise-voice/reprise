@@ -53,6 +53,11 @@ pub fn arrived(state: State, member: Member) -> State {
 /// going on, and the actor finds out what before anybody is rung.
 pub fn recovering(state: State, member: Member, recovered: Bool) -> State {
   let resumed = recovered || listener.redelivered(member.delivery)
+  // A caller joining again was handed back from any queue they were on
+  // their way out of: that departure is over, and its actor settles it as
+  // it begins the new passage.
+  let state =
+    State(..state, departing: dict.delete(state.departing, member.call_id))
   case dict.get(state.waiting, member.call_id) {
     // A redelivery of somebody already here, or the same caller entering
     // the same queue again -- their callflow run again elsewhere: keep the
@@ -141,7 +146,33 @@ fn join(state: State, member: Member, resumed: Bool) -> State {
 /// one, as a caller handed out again is: the one that ended may have
 /// finished the passage before just as the member of this one reached it,
 /// or crashed, and either way nothing commands the caller now.
-pub fn actor_down(state: State, pid: Pid) -> State {
+///
+/// A caller on their way out whose actor `crashed` is joined to a new one
+/// too, which finds them on their way out and hands them back
+/// (`call/recovery`'s `Departing`): their member is still held, and nothing
+/// else would ever hand them back. One whose actor ended as it should, or
+/// was shut down with the shard's calls, is forgotten: it handed them back,
+/// or the member goes back to the broker with the shard.
+pub fn actor_down(state: State, pid: Pid, crashed: Bool) -> State {
+  let leaving =
+    dict.to_list(state.departing)
+    |> list.filter(fn(entry) { entry.1.1 == pid })
+  let state =
+    State(
+      ..state,
+      departing: dict.drop(
+        state.departing,
+        list.map(leaving, fn(entry) { entry.0 }),
+      ),
+    )
+  let state = case crashed {
+    False -> state
+    True ->
+      list.fold(leaving, state, fn(state, entry) {
+        let #(member, _pid) = entry.1
+        hand_back(state, member)
+      })
+  }
   let gone =
     dict.to_list(state.actors)
     |> list.filter(fn(entry) { entry.1 == pid })
@@ -160,6 +191,39 @@ pub fn actor_down(state: State, pid: Pid) -> State {
       Error(Nil) -> state
     }
   })
+}
+
+/// A caller on their way out whose actor crashed, joined to a new actor to
+/// hand them back: it finds out where they stand and, finding them leaving,
+/// finishes their departure. Watched as the one before was.
+fn hand_back(state: State, member: Member) -> State {
+  case state.config.calls.join(member, True, state.replies) {
+    Ok(pid) -> {
+      system.log(
+        "the actor of call "
+        <> member.call_id
+        <> " ended while the caller was on their way out of queue "
+        <> member.queue_id
+        <> ": joining them to a new one to hand them back",
+      )
+      let _monitor = process.monitor(pid)
+      State(
+        ..state,
+        departing: dict.insert(state.departing, member.call_id, #(member, pid)),
+      )
+    }
+    Error(reason) -> {
+      system.log_error(
+        "call "
+        <> member.call_id
+        <> " is on its way out of queue "
+        <> member.queue_id
+        <> " with nothing to hand it back: "
+        <> reason,
+      )
+      state
+    }
+  }
 }
 
 /// A member for a caller already waiting here that is not the same passage:
@@ -284,6 +348,22 @@ fn presented(
       ringing_elsewhere(state, member, id, pid, agents, ceiling, is_pickup)
     types.PresentConnected(agent_id, leg, at, is_pickup) ->
       watched(state, member, id, agent_id, leg, at, pid, is_pickup)
+    types.PresentLeaving -> {
+      system.log(
+        "call "
+        <> member.call_id
+        <> " in queue "
+        <> member.queue_id
+        <> " was handed over on its way out of the queue: its actor hands it"
+        <> " back",
+      )
+      State(
+        ..state,
+        waiting: dict.delete(state.waiting, member.call_id),
+        actors: dict.delete(state.actors, member.call_id),
+        departing: dict.insert(state.departing, member.call_id, #(member, pid)),
+      )
+    }
     types.PresentOver -> {
       system.log(
         "call "

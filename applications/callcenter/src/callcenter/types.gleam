@@ -140,9 +140,10 @@ pub type OfferSettings {
 /// `Failed`, then `Ended` if `Answered` was sent -- or `Failed` with
 /// `called_off`, when the dispatcher called the ring off before anybody
 /// answered. A caller who leaves of their own accord is not said here: the
-/// actor tells the shard (`CallerLeft`), which settles them and tells the
-/// dispatcher. `Present` is about no offer the dispatcher made: see
-/// `Presence`.
+/// actor tells the shard (`CallerLeft`, or `CallerDeparting` for a caller it
+/// hands back on a branch), which tells the dispatcher and settles them,
+/// the second once they are handed back. `Present` is about no offer the
+/// dispatcher made: see `Presence`.
 ///
 /// `OfferRinging` and `OfferNoAnswer` carry the `Offer` prefix because a
 /// Gleam module has one namespace for constructors, and `Activity` and
@@ -184,9 +185,12 @@ pub type Presence {
     answered_at: Int,
     pickup: Bool,
   )
-  /// The queue is done with them -- their passage was closed, or they were
-  /// on their way out -- and their member is settled.
+  /// The queue is done with them -- their passage was closed, or handed
+  /// back -- and their member is settled.
   PresentOver
+  /// On their way out of the queue: the actor hands them back, and their
+  /// member is settled once it has (`call/core`'s `HandedBack`).
+  PresentLeaving
 }
 
 pub type EndResult {

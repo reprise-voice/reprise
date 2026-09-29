@@ -229,14 +229,14 @@ pub fn an_exit_key_during_a_ring_test() {
   assert done(did)
     == [
       Performed(core.HangUpLegs([prefix <> "-1"])),
-      Performed(core.Left(types.ExitKey)),
+      Performed(core.Departing("handoff-1", types.ExitKey)),
       Performed(
         core.Mark([
           #(core.departing_var, doc.String("handoff-1")),
           #(core.departing_branch_var, doc.String("exit_key")),
         ]),
       ),
-      Performed(core.Barrier("callcenter-departure-handoff-1")),
+      Performed(core.Confirm("callcenter-departing-handoff-1")),
     ]
 }
 
@@ -298,13 +298,8 @@ pub fn the_callflows_answer_ends_a_departure_test() {
   let assert Ok(pid) = process.subject_owner(to)
   process.send(to, actor.Join(member(), False, replies))
   process.send(to, event(call_id, "DTMF", [#("DTMF-Digit", doc.String("#"))]))
-  process.send(
-    to,
-    event(call_id, "CHANNEL_EXECUTE_COMPLETE", [
-      #("Application-Name", doc.String("noop")),
-      #("Application-Response", doc.String("callcenter-departure-handoff-1")),
-    ]),
-  )
+  process.send(to, noop_done("callcenter-departing-handoff-1"))
+  process.send(to, noop_done("callcenter-departure-handoff-1"))
   let did_so_far = done(did)
   assert list.last(did_so_far)
     == Ok(
@@ -409,11 +404,72 @@ pub fn a_quarantined_actor_hands_the_caller_back_test() {
   let assert [
     Bound(_),
     Performed(core.Log(_)),
-    Performed(core.Left(types.Quarantined)),
+    Performed(core.Departing("handoff-1", types.Quarantined)),
     Performed(core.Mark(_)),
-    Performed(core.Barrier(_)),
+    Performed(core.Confirm(_)),
   ] = done(did)
   Nil
+}
+
+/// The shard hears a caller leaving on a branch as they leave, with the
+/// member of the passage they leave, and is told to settle that member only
+/// once the departure is over -- here, the callflow taking them on into the
+/// next queue, whose member has taken the first's place by then.
+pub fn a_departing_callers_member_is_settled_once_they_are_handed_back_test() {
+  let did = process.new_subject()
+  let told = process.new_subject()
+  let replies = process.new_subject()
+  let shard =
+    actor.Shard(
+      left: fn(member: types.Member, _reason) {
+        process.send(told, #("left", member.handoff_id))
+      },
+      departing: fn(member: types.Member, _reason) {
+        process.send(told, #("departing", member.handoff_id))
+      },
+      handed_back: fn(member: types.Member) {
+        process.send(told, #("handed back", member.handoff_id))
+      },
+    )
+  let io =
+    actor.Io(..io(did), perform: fn(context, effect) {
+      process.send(did, Performed(effect))
+      case effect {
+        core.Left(_) | core.Departing(..) | core.HandedBack(_) ->
+          actor.perform(context, effect, shard, fn(run) { run() })
+        _ -> Nil
+      }
+    })
+  let assert Ok(started) = actor.start(io, cluster.account_id, call_id, 0)
+  let to = started.data
+  process.send(to, actor.Join(member(), False, replies))
+  process.send(to, event(call_id, "DTMF", [#("DTMF-Digit", doc.String("#"))]))
+  let _ = done(did)
+  assert drain_told(told) == [#("departing", "handoff-1")]
+
+  process.send(to, noop_done("callcenter-departing-handoff-1"))
+  process.send(to, noop_done("callcenter-departure-handoff-1"))
+  let _ = done(did)
+  assert drain_told(told) == []
+
+  let next = types.Member(..member(), handoff_id: "handoff-2")
+  process.send(to, actor.Join(next, False, replies))
+  let _ = done(did)
+  assert drain_told(told) == [#("handed back", "handoff-1")]
+}
+
+fn drain_told(told: Subject(#(String, String))) -> List(#(String, String)) {
+  case process.receive(told, 0) {
+    Ok(one) -> [one, ..drain_told(told)]
+    Error(Nil) -> []
+  }
+}
+
+fn noop_done(msg_id: String) -> actor.Message {
+  event(call_id, "CHANNEL_EXECUTE_COMPLETE", [
+    #("Application-Name", doc.String("noop")),
+    #("Application-Response", doc.String(msg_id)),
+  ])
 }
 
 /// A shard handed over asks its calls to be steady: a waiting caller's
@@ -477,7 +533,11 @@ fn io_through(did: Subject(Did), pool: publishers.Pool) -> actor.Io {
       actor.perform(
         context,
         effect,
-        fn(_member, _reason) { Nil },
+        actor.Shard(
+          left: fn(_member, _reason) { Nil },
+          departing: fn(_member, _reason) { Nil },
+          handed_back: fn(_member) { Nil },
+        ),
         publishers.send(pool, context.call_id, context.since, _),
       )
     },

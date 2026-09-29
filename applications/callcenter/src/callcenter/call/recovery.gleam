@@ -175,7 +175,10 @@ pub type Finding {
   /// The caller is through to one of the queue's legs.
   Connected(leg: Leg, answered_at: Int)
   /// The last actor was handing the caller back: the departure's mark is
-  /// this passage's, and the action has not taken them.
+  /// this passage's, or the record says the passage was cancelled as the
+  /// caller left on a branch and the queue still commands the caller, and
+  /// the action has not taken them. The shard kept their member until they
+  /// were handed back, which is how this actor has it.
   Departing(branch: Option(String))
   /// The record says an agent answered, and the caller is through to
   /// nobody now: the conversation ended while nothing watched it. An
@@ -322,12 +325,52 @@ fn standing_by(
   }
   let this_passage = fn(name) { mark(name) == Some(found.handoff_id) }
   let branch = mark(departing_branch_var)
+  // The branch the departure's marks name, when they are this passage's: a
+  // channel keeps the marks of a passage it left before.
+  let this_departure = case this_passage(departing_var) {
+    True -> branch
+    False -> None
+  }
+  // The channel joined a passage after this one, with no marks of this
+  // one's departure to go by: every join marks it with its own
+  // `Queue-Joined-Timestamp`, and a caller in a later passage whose own
+  // departure overwrote this one's marks is no departure of this one. Marks
+  // that name this passage are this departure's whatever the join says: a
+  // later passage that departed would have written its own over them, and
+  // one that did not would mean this one was handed back (`Queue-Departed`).
+  // The join is not all it seems for a caller who came into the same queue
+  // again: their member keeps the older `joined` (`arrival.kept_place`)
+  // while the channel is marked with the newer. So such a caller whose
+  // actor went before its marks ran is taken for a later passage, and
+  // settled.
+  let later_passage = fn() {
+    case
+      this_departure,
+      mark(joined_var)
+      |> option.then(fn(at) { int.parse(at) |> option.from_result })
+    {
+      None, Some(at) -> at > found.joined
+      _, _ -> False
+    }
+  }
   let closed = case record {
     Some(records.Passage(ended: Some(_), ..))
     | Some(records.Passage(cancelled: Some(_), ..)) -> True
     _ -> False
   }
   case closed, this_passage(departed_var), through {
+    // Cancelled as the caller left on a branch, and neither taken back by
+    // the callflow nor through to anybody, the probe reaching them through
+    // the control process the queue commands them by: still on their way
+    // out. The departure's marks may never have run -- the last actor went
+    // before them -- and the record's reason says the branch then. Unless
+    // the probe answered, the caller may be some other flow's by now, and
+    // handing them back would run a branch over the top of it.
+    True, False, None ->
+      case marks, leaving_branch(record, this_departure), later_passage() {
+        Some(_), Some(branch), False -> Departing(Some(branch))
+        _, _, _ -> Closed
+      }
     True, _, _ -> Closed
     False, True, _ -> Departed(branch)
     False, False, Some(other) ->
@@ -342,6 +385,35 @@ fn standing_by(
         False, False ->
           not_departing(marks, record, legs, option.is_some(marks), found.now)
       }
+  }
+}
+
+/// The branch a passage the record says was cancelled leaves on, when it
+/// was cancelled as the caller left on one: the departure's mark if it
+/// ran, or else what the record's reason names. Nothing for a passage that
+/// ended, or one cancelled for any other reason -- a hang-up, a transfer --
+/// which the queue hands back to nobody.
+fn leaving_branch(
+  record: Option(records.Passage),
+  marked: Option(String),
+) -> Option(String) {
+  case record {
+    Some(records.Passage(
+      ended: None,
+      cancelled: Some(_),
+      cancel_reason: why,
+      ..,
+    )) ->
+      case marked, why {
+        Some(branch), _ -> Some(branch)
+        None, Some("exit_key") -> Some("exit_key")
+        None, Some("timeout") -> Some("timeout")
+        None, Some("no_agent_timeout") -> Some("no_agent_timeout")
+        None, Some("queue_deleted") | None, Some("quarantined") ->
+          Some("no_agents")
+        None, _ -> None
+      }
+    _ -> None
   }
 }
 
@@ -551,6 +623,10 @@ fn none_if_empty(value: Option(String)) -> Option(String) {
 }
 
 // --- The marks -----------------------------------------------------------------
+
+/// The second the caller joined the passage their channel is in now,
+/// which every join marks it with (`cf_callcenter.channel_vars`).
+pub const joined_var = "Queue-Joined-Timestamp"
 
 /// The mark a departing caller's channel carries: the passage's id.
 pub const departing_var = "Queue-Departing"

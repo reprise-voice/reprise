@@ -174,19 +174,51 @@ pub fn send(
 /// is told as the queue goes (`queue_deleted`); whoever watches the call
 /// hears it as a `member_result` whose result is the reason.
 pub fn leave(state: State, call_id: String, reason: CancelReason) -> State {
+  leaving(state, call_id, reason, True)
+}
+
+/// A caller is leaving without an agent on a branch their actor hands them
+/// back on: taken out of the queue as `leave` takes them, and their
+/// document closed, but their member kept. The actor's departure takes a
+/// moment -- the marks, the barrier, the callflow's word -- and ends by
+/// settling the member itself (`call/core`'s `HandedBack`), so that a shard
+/// that ends before gives the member back to the broker and whoever takes
+/// the shard next hands the caller back. Their actor is watched meanwhile:
+/// one that crashes is replaced (`arrival.actor_down`).
+pub fn depart(state: State, call_id: String, reason: CancelReason) -> State {
+  leaving(state, call_id, reason, False)
+}
+
+fn leaving(
+  state: State,
+  call_id: String,
+  reason: CancelReason,
+  settle: Bool,
+) -> State {
   case dict.get(state.waiting, call_id) {
     Error(_) -> state
     Ok(wait) -> {
       let now = state.config.now()
-      state.config.settle(wait.member)
+      let departing = case settle, dict.get(state.actors, call_id) {
+        True, _ -> {
+          state.config.settle(wait.member)
+          state.departing
+        }
+        False, Ok(pid) ->
+          dict.insert(state.departing, call_id, #(wait.member, pid))
+        False, Error(Nil) -> state.departing
+      }
       records.cancelled(wait.member, reason, now)
-      case reason {
-        QueueDeleted ->
+      // A departure of a deleted queue's caller is only ever taken up again
+      // by a node taking the caller over (`depart`): the node that took them
+      // out of the queue said so then.
+      case reason, settle {
+        QueueDeleted, True ->
           publish.call(state.config.account_id, "member_result", wait.member, [
             #("Result", doc.String(records.reason_to_string(reason))),
             #("Ended-Timestamp", doc.Int(now)),
           ])
-        _callers_own -> Nil
+        _callers_own, _ -> Nil
       }
       // The offer is abandoned while the caller is still waiting, so that
       // its end can tell whether it was for the passage they are leaving or
@@ -197,6 +229,7 @@ pub fn leave(state: State, call_id: String, reason: CancelReason) -> State {
         waiting: dict.delete(state.waiting, call_id),
         actors: dict.delete(state.actors, call_id),
         presenting: dict.delete(state.presenting, call_id),
+        departing: departing,
       )
     }
   }
@@ -229,6 +262,11 @@ pub fn queue_deleted(state: State, queue_id: String) -> State {
         <> " out of it",
       )
   }
+  // Settled at once, as a caller who left is: an agent who answered before
+  // the actor heard of the deletion has the caller, and the actor hands
+  // back nobody it bridged. A departure the actor does make is not kept
+  // over the shard's end, then: that shard's next holder does not hear of
+  // the caller.
   list.fold(callers, state, fn(state, member) {
     state.config.calls.queue_gone(member)
     leave(state, member.call_id, QueueDeleted)

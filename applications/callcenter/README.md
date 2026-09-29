@@ -254,7 +254,9 @@ is the ledger. A dispatcher never acks: it asks the shard to settle a caller
 (`Settle`, naming the delivery it was handed) when their call has ended or
 they have left, a caller's actor saying they left (`CallerLeft`) and a
 cancel from the member queue settle the caller on arrival at the shard, and
-an operator settles by hand through `sup`. A connected call's member is held
+an operator settles by hand through `sup`. A caller's actor saying they are
+leaving on a branch (`CallerDeparting`) settles nothing: the actor asks the
+shard to settle them (`Settle`) once it has handed them back. A connected call's member is held
 until the call ends, so the member queue holds every live call and a node
 that dies mid-call leaves it on the broker for the next holder. Settling a call
 that is already settled is nothing, and a settlement naming a delivery the
@@ -1379,13 +1381,36 @@ an event lost on the way would otherwise leave a caller nobody hears go, or
 an agent held busy for the four hours a call is watched at most.
 
 **Leaving.** An exit key, a clock, or a deleted queue takes the caller out:
-their legs are hung up, the shard is told they left (`CallerLeft`, which
-settles them; a deleted queue is the dispatcher's own doing), the channel is
-marked `Queue-Departing` and `Queue-Departing-Branch`, and a `noop` that
-flushes goes out with a known `Msg-ID`. Its completion proves `ecallmgr` has
-run everything the actor sent before it, and only then does
-`member_continue` go to the action's Controller-Queue, asked again every two
-seconds, three times, until the action says `member_continuing`.
+their legs are hung up, the shard is told they are leaving
+(`CallerDeparting`; a deleted queue is the dispatcher's own doing), the
+channel is marked `Queue-Departing` and `Queue-Departing-Branch`, and a
+`noop` run at once behind the marks shows they ran. Only then does a `noop`
+that flushes go out with a known `Msg-ID`: its flush would throw away marks
+not yet run, and the marks are what a node taking the caller over on their
+way out finds them by. Marks not seen to run in a second are waited for no
+longer. The flush's completion proves `ecallmgr` has run everything the
+actor sent before it, and only then does `member_continue` go to the
+action's Controller-Queue, asked again every two seconds, three times, until
+the action says `member_continuing`.
+
+The shard tells the caller's dispatcher they are leaving, which lets them
+go as it lets a caller who left go -- their place, their ring, their record
+closed -- but keeps their member. The departure is over when the callflow
+has them back, a resumed flow took them, they are gone, they joined the next
+queue, or they were hung up for want of a flow; in that step the actor has
+the shard settle the member it kept (`Settle`, naming the delivery). Until
+then a shard that ends -- handed over, its node stopped or stood still, its
+broker connection gone -- gives the member back to the broker, and the
+actor of the tree that takes the shard next finds the caller on their way
+out and hands them back itself (*Takeover*). Settled as they left, as it
+was, a caller whose actor ended half way out was handed back by nobody: the
+action waited up to four hours, and they heard hold or silence until they
+hung up. An actor that crashes half way out is replaced as a waiting
+caller's is: the dispatcher watches it until the departure is over, and
+joins the caller to a new actor that finds them leaving. A caller a deleted
+queue takes out is settled at once, as before: an agent who answered before
+the actor heard of the deletion has the caller, and nobody would ever hand
+back a caller the actor bridged.
 
 **The callflow's node gone.** An action that never answers is on a node
 that has gone. Before the caller is resumed elsewhere their channel is
@@ -1400,9 +1425,8 @@ the caller up.
 **A resume nobody takes.** Nothing on the bus says a resume was taken. The
 callflow node that takes one first asks the switches whether the channel is
 up, and when that fails it drops the resume without a word
-(`cf_route_resume:handle_if_up`). Or no node takes it at all. The shard
-settled the caller's member as they left and their callflow is gone, so
-only the actor can notice. It stays after the resume and watches the
+(`cf_route_resume:handle_if_up`). Or no node takes it at all. The caller's
+callflow is gone, so only the actor can notice. It stays after the resume and watches the
 caller's channel (`Resumed`). `callcenter_departed` writes the passage's
 `Queue-Departed` mark before the flow runs anything else, and every event
 carries the channel's variables, so the first event with the mark ends the
@@ -1423,8 +1447,8 @@ joins its caller to a new one, which finds out where they stand
 (*Takeover*). A call whose actors keep crashing is one this code cannot get
 past, so the registry counts each call's crashes over ten minutes. From the
 third, the actor it starts is quarantined: it asks nothing and tries
-nothing, hands the caller back on `no_agents` through the usual barrier and
-settles them as `quarantined`, logging `QUARANTINED`. From the sixth -- the
+nothing, hands the caller back on `no_agents` through the usual departure,
+their member settled once it has, as `quarantined`, logging `QUARANTINED`. From the sixth -- the
 quarantine itself crashing -- it starts none, and the caller is left as the
 switch has them.
 
@@ -1436,7 +1460,8 @@ A caller handed to an actor that does not know them is *Takeover*'s.
 |---|---|---|
 | dispatcher | actor | `Join` (a caller joined, or was handed over: `resumed`), `Ring`, `CallOff`, `QueueGone`, `Positioned`, `Adopt` (an answered call the sweep found) |
 | actor | dispatcher | an offer's `OfferRinging`, `Answered`, `OfferNoAnswer`, `Busy`, `Rejected`, `Failed` and `Ended`; `Present` for a caller handed over |
-| actor | shard | `CallerLeft`: a caller who left of their own accord, settled |
+| actor | shard | `CallerLeft`: a caller who left of their own accord, settled; `CallerDeparting`: a caller leaving on a branch, their member kept; `Settle`: a departure over, the member kept settled |
+| shard | dispatcher | `Left`: a caller who left; `Departing`: a caller on their way out, let go of but not settled |
 | actor | action | `member_continue`, through the call's publisher, answered with `member_continuing` at the actor's own address |
 | actor | switch | the caller's commands on their control queue, one `originate_req` per offer, `call_command` hangups of legs, all through the call's publisher on its one channel |
 
@@ -1544,7 +1569,8 @@ stands, and every leg of theirs it does not keep is hung up:
 | Found | What happens |
 |---|---|
 | the probe unanswered, and every switch answering without the caller | gone: the member is settled as a hang-up -- or, when the record has an answer nothing closed, the call is told the dispatcher and closed as a call that ended |
-| the record closed, by an end or a cancel | the queue is done with them, and only the settle was lost: `PresentOver`, and the member is settled |
+| the record cancelled as the caller left on a branch, the probe reaching them, through to nobody, and no `Queue-Departed` of this passage | still on their way out: the last actor went before it handed them back, and the shard kept their member until it had. The departure is taken up again from its marks, and the caller handed back on the branch the departure's mark names, or the record's reason when the mark never ran |
+| the record closed, by an end or a cancel | the queue is done with them, and only the settle was lost: `PresentOver`, and the member is settled -- by the actor too, for a dispatcher that joined the caller to it to finish a departure and takes no `Present` |
 | `Queue-Departed` naming this passage | the callflow has them back: settled on the branch the departure's mark names |
 | the caller bridged to a channel that is not one of their legs | a pickup or a transfer: settled as a transfer |
 | the caller bridged to one of their legs | connected, dated by the last actor's marks when they name the leg's agent: not marked again, since the last actor marked them before it bridged them, and a command sent to a caller in a bridge runs inside it, if at all, holding the agent while it does; `PresentConnected`, and the end heard as any call's |

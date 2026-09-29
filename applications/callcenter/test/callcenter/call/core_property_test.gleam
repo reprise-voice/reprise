@@ -37,7 +37,11 @@
 ////   elsewhere only after that, at most `resume_attempts` times, never in
 ////   the step that hears the resumed flow's mark, and the caller is hung
 ////   up with no agent only once the last resume went untaken;
-//// - the shard hears a caller leave at most once a passage;
+//// - the shard hears a caller leave at most once a passage, and is told to
+////   settle the member of a departure in the step that ends it and no
+////   other;
+//// - a departure's marks go with the `noop` that shows they ran, and its
+////   barrier only once that `noop` completed or the wait for it is over;
 //// - a caller handed over is told the dispatcher of at most once for each
 ////   time they were, and an offer found going on for them ends like one the
 ////   actor rang;
@@ -286,6 +290,7 @@ fn passage(answered, closed) -> records.Passage {
     picked_up: False,
     ended: closed,
     cancelled: None,
+    cancel_reason: None,
   )
 }
 
@@ -323,7 +328,9 @@ fn an_input(world: World) -> #(Input, World) {
     )
     k if k < 74 -> {
       let #(which, rng) = rng.pick(world.rng, ["h1", "h2"])
-      #(noop_done(core.barrier_id(handoff(which))), World(..world, rng: rng))
+      let #(what, rng) =
+        rng.pick(rng, [core.barrier_id, core.departure_marks_id])
+      #(noop_done(what(handoff(which))), World(..world, rng: rng))
     }
     k if k < 77 -> a_resume_word(world)
     k if k < 79 -> #(event(call_id, "CHANNEL_TRANSFEREE", []), world)
@@ -486,6 +493,13 @@ type Seen {
     deserted: List(String),
     /// Barriers sent, by handoff.
     barriers: Dict(String, Int),
+    /// Departures begun -- the departure's marks sent -- by handoff.
+    departures: Dict(String, Int),
+    /// Departures handed back, by handoff.
+    handed: Dict(String, Int),
+    /// Passages a node taking the caller over found closed, whose member
+    /// it has settled too.
+    found_over: List(String),
     /// Continues sent, by handoff: the branches, in order.
     continues: Dict(String, List(String)),
     /// Resumes published, by handoff: how many.
@@ -531,6 +545,9 @@ fn run(seed: Int) -> #(Call, Seen) {
       left_ringing: [],
       deserted: [],
       barriers: dict.new(),
+      departures: dict.new(),
+      handed: dict.new(),
+      found_over: [],
       continues: dict.new(),
       resumes: dict.new(),
       passages: 0,
@@ -576,6 +593,7 @@ fn run(seed: Int) -> #(Call, Seen) {
       })
     let seen = released(call, after, effects, seen)
     let seen = found_out(call, after, effects, seen)
+    let seen = handed_back(call, after, effects, seen)
     let seen = watched(call, after, input, seen)
     let wait = core.wait_ms(after, clock)
     let seen = case wait >= 1 && wait <= 30_000 {
@@ -613,7 +631,7 @@ fn released(
   let left =
     list.any(effects, fn(effect) {
       case effect {
-        core.Left(_) -> True
+        core.Left(_) | core.Departing(..) -> True
         _ -> False
       }
     })
@@ -643,11 +661,101 @@ fn released(
   })
 }
 
+/// The `noop` behind an answer's marks: right behind them, and naming the
+/// leg the call is waiting on.
+fn answer_confirm(
+  before: Call,
+  after: Call,
+  seen: Seen,
+  msg_id: String,
+) -> Seen {
+  let seen = case seen.previous {
+    Some(core.Mark(vars)) ->
+      case list.key_find(vars, "Agent-ID") {
+        Ok(_) -> seen
+        Error(Nil) -> problem(seen, "confirmed marks that are no answer's")
+      }
+    _ -> problem(seen, "confirmed " <> msg_id <> " with no marks before")
+  }
+  let waiting_on = case after.phase {
+    core.Offering(ring: core.Parking(leg: leg, ..), ..) ->
+      Some(core.marks_id(leg))
+    _ -> None
+  }
+  let seen = case before.phase {
+    core.Recovering(..) -> seen
+    _ if waiting_on == Some(msg_id) -> seen
+    _ ->
+      problem(
+        seen,
+        "confirmed " <> msg_id <> " for no leg the call is waiting on",
+      )
+  }
+  Seen(..seen, confirming: Some(msg_id), confirmed: False)
+}
+
 /// Whether the call holds the offer's ring as deserted and undecided.
 fn is_deserted(call: Call, key: String) -> Bool {
   list.any(call.recalls, fn(recall) {
     offer_key(recall.offer.id) == key && option.is_some(recall.deserted)
   })
+}
+
+/// The step that ends a departure -- the callflow has the caller back, a
+/// resumed flow took them, they are gone, or they joined the next queue --
+/// tells the shard to settle the member it kept, once; no other step does.
+fn handed_back(before: Call, after: Call, effects: List(Effect), seen: Seen) {
+  let told =
+    list.filter_map(effects, fn(effect) {
+      case effect {
+        core.HandedBack(id) -> Ok(id)
+        _ -> Error(Nil)
+      }
+    })
+  let ended = case before.phase {
+    core.Leaving(passage: passage, ..)
+    | core.Departed(passage: passage, ..)
+    | core.Resuming(passage: passage, ..)
+    | core.Resumed(passage: passage, ..) ->
+      case core.departing(after.phase) {
+        True -> []
+        False -> [passage.handoff.id]
+      }
+    _ -> []
+  }
+  let seen =
+    Seen(
+      ..seen,
+      handed: list.fold(told, seen.handed, fn(handed, id) {
+        dict.insert(handed, id, { dict.get(handed, id) |> result_or(0) } + 1)
+      }),
+    )
+  let seen = case
+    before.phase,
+    list.contains(effects, core.Present(None, types.PresentOver))
+  {
+    core.Recovering(..), True ->
+      Seen(..seen, found_over: list.append(told, seen.found_over))
+    _, _ -> seen
+  }
+  case before.phase {
+    // A caller found on their way out may be gone again, or joined to the
+    // next queue and gone from that, before the step that found them is
+    // over, with what arrived meanwhile: those departures began and ended
+    // in the one step, and the end of the script counts them.
+    core.Recovering(..) -> seen
+    _ if told == ended -> seen
+    _ ->
+      problem(
+        seen,
+        "handed back "
+          <> string.inspect(told)
+          <> " going from "
+          <> call_script.phase_name(before)
+          <> " to "
+          <> call_script.phase_name(after),
+      )
+  }
 }
 
 /// The step that ends the finding out about a caller handed over tells the
@@ -661,7 +769,7 @@ fn found_out(
   let told =
     list.any(effects, fn(effect) {
       case effect {
-        core.Present(..) | core.Left(_) -> True
+        core.Present(..) | core.Left(_) | core.Departing(..) -> True
         _ -> False
       }
     })
@@ -720,36 +828,65 @@ fn check(
       |> unmarked
     }
     core.Mark(vars) ->
-      case list.key_find(vars, "Agent-ID") {
-        Ok(doc.String(agent)) ->
+      case
+        list.key_find(vars, "Agent-ID"),
+        list.key_find(vars, core.departing_var)
+      {
+        Ok(doc.String(agent)), _ ->
           Seen(..seen, marked: Some(agent), confirmed: False)
-        _ -> seen
+        _, Ok(doc.String(id)) ->
+          Seen(
+            ..seen,
+            departures: dict.insert(
+              seen.departures,
+              id,
+              { dict.get(seen.departures, id) |> result_or(0) } + 1,
+            ),
+          )
+        _, _ -> seen
       }
-    core.Confirm(msg_id) -> {
-      let seen = case seen.previous {
+    // The `noop` behind a departure's marks: right behind them, and only as
+    // the call starts leaving on that passage.
+    // The `noop` behind a departure's marks goes right behind them and
+    // names their passage; any other is an answer's.
+    core.Confirm(msg_id) ->
+      case seen.previous {
         Some(core.Mark(vars)) ->
-          case list.key_find(vars, "Agent-ID") {
-            Ok(_) -> seen
-            Error(Nil) -> problem(seen, "confirmed marks that are no answer's")
+          case list.key_find(vars, core.departing_var) {
+            Ok(doc.String(id)) ->
+              case msg_id == core.departure_marks_id(handoff(id)) {
+                True -> seen
+                False ->
+                  problem(
+                    seen,
+                    "confirmed " <> msg_id <> " behind the marks of " <> id,
+                  )
+              }
+            _ -> answer_confirm(before, after, seen, msg_id)
           }
-        _ -> problem(seen, "confirmed " <> msg_id <> " with no marks before")
+        _ -> answer_confirm(before, after, seen, msg_id)
       }
-      let waiting_on = case after.phase {
-        core.Offering(ring: core.Parking(leg: leg, ..), ..) ->
-          Some(core.marks_id(leg))
-        _ -> None
+    core.Barrier(msg_id) -> {
+      // The departure's marks were seen to run, or the wait for them is over.
+      let barred = case before.phase, input {
+        core.Recovering(..), _ -> True
+        core.Leaving(passage: passage, marked: False, ..), core.Event(event) ->
+          core.is_noop_done(event, core.departure_marks_id(passage.handoff))
+        core.Leaving(marked: False, until_ms: until, ..), core.Tick ->
+          clock.now_ms >= until
+        _, _ -> False
       }
-      let seen = case before.phase {
-        core.Recovering(..) -> seen
-        _ if waiting_on == Some(msg_id) -> seen
-        _ ->
+      let seen = case barred {
+        True -> seen
+        False ->
           problem(
             seen,
-            "confirmed " <> msg_id <> " for no leg the call is waiting on",
+            "barred " <> msg_id <> " before its marks were seen to run",
           )
       }
-      Seen(..seen, confirming: Some(msg_id), confirmed: False)
+      Seen(..seen, barriers: dict.insert(seen.barriers, msg_id, seen.step))
     }
+    core.Departing(..) -> Seen(..seen, lefts: [seen.step, ..seen.lefts])
     core.Bridge(leg) -> {
       let recovered = case before.phase {
         core.Recovering(..) -> True
@@ -833,8 +970,6 @@ fn check(
         _, _ -> seen
       }
     }
-    core.Barrier(msg_id) ->
-      Seen(..seen, barriers: dict.insert(seen.barriers, msg_id, seen.step))
     core.Continue(handoff, branch) -> {
       let barrier = core.barrier_id(handoff)
       let before = dict.get(seen.continues, handoff.id) |> result_or([])
@@ -1013,6 +1148,32 @@ fn at_the_end(call: Call, seen: Seen) -> Seen {
     keys ->
       problem(seen, "deserted and never decided: " <> string.join(keys, ", "))
   }
+  // Nothing is handed back that did not depart, or was not found over.
+  let seen =
+    dict.fold(seen.handed, seen, fn(seen, id, _count) {
+      case
+        dict.has_key(seen.departures, id) || list.contains(seen.found_over, id)
+      {
+        True -> seen
+        False -> problem(seen, id <> " was handed back and never departed")
+      }
+    })
+  // Every departure begun ended by being handed back, once.
+  let seen =
+    dict.fold(seen.departures, seen, fn(seen, id, begun) {
+      case dict.get(seen.handed, id) |> result_or(0) == begun {
+        True -> seen
+        False ->
+          problem(
+            seen,
+            id
+              <> " began "
+              <> int.to_string(begun)
+              <> " departures and was handed back "
+              <> string.inspect(dict.get(seen.handed, id)),
+          )
+      }
+    })
   let seen = case list.length(seen.lefts) <= seen.passages {
     True -> seen
     False -> problem(seen, "left more often than it joined")

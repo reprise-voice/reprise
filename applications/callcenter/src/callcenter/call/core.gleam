@@ -48,11 +48,17 @@
 ////
 //// **Leaving.** A caller who leaves the queue on a branch is handed back to
 //// the callflow that sent them, which is on some other node and blocked in
-//// the queue's callflow action: the legs are hung up, the channel is marked
-//// `Queue-Departing`, and a `noop` with a known `Msg-ID` flushes the hold.
-//// Its completion proves `ecallmgr` has run every command the actor sent
-//// before it, and only then does `member_continue` go out, repeated until
-//// the action says `member_continuing`. An action that never answers is on
+//// the queue's callflow action: the dispatcher is told they are leaving
+//// (`Departing`), the legs are hung up, the channel is marked
+//// `Queue-Departing` and the mark is seen to run (`Confirm`), and a `noop`
+//// with a known `Msg-ID` flushes the hold. Its completion proves `ecallmgr`
+//// has run every command the actor sent before it, and only then does
+//// `member_continue` go out, repeated until the action says
+//// `member_continuing`. The shard keeps the caller's member until the
+//// departure is over (`HandedBack`): a shard that ends meanwhile -- handed
+//// over, its node stopped or stood still -- gives it back to the broker, and
+//// the actor of whichever tree takes the shard next finds the caller on
+//// their way out and hands them back itself. An action that never answers is on
 //// a node that has gone, and the caller is resumed at the branch on any
 //// callflow node instead, and watched until the resumed flow marks their
 //// channel as its own. The actor publishes a resume nobody takes again,
@@ -110,6 +116,13 @@ pub const connect_ms = 5000
 /// and their ends following in a few hundred milliseconds.
 pub const desertion_ms = 2000
 
+/// How long the departure's marks are given to be seen to run before the
+/// barrier goes out all the same. The barrier's flush throws away whatever
+/// the caller's channel has not yet run, the marks among it, and the marks
+/// are what a node that takes the caller over on their way out finds them
+/// by. A `noop` sent at once completed in 19 ms on the lab (`probe_ms`).
+pub const marks_wait_ms = 1000
+
 /// How long the departure's barrier has to complete before the callflow is
 /// told to go on regardless: the completion proves the earlier commands ran,
 /// and one that never comes -- `ecallmgr` gone with the caller's control
@@ -146,9 +159,8 @@ pub const resume_ack_ms = 8000
 /// try takes `resume_ack_ms`, and `probe_ms` more when the actor has to ask
 /// the channel, so the tries span about half a minute. A caller nobody
 /// takes is in silence, since the departure's barrier flushed their hold.
-/// The shard settled their member as they left and their callflow is gone,
-/// so nothing else will ever drive them. A caller who is hung up can call
-/// back.
+/// Their callflow is gone, so nothing else will ever drive them. A caller
+/// who is hung up can call back.
 pub const resume_attempts = 3
 
 /// How long a caller handed over is given to be found out about before
@@ -373,8 +385,15 @@ pub type Phase {
     /// The monotonic millisecond past which the call is no longer watched.
     until_ms: Int,
   )
-  /// Leaving the queue: the departure's barrier is out.
-  Leaving(passage: Passage, exit: Exit, barrier: String, until_ms: Int)
+  /// Leaving the queue: the departure's marks are out, and once they are
+  /// seen to run (`marked`) or `marks_wait_ms` has gone by, its barrier.
+  Leaving(
+    passage: Passage,
+    exit: Exit,
+    barrier: String,
+    marked: Bool,
+    until_ms: Int,
+  )
   /// Handed back: `member_continue` is out, waiting to be acknowledged.
   Departed(passage: Passage, exit: Exit, attempts: Int, until_ms: Int)
   /// Never acknowledged: before the caller is resumed on another callflow
@@ -569,8 +588,18 @@ pub type Effect {
   HangUpLegs(legs: List(String))
   /// Tell the dispatcher how an offer went.
   Tell(offer: OfferId, reply: OfferReply)
-  /// Tell the shard the caller has left the queue: settle them.
+  /// Tell the shard the caller has left the queue and is nothing more of
+  /// the queue's: settle their member now.
   Left(reason: CancelReason)
+  /// Tell the shard the caller is leaving the passage `handoff_id` on a
+  /// branch: their dispatcher lets them go now, and the shard keeps their
+  /// member until the departure is over (`HandedBack`).
+  Departing(handoff_id: String, reason: CancelReason)
+  /// The passage `handoff_id` is over for the queue -- its departure ended:
+  /// the callflow has the caller back, a resumed flow took them, they are
+  /// gone, or they were hung up for want of one; or a node taking the caller
+  /// over found it closed: the shard settles the member it kept.
+  HandedBack(handoff_id: String)
   /// Hand the caller back to the callflow action, on a branch.
   Continue(handoff: Handoff, branch: String)
   /// The callflow action's node is gone: resume the caller at the branch on
@@ -599,14 +628,38 @@ pub type Effect {
 /// One input, at one time: the call after it, and what to do about it, in
 /// order.
 pub fn step(call: Call, input: Input, clock: Clock) -> #(Call, List(Effect)) {
+  let before = call.phase
   let #(call, recalled) = recalling(call, input, clock)
   let #(call, effects) = case recalled {
     True -> #(call, [])
     False -> phase_step(call, input, clock)
   }
+  // Whichever way a departure ends, the member the shard kept for it is
+  // settled in the step that ends it.
+  let handed_back = case departing_passage(before), departing(call.phase) {
+    Some(passage), False -> [HandedBack(passage.handoff.id)]
+    _, _ -> []
+  }
   let #(call, settled) = settle_recalls(call, clock)
   let #(call, audit) = audit(call, clock)
-  #(call, list.flatten([effects, settled, audit]))
+  #(call, list.flatten([effects, handed_back, settled, audit]))
+}
+
+/// Whether the call is on its way out of a queue: from the moment it leaves
+/// to the moment the callflow, or a resumed flow, has the caller back.
+pub fn departing(phase: Phase) -> Bool {
+  option.is_some(departing_passage(phase))
+}
+
+/// The passage a call on its way out is leaving.
+fn departing_passage(phase: Phase) -> Option(Passage) {
+  case phase {
+    Leaving(passage: passage, ..)
+    | Departed(passage: passage, ..)
+    | Resuming(passage: passage, ..)
+    | Resumed(passage: passage, ..) -> Some(passage)
+    _ -> None
+  }
 }
 
 /// The audit, while the call is waiting, ringing or connected: due
@@ -1060,8 +1113,11 @@ fn present(phase: Phase, clock: Clock) -> Effect {
           offer.pickup,
         ),
       )
-    Leaving(..) | Departed(..) | Resuming(..) | Resumed(..) | Done ->
-      Present(None, types.PresentOver)
+    // On the way out: the actor hands the caller back, and the shard settles
+    // their member once it has.
+    Leaving(..) | Departed(..) | Resuming(..) | Resumed(..) ->
+      Present(None, types.PresentLeaving)
+    Done -> Present(None, types.PresentOver)
     Waiting(..) | Idle | Recovering(..) -> Present(None, types.PresentWaiting)
   }
 }
@@ -1293,7 +1349,15 @@ fn rehydrate(
           <> " and its caller is gone: its end went unwatched",
         ),
       ])
-    recovery.Closed -> settle([Present(None, types.PresentOver)])
+    // The member is settled here as well as by the dispatcher the `Present`
+    // goes to: a dispatcher that joined the caller to this actor to finish
+    // a departure its last actor crashed in does not take the `Present`,
+    // and the shard's ledger settles a member once whoever asks.
+    recovery.Closed ->
+      settle([
+        Present(None, types.PresentOver),
+        HandedBack(joining.handoff.id),
+      ])
     recovery.Departed(branch) -> settle([Left(cancel_reason(exit_of(branch)))])
     recovery.Moved -> settle([Left(types.Transfer)])
     // A caller the probe reached is parked where the agent's end left them,
@@ -1354,8 +1418,8 @@ fn rehydrate(
       let told = case exit {
         // A deleted queue's departure is the dispatcher's to tell; this one
         // is a dispatcher that has not heard of the caller.
-        QueueDeleted -> [Left(types.QueueDeleted)]
-        _ -> left(exit)
+        QueueDeleted -> [Departing(passage.handoff.id, types.QueueDeleted)]
+        _ -> departing_as(passage, exit)
       }
       let #(call, effects) = leave_with(call, passage, None, exit, told, clock)
       #(call, list.append(hang_up, effects))
@@ -1789,19 +1853,25 @@ pub fn branch(exit: Exit) -> String {
 
 /// What the shard is told for each way of leaving, when it is the caller's
 /// to tell: a deleted queue is the dispatcher's own doing.
-fn left(exit: Exit) -> List(Effect) {
+fn departing_as(passage: Passage, exit: Exit) -> List(Effect) {
+  let id = passage.handoff.id
   case exit {
-    ExitKey -> [Left(types.ExitKey)]
-    WaitedTooLong -> [Left(types.Timeout)]
-    NobodyTooLong -> [Left(types.NoAgentTimeout)]
+    ExitKey -> [Departing(id, types.ExitKey)]
+    WaitedTooLong -> [Departing(id, types.Timeout)]
+    NobodyTooLong -> [Departing(id, types.NoAgentTimeout)]
     QueueDeleted -> []
-    Quarantined -> [Left(types.Quarantined)]
+    Quarantined -> [Departing(id, types.Quarantined)]
   }
 }
 
 /// The `Msg-ID` of a passage's barrier.
 pub fn barrier_id(handoff: Handoff) -> String {
   "callcenter-departure-" <> handoff.id
+}
+
+/// The `Msg-ID` of the `noop` behind a passage's departure marks.
+pub fn departure_marks_id(handoff: Handoff) -> String {
+  "callcenter-departing-" <> handoff.id
 }
 
 /// The mark a departing caller's channel carries: the passage's id.
@@ -1821,7 +1891,7 @@ fn leave(
   exit: Exit,
   clock: Clock,
 ) -> #(Call, List(Effect)) {
-  leave_with(call, passage, ringing, exit, left(exit), clock)
+  leave_with(call, passage, ringing, exit, departing_as(passage, exit), clock)
 }
 
 /// A departure, with what the shard is told of it.
@@ -1836,8 +1906,8 @@ fn leave_with(
   let #(call, calling_off) = case ringing {
     None -> #(call, [])
     Some(offer) -> {
-      // The shard's settle tells the dispatcher of a caller leaving; only a
-      // deleted queue's ring is the dispatcher's to hear the end of.
+      // The shard tells the dispatcher of a caller leaving (`Departing`);
+      // only a deleted queue's ring is the dispatcher's to hear the end of.
       let tell = case exit {
         QueueDeleted -> Some(types.Failed(called_off_reason))
         _ -> None
@@ -1846,13 +1916,17 @@ fn leave_with(
     }
   }
   let barrier = barrier_id(passage.handoff)
+  // The marks first, and the barrier only once they are seen to run: the
+  // barrier's flush would throw away marks not yet run, and they are what a
+  // node taking the caller over on their way out finds them by.
   into(
     call,
     Leaving(
       passage: passage,
       exit: exit,
       barrier: barrier,
-      until_ms: clock.now_ms + barrier_ms,
+      marked: False,
+      until_ms: clock.now_ms + marks_wait_ms,
     ),
     list.flatten([
       calling_off,
@@ -1862,9 +1936,25 @@ fn leave_with(
           #(departing_var, doc.String(passage.handoff.id)),
           #(departing_branch_var, doc.String(branch(exit))),
         ]),
-        Barrier(barrier),
+        Confirm(departure_marks_id(passage.handoff)),
       ],
     ]),
+  )
+}
+
+/// The departure's marks have run, or will not be seen to: the barrier.
+fn barred(call: Call, passage: Passage, exit: Exit, clock: Clock) {
+  let barrier = barrier_id(passage.handoff)
+  into(
+    call,
+    Leaving(
+      passage: passage,
+      exit: exit,
+      barrier: barrier,
+      marked: True,
+      until_ms: clock.now_ms + barrier_ms,
+    ),
+    [Barrier(barrier)],
   )
 }
 
@@ -2290,7 +2380,12 @@ fn heard(call: Call, event: Value, clock: Clock) -> #(Call, List(Effect)) {
       if other == leg
     -> agent_hung_up(call, offer, leg, agent, at, clock)
 
-    Leaving(passage, exit, barrier, _), FromCaller, _ ->
+    Leaving(passage, exit, _, False, _), FromCaller, _ ->
+      case is_noop_done(event, departure_marks_id(passage.handoff)) {
+        True -> barred(call, passage, exit, clock)
+        False -> stay(call)
+      }
+    Leaving(passage, exit, barrier, True, _), FromCaller, _ ->
       case is_noop_done(event, barrier) {
         True -> depart(call, passage, exit, clock)
         False -> stay(call)
@@ -2733,7 +2828,22 @@ fn ticked(call: Call, clock: Clock) -> #(Call, List(Effect)) {
         False -> stay(call)
       }
     }
-    Leaving(passage, exit, _, until) ->
+    Leaving(passage, exit, _, False, until) ->
+      case clock.now_ms >= until {
+        True -> {
+          let #(call, effects) = barred(call, passage, exit, clock)
+          #(call, [
+            Log(
+              "call "
+              <> call.call_id
+              <> ": the departure's marks were not seen to run; barring anyway",
+            ),
+            ..effects
+          ])
+        }
+        False -> stay(call)
+      }
+    Leaving(passage, exit, _, True, until) ->
       case clock.now_ms >= until {
         True -> {
           let #(call, effects) = depart(call, passage, exit, clock)
@@ -2818,10 +2928,9 @@ fn ticked(call: Call, clock: Clock) -> #(Call, List(Effect)) {
 /// anything, and when that fails it drops the resume without a word
 /// (`cf_route_resume:handle_if_up`, whose executor then ends). Or no node
 /// takes it at all. Either way nothing would drive the caller any more. The
-/// shard settled their member as they left, the action that sent them is
-/// gone, and they would sit in the silence the departure's barrier left
-/// until they hung up. So the actor stays, and publishes the resume again
-/// when it does not see it taken.
+/// action that sent them is gone, and they would sit in the silence the
+/// departure's barrier left until they hung up. So the actor stays, and
+/// publishes the resume again when it does not see it taken.
 fn resume(
   call: Call,
   passage: Passage,
@@ -3000,7 +3109,9 @@ pub fn steady(call: Call) -> Bool {
 /// - the recording only while connected, and the last hang-up once a leg
 ///   has answered -- or as a caller no resume reached is let go, the one
 ///   hang-up with no agent;
-/// - the departure's marks and barrier only as a call starts leaving;
+/// - the departure's marks, and the `noop` that shows they ran, only as a
+///   call starts leaving, and its barrier only once they ran or were not
+///   seen to in time;
 /// - the probe only while a call handed over is being found out about, or
 ///   one never taken back is asked whether it was before it is resumed, or
 ///   one resumed is asked, while it stays resumed, whether the resume was
@@ -3042,9 +3153,9 @@ fn allowed_from(before: Phase, after: Phase, effect: Effect) -> Bool {
       case before, after {
         Offering(ring: Ringing(_), ..), Offering(ring: Parking(..), ..) ->
           list.map(vars, fn(var) { var.0 }) == answer_vars
-        _, Leaving(..) ->
-          vars
-          |> list.all(fn(var) {
+        _, Leaving(marked: False, ..) ->
+          !departing(before)
+          && list.all(vars, fn(var) {
             var.0 == departing_var || var.0 == departing_branch_var
           })
         _, _ -> False
@@ -3052,6 +3163,7 @@ fn allowed_from(before: Phase, after: Phase, effect: Effect) -> Bool {
     Confirm(_) ->
       case before, after {
         Offering(ring: Ringing(_), ..), Offering(ring: Parking(..), ..) -> True
+        _, Leaving(marked: False, ..) -> !departing(before)
         _, _ -> False
       }
     Probe(_) ->
@@ -3078,14 +3190,16 @@ fn allowed_from(before: Phase, after: Phase, effect: Effect) -> Bool {
         _, _ -> False
       }
     Barrier(_) ->
-      case after {
-        Leaving(..) -> True
-        _ -> False
+      case before, after {
+        Leaving(marked: False, ..), Leaving(marked: True, ..) -> True
+        _, _ -> False
       }
     Originate(..)
     | HangUpLegs(_)
     | Tell(..)
     | Left(_)
+    | Departing(..)
+    | HandedBack(_)
     | Continue(..)
     | Resume(..)
     | Survey
@@ -3113,6 +3227,8 @@ pub fn commands_caller(effect: Effect) -> Bool {
     | HangUpLegs(_)
     | Tell(..)
     | Left(_)
+    | Departing(..)
+    | HandedBack(_)
     | Continue(..)
     | Resume(..)
     | Survey

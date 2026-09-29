@@ -147,6 +147,12 @@ pub type State {
     /// out where they stand, and says so with a `Present`
     /// (`arrival.present`). Past it they are rung like anybody else.
     presenting: Dict(String, Int),
+    /// Call id to a caller on their way out of the queue, and the actor
+    /// handing them back, watched: their member is settled once the actor
+    /// has handed them back (`call/core`'s `HandedBack`), and an actor that
+    /// crashes before is replaced by one that finds them on their way out
+    /// and does it (`arrival.actor_down`).
+    departing: Dict(String, #(Member, Pid)),
     /// Call id to the supervisor's pickup among `offers`, for the offers
     /// that are one. Its replies are `dispatcher/pickup`'s, not `offers`'.
     pickups: Dict(String, Pickup),

@@ -112,6 +112,7 @@ fn record(
     picked_up: False,
     ended: ended,
     cancelled: cancelled,
+    cancel_reason: None,
   ))
 }
 
@@ -125,6 +126,7 @@ fn open_passage() -> records.Passage {
     picked_up: False,
     ended: None,
     cancelled: None,
+    cancel_reason: None,
   )
 }
 
@@ -236,6 +238,7 @@ pub fn a_caller_whose_switch_did_not_answer_test() {
       picked_up: False,
       ended: None,
       cancelled: None,
+      cancel_reason: None,
     ))
   let cases = [
     #(ringing, Unknown),
@@ -491,6 +494,132 @@ pub fn a_departing_caller_is_handed_back_test() {
     == #(Departing(Some("timeout")), [offer <> "-1"])
 }
 
+/// A passage the record says was cancelled as the caller left on a branch,
+/// with the caller up, in no bridge and reached by the probe, is a
+/// departure the last actor did not finish: the shard kept their member
+/// until they were handed back, which is how this actor has it, and it
+/// hands them back. The branch is the departure's mark when it ran and
+/// names this passage -- the barrier may have gone before it -- and the
+/// record's reason when not. It is not a departure when the callflow has
+/// them back, when they are through to somebody, when the passage was over
+/// for another reason, when the channel has joined a later passage since,
+/// or when the probe did not reach them: some other flow may have them by
+/// then, and a branch run over the top of it is worse than a settle.
+pub fn a_caller_found_leaving_by_their_record_test() {
+  let cancelled = fn(reason) {
+    Some(
+      records.Passage(
+        ..open_passage(),
+        cancelled: Some(now - 2),
+        cancel_reason: reason,
+      ),
+    )
+  }
+  let listed = [caller_row(None)]
+  let marks = fn(passage, branch) {
+    probe([
+      #(recovery.departing_var, passage),
+      #(recovery.departing_branch_var, branch),
+    ])
+  }
+  let through = [
+    caller_row(Some("somebody")),
+    row("somebody", Some(caller), True, []),
+  ]
+  let cases = [
+    #("exit key", quiet(), listed, cancelled(Some("exit_key")), "exit_key"),
+    #("timeout", quiet(), listed, cancelled(Some("timeout")), "timeout"),
+    #(
+      "no agent",
+      quiet(),
+      listed,
+      cancelled(Some("no_agent_timeout")),
+      "no_agent_timeout",
+    ),
+    #(
+      "queue deleted",
+      quiet(),
+      listed,
+      cancelled(Some("queue_deleted")),
+      "no_agents",
+    ),
+    #(
+      "quarantined",
+      quiet(),
+      listed,
+      cancelled(Some("quarantined")),
+      "no_agents",
+    ),
+    #(
+      "this passage's marks",
+      marks(handoff, "exit_key"),
+      listed,
+      cancelled(Some("timeout")),
+      "exit_key",
+    ),
+    #(
+      "an earlier passage's marks",
+      marks("handoff-0", "exit_key"),
+      listed,
+      cancelled(Some("timeout")),
+      "timeout",
+    ),
+    #(
+      "handed back",
+      probe([#(recovery.departed_var, handoff)]),
+      listed,
+      cancelled(Some("exit_key")),
+      "closed",
+    ),
+    #("a hang-up", quiet(), listed, cancelled(Some("hangup")), "closed"),
+    #("a transfer", quiet(), listed, cancelled(Some("transfer")), "closed"),
+    #("no reason", quiet(), listed, cancelled(None), "closed"),
+    #(
+      "an answered call ended",
+      quiet(),
+      listed,
+      record(Some(now - 60), Some(now), None),
+      "closed",
+    ),
+    #("through", quiet(), through, cancelled(Some("exit_key")), "closed"),
+    #(
+      "this passage's join",
+      probe([#(recovery.joined_var, "63800000000")]),
+      listed,
+      cancelled(Some("exit_key")),
+      "exit_key",
+    ),
+    #(
+      "a later passage's join",
+      probe([#(recovery.joined_var, "63800000030")]),
+      listed,
+      cancelled(Some("exit_key")),
+      "closed",
+    ),
+    #(
+      "this passage's marks, and a later join: the same queue entered again",
+      probe([
+        #(recovery.departing_var, handoff),
+        #(recovery.departing_branch_var, "exit_key"),
+        #(recovery.joined_var, "63800000030"),
+      ]),
+      listed,
+      cancelled(Some("exit_key")),
+      "exit_key",
+    ),
+    #("unreached", Unanswered, listed, cancelled(Some("exit_key")), "closed"),
+  ]
+  list.each(cases, fn(case_) {
+    let #(label, probe, rows, record, expected) = case_
+    let found = case classify(probe, rows, True, record) {
+      #(Departing(Some(branch)), []) -> branch
+      #(Closed, []) -> "closed"
+      other -> "unexpected " <> name(other.0)
+    }
+    assert found == expected as label
+  })
+}
+
 // --- Still in the queue -------------------------------------------------------------
 
 /// An answer the record has, and the caller through to nobody: the call
@@ -519,6 +648,7 @@ pub fn an_answer_through_to_nobody_has_talked_test() {
       picked_up: True,
       ended: None,
       cancelled: None,
+      cancel_reason: None,
     ))
   let answered = record(Some(now - 30), None, None)
   let cases = [

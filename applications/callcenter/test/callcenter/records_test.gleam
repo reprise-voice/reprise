@@ -183,6 +183,23 @@ pub fn an_end_is_written_test() {
   assert doc.get_string(closed, ["result"]) == Ok("completed")
 }
 
+/// A passage cancelled already keeps its second and its reason when it is
+/// cancelled again -- a node taking a caller over on their way out does,
+/// later, and on a branch that may not say which reason it was -- and its
+/// offers are settled all the same.
+pub fn a_cancel_is_not_moved_by_a_second_test() {
+  let first =
+    records.cancellation(
+      record([offer("ann", joined_at + 5, None)]),
+      types.Quarantined,
+      joined_at + 30,
+    )
+  let again = records.cancellation(first, QueueDeleted, joined_at + 90)
+  assert doc.get_int(again, ["cancelled"]) == Ok(joined_at + 30)
+  assert doc.get_string(again, ["cancel_reason"]) == Ok("quarantined")
+  assert again == first
+}
+
 /// A caller the dispatcher took out of a deleted queue is a cancelled
 /// passage like any other, and says why: `queue_deleted`, which reads back
 /// as itself. The offers made for them keep their own outcomes.

@@ -64,6 +64,40 @@ pub fn handoff(id: String) -> core.Handoff {
   )
 }
 
+/// What a caller leaving passage `id` on `branch` for `reason` is sent as
+/// they leave: the shard told, the departure's marks, and the `noop` that
+/// shows they ran.
+pub fn departing(
+  id: String,
+  branch: String,
+  reason: types.CancelReason,
+) -> List(Effect) {
+  [
+    core.Departing(id, reason),
+    departure_marks(id, branch),
+    core.Confirm(core.departure_marks_id(handoff(id))),
+  ]
+}
+
+/// The marks of a caller leaving passage `id` on `branch`.
+pub fn departure_marks(id: String, branch: String) -> Effect {
+  core.Mark([
+    #(core.departing_var, doc.String(id)),
+    #(core.departing_branch_var, doc.String(branch)),
+  ])
+}
+
+/// The `noop` behind passage `id`'s departure marks completed: the marks
+/// ran, and the barrier goes out.
+pub fn departure_marked(id: String) -> Input {
+  noop_done(core.departure_marks_id(handoff(id)))
+}
+
+/// The barrier of passage `id` completed.
+pub fn barrier_done(id: String) -> Input {
+  noop_done(core.barrier_id(handoff(id)))
+}
+
 pub fn joining(id: String, with: core.Settings) -> Input {
   Joined(core.Joining(
     queue_id: queue_id,

@@ -13,9 +13,9 @@ import gleam/option.{type Option, None, Some}
 import kazoo/doc.{type Value}
 import kazoo/events
 import support/call_script.{
-  answer_marking, at, at_ms, bridged_to, call_id, event, fresh, gone, handoff,
-  key, last, marks_ran, noop_done, offer, parked, phase_name, ring, script,
-  settings, t0, waiting,
+  answer_marking, at, at_ms, barrier_done, bridged_to, call_id, departing,
+  departure_marked, event, fresh, gone, handoff, key, last, marks_ran, noop_done,
+  offer, parked, phase_name, ring, script, settings, t0, waiting,
 }
 
 const prefix = "0a1b2c3d4e5f6a7b8c9d0e1f"
@@ -110,6 +110,7 @@ fn answered_record(at: Int) -> Option(records.Passage) {
     picked_up: False,
     ended: None,
     cancelled: None,
+    cancel_reason: None,
   ))
 }
 
@@ -170,7 +171,7 @@ pub fn what_arrives_meanwhile_is_heard_after_test() {
       core.Hold(Some("support-hold")),
       core.Present(None, types.PresentWaiting),
     ]
-  assert list.contains(found, core.Left(types.ExitKey))
+  assert list.contains(found, core.Departing("h1", types.ExitKey))
   assert phase_name(call) == "leaving"
 }
 
@@ -249,6 +250,7 @@ pub fn a_listing_nobody_answered_is_asked_again_in_time_test() {
       picked_up: False,
       ended: None,
       cancelled: None,
+      cancel_reason: None,
     ))
   let nobody =
     core.Surveyed(recovery.Survey(
@@ -624,18 +626,53 @@ pub fn a_departure_found_is_finished_test() {
     #(recovery.departing_branch_var, "exit_key"),
   ]
   let #(call, done, _id) = recovered([caller_row(None)], None, marks)
-  assert last(done)
+  assert last(done) == departing("h1", "exit_key", types.ExitKey)
+  let #(call, done) =
+    script(call, [
+      #(departure_marked("h1"), at(2)),
+      #(barrier_done("h1"), at(2)),
+      #(core.Continuing("h1"), at(2)),
+    ])
+  assert done
     == [
-      core.Left(types.ExitKey),
-      core.Mark([
-        #(core.departing_var, doc.String("h1")),
-        #(core.departing_branch_var, doc.String("exit_key")),
-      ]),
-      core.Barrier(core.barrier_id(handoff("h1"))),
+      [core.Barrier(core.barrier_id(handoff("h1")))],
+      [core.Continue(handoff("h1"), "exit_key")],
+      [core.HandedBack("h1")],
     ]
-  let #(_call, done) =
-    script(call, [#(noop_done(core.barrier_id(handoff("h1"))), at(2))])
-  assert last(done) == [core.Continue(handoff("h1"), "exit_key")]
+  assert core.finished(call)
+}
+
+/// A caller whose record says they left on a branch, found still in the
+/// queue's hands with no marks of it -- the last actor went before its
+/// marks ran -- is handed back on the branch the record names, and the
+/// member the shard kept for them is settled once they are.
+pub fn a_departure_found_by_its_record_is_finished_test() {
+  let record =
+    Some(records.Passage(
+      offer: None,
+      answered: None,
+      agent_id: None,
+      agent_call_id: None,
+      picked_up: False,
+      ended: None,
+      cancelled: Some(t0 - 1),
+      cancel_reason: Some("timeout"),
+    ))
+  let #(call, done, _id) = recovered([caller_row(None)], record, [])
+  assert last(done) == departing("h1", "timeout", types.Timeout)
+  let #(call, done) =
+    script(call, [
+      #(departure_marked("h1"), at(2)),
+      #(barrier_done("h1"), at(2)),
+      #(core.Continuing("h1"), at(2)),
+    ])
+  assert done
+    == [
+      [core.Barrier(core.barrier_id(handoff("h1")))],
+      [core.Continue(handoff("h1"), "timeout")],
+      [core.HandedBack("h1")],
+    ]
+  assert core.finished(call)
 }
 
 /// Handed back already, or through to somebody else: let go and settled.
@@ -657,7 +694,10 @@ pub fn a_caller_found_elsewhere_is_let_go_test() {
   assert core.finished(call)
 }
 
-/// A passage the record closed is over for the queue.
+/// A passage the record closed is over for the queue: the dispatcher is
+/// told, and the member settled by the actor as well -- a dispatcher that
+/// joined the caller to this actor to finish a departure takes no
+/// `Present`, and the shard settles a member once whoever asks.
 pub fn a_passage_found_over_test() {
   let closed =
     Some(records.Passage(
@@ -668,9 +708,11 @@ pub fn a_passage_found_over_test() {
       picked_up: False,
       ended: None,
       cancelled: Some(t0 - 5),
+      cancel_reason: None,
     ))
   let #(call, done, _id) = recovered([caller_row(None)], closed, [])
-  assert last(done) == [core.Present(None, types.PresentOver)]
+  assert last(done)
+    == [core.Present(None, types.PresentOver), core.HandedBack("h1")]
   assert core.finished(call)
 }
 
@@ -770,20 +812,14 @@ fn nth(items: List(a), n: Int) -> Result(a, Nil) {
 pub fn a_quarantined_caller_is_handed_back_test() {
   let #(call, done) =
     script(fresh(), [#(core.Quarantine(joining("h1")), at(0))])
-  let assert [
-    core.Log(_),
-    core.Left(types.Quarantined),
-    core.Mark(marks),
-    core.Barrier(barrier),
-  ] = last(done)
-  assert marks
-    == [
-      #(core.departing_var, doc.String("h1")),
-      #(core.departing_branch_var, doc.String("no_agents")),
-    ]
-  assert barrier == core.barrier_id(handoff("h1"))
+  let assert [core.Log(_), ..leaving] = last(done)
+  assert leaving == departing("h1", "no_agents", types.Quarantined)
   assert phase_name(call) == "leaving"
 
-  let #(_call, done) = script(call, [#(noop_done(barrier), at(1))])
+  let #(_call, done) =
+    script(call, [
+      #(departure_marked("h1"), at(1)),
+      #(barrier_done("h1"), at(1)),
+    ])
   assert last(done) == [core.Continue(handoff("h1"), "no_agents")]
 }

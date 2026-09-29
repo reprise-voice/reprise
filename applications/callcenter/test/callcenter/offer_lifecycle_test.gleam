@@ -7,7 +7,8 @@ import callcenter/dispatcher/config
 import callcenter/dispatcher/offers
 import callcenter/dispatcher/state.{Offer, State}
 import callcenter/types.{
-  type Member, ExitKey, Failed, Hangup, OfferNoAnswer, OfferRinging, Timeout,
+  type Member, ExitKey, Failed, Hangup, OfferNoAnswer, OfferRinging,
+  QueueDeleted, Timeout,
 }
 import gleam/dict
 import gleam/erlang/process
@@ -92,6 +93,28 @@ pub fn an_offer_let_go_of_frees_its_agents_and_nothing_else_test() {
 
   list.each([gone, other, stray], process.kill)
   platform_stop(platform)
+}
+
+/// A deleted queue's caller whose departure a node taking them over takes
+/// up again is not told of twice: the node that took them out of the queue
+/// published their `member_result` then. One the dispatcher takes out of
+/// the queue itself is told of.
+pub fn a_departure_taken_up_again_is_not_told_twice_test() {
+  let platform = platform_start()
+  let results = fn() {
+    published_events()
+    |> list.filter(fn(event) { event.1 == "member_result" })
+    |> list.length
+  }
+  let state = bare_state.new() |> bare_state.waiting("call-one")
+  let before = results()
+  let _ = offers.depart(state, "call-one", QueueDeleted)
+  let departed = results()
+  let _ = offers.leave(state, "call-one", QueueDeleted)
+  let left = results()
+  platform_stop(platform)
+  assert departed == before
+  assert left == before + 1
 }
 
 // --- member_offer follows the bridge ---------------------------------------

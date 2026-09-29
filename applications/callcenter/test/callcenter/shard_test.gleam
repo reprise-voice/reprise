@@ -164,6 +164,12 @@ fn fake_dispatcher(fake: Fake) -> Result(Subject(dispatcher.Message), String) {
           _, _ -> actor.continue(state)
         }
       }
+      dispatcher.Departing(call_id, _reason) -> {
+        state.seen("departing:" <> call_id)
+        actor.continue(
+          Fake(..state, members: dict.delete(state.members, call_id)),
+        )
+      }
       dispatcher.Stop(done) ->
         case state.on_stop {
           IgnoresStop -> actor.continue(state)
@@ -669,6 +675,40 @@ pub fn a_shard_fenced_by_a_stall_is_taken_again_test() {
   // Nothing was settled on the way: the caller was never let go of here.
   assert drain(h.acks) == []
   shard.release(84)
+}
+
+/// A caller leaving on a branch their actor hands them back on: their
+/// dispatcher is told, but their member is kept, and settled only when the
+/// actor says they are handed back (`Settle`, naming their delivery). A
+/// word naming another delivery -- a later passage of the call -- touches
+/// nothing, and a dispatcher started again is not handed a caller on their
+/// way out: they are not the dispatcher's any more.
+pub fn a_departing_caller_is_held_until_handed_back_test() {
+  let h = take(86, [], Ignores, Stops)
+  arrive(h, "call-one")
+  assert next(h.seen, 1000) == account_id <> ":handed:call-one"
+  let leaving =
+    types.Member(
+      ..cluster.member("call-one", queue_id, 0, 63_900_000_000),
+      account_id: account_id,
+      delivery: delivery(),
+    )
+  process.send(h.to, shard.CallerDeparting(leaving, types.ExitKey))
+  assert next(h.seen, 1000) == account_id <> ":departing:call-one"
+  assert drain(h.acks) == []
+  assert holding(h) == ["call-one"]
+
+  process.kill(dispatcher_pid(h))
+  process.sleep(100)
+  assert drain(h.seen) == []
+
+  process.send(h.to, shard.Settle(account_id, "call-one", another_delivery()))
+  assert drain(h.acks) == []
+  assert holding(h) == ["call-one"]
+  process.send(h.to, shard.Settle(account_id, "call-one", delivery()))
+  assert list.length(drain(h.acks)) == 1
+  assert holding(h) == []
+  finish(h)
 }
 
 /// A dispatcher that settles the caller it was told had left asks the shard,
