@@ -22,7 +22,9 @@
         ,kz_log_md_clear/0, kz_log_md_put/2
         ,format/2, format/3
         ]).
--export([redactor/1]).
+-export([redactor/1
+        ,redact_term/1
+        ]).
 
 -elvis([{elvis_style, no_debug_call, disable}]).
 
@@ -70,6 +72,23 @@
 -define(LOG(Fmt), begin lager:info(Fmt), io:format(Fmt ++ "~n") end).
 -define(LOG(Fmt, Args), begin lager:info(Fmt, Args), io:format(Fmt ++ "~n", Args) end).
 -define(REDACTED_REPLACEMENT, "***REDACTED***").
+
+%% A key names a credential when it contains one of these anywhere...
+-define(CREDENTIAL_FRAGMENTS, [<<"password">>, <<"passwd">>, <<"passphrase">>
+                              ,<<"secret">>, <<"token">>, <<"credential">>
+                              ,<<"cookie">>, <<"apikey">>, <<"accesskey">>
+                              ,<<"privkey">>, <<"privatekey">>
+                              ]).
+%% ...or one of its words is one of these, which are too short to look for
+%% inside other words (`keepalive', `passive', `ping', `oauth_doc_id').
+-define(CREDENTIAL_WORDS, [<<"key">>, <<"pass">>, <<"pwd">>, <<"pin">>
+                          ,<<"auth">>, <<"authorization">>, <<"creds">>
+                          ]).
+
+%% The password in a URI's userinfo: amqp://user:password@host. It runs to
+%% the last @ before the path, query or fragment, because kz_couch_util puts
+%% the password in its URL without percent-encoding it.
+-define(URI_PASSWORD_REGEX, <<"([A-Za-z][A-Za-z0-9+.-]*://[^\\s:/@]*:)[^\\s/?#\"'<>]+@">>).
 
 %% @doc Usage: kz_log:change_sink_level(amqp, debug)
 %% or sup kz_log change_sink_level amqp debug
@@ -277,6 +296,106 @@ redact_basic_auth(Line) ->
         {'match', [Scheme, _Creds, URL]} ->
             <<Scheme/binary, URL/binary>>;
         _ -> Line
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Replace the credentials in a term so it can be logged with `~p'.
+%%
+%% Maps, proplists, kz_json objects, records and other tuples are walked. The
+%% value under a key that names a credential (a password, secret, key, token,
+%% cookie, credentials...) is replaced, unless it is empty (`undefined',
+%% `null', `<<>>' or `[]'), so the log still shows whether one was set. The
+%% password in a URI (`amqp://user:password@host') is replaced in any string.
+%% Everything else is left as it was.
+%%
+%% Record fields are positional and have no names, so a credential in a
+%% record field is only found when it is a URI or sits under a named key
+%% further down.
+%% @end
+%%------------------------------------------------------------------------------
+-spec redact_term(any()) -> any().
+redact_term(Map) when is_map(Map) ->
+    maps:map(fun redact_value/2, Map);
+redact_term({Key, Value}) ->
+    {redact_term(Key), redact_value(Key, Value)};
+redact_term(Tuple) when is_tuple(Tuple) ->
+    list_to_tuple(redact_list(tuple_to_list(Tuple)));
+redact_term(<<Text/binary>>) ->
+    redact_uri_password(Text);
+redact_term(List) when is_list(List) ->
+    case io_lib:printable_unicode_list(List) of
+        'true' -> redact_uri_password(List);
+        'false' -> redact_list(List)
+    end;
+redact_term(Term) -> Term.
+
+%% Proplists may be improper, so the tail is walked rather than mapped.
+-spec redact_list(any()) -> any().
+redact_list([Head | Tail]) ->
+    [redact_term(Head) | redact_list(Tail)];
+redact_list([]) -> [];
+redact_list(Tail) -> redact_term(Tail).
+
+-spec redact_value(any(), any()) -> any().
+redact_value(Key, Value) ->
+    case is_credential_key(Key) of
+        'true' -> redact_credential(Value);
+        'false' -> redact_term(Value)
+    end.
+
+-spec redact_credential(any()) -> any().
+redact_credential(Empty)
+  when Empty =:= 'undefined';
+       Empty =:= 'null';
+       Empty =:= <<>>;
+       Empty =:= [] ->
+    Empty;
+redact_credential(_Credential) ->
+    <<?REDACTED_REPLACEMENT>>.
+
+-spec is_credential_key(any()) -> boolean().
+is_credential_key(Key) when is_atom(Key) ->
+    is_credential_name(atom_to_binary(Key, 'utf8'));
+is_credential_key(<<Key/binary>>) ->
+    is_credential_name(Key);
+is_credential_key([_|_]=Key) ->
+    io_lib:printable_unicode_list(Key)
+        andalso is_credential_name(unicode:characters_to_binary(Key));
+is_credential_key(_Key) -> 'false'.
+
+%% Words split at anything but a letter or digit, and where a lower case
+%% letter or digit is followed by an upper case one: `X-Auth-Token' is `x'
+%% `auth' `token', and `accessKey' is `access' `key'.
+-spec is_credential_name(binary()) -> boolean().
+is_credential_name(Name) ->
+    Lower = kz_term:to_lower_binary(Name),
+    'nomatch' =/= binary:match(Lower, ?CREDENTIAL_FRAGMENTS)
+        orelse lists:any(fun(Word) -> lists:member(Word, ?CREDENTIAL_WORDS) end
+                        ,name_words(Name)
+                        ).
+
+-spec name_words(binary()) -> [binary()].
+name_words(Name) ->
+    Split = re:replace(Name, <<"([a-z0-9])([A-Z])">>, <<"\\1 \\2">>, ['global', {'return', 'binary'}]),
+    [Word || Word <- re:split(kz_term:to_lower_binary(Split), <<"[^a-z0-9]+">>, [{'return', 'binary'}]),
+             Word =/= <<>>
+    ].
+
+-spec redact_uri_password(binary() | string()) -> binary() | string().
+redact_uri_password(<<Text/binary>>) ->
+    case binary:match(Text, <<"://">>) of
+        'nomatch' -> Text;
+        _ ->
+            re:replace(Text
+                      ,?URI_PASSWORD_REGEX
+                      ,<<"\\1", ?REDACTED_REPLACEMENT, "@">>
+                      ,['global', {'return', 'binary'}]
+                      )
+    end;
+redact_uri_password(Text) ->
+    case string:find(Text, "://") of
+        'nomatch' -> Text;
+        _ -> unicode:characters_to_list(redact_uri_password(unicode:characters_to_binary(Text)))
     end.
 
 -spec format(lager_msg:lager_msg(), list(), list()) -> any().

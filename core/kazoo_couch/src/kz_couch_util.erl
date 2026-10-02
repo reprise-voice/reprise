@@ -179,7 +179,7 @@ connect(#kz_couch_connection{host=Host
                },
     Opts = [{'connection_map', ConnMap} | check_options(Options)],
     Conn = couchbeam:server_connection(kz_term:to_list(maybe_add_auth(User, Pass, Host)), Port, <<>>, Opts),
-    lager:info("new connection to host ~s:~b, testing: ~p", [Host, Port, Conn]),
+    lager:info("new connection to host ~s:~b, testing: ~p", [Host, Port, kz_log:redact_term(Conn)]),
     connection_info(Conn).
 
 -spec add_couch_version(kz_term:ne_binary(), kz_term:api_ne_binary(), server()) -> server().
@@ -386,18 +386,18 @@ connection_info(#server{url=Url}=Conn) ->
         {'ok', ConnData} ->
             CouchVersion = kz_json:get_ne_binary_value(<<"version">>, ConnData),
             BigCouchVersion = kz_json:get_ne_binary_value(<<"bigcouch">>, ConnData),
-            lager:debug("connected successfully to ~s", [Url]),
+            lager:debug("connected successfully to ~s", [kz_log:redact_term(Url)]),
             lager:debug("responding CouchDB version: ~p", [CouchVersion]),
             lager:debug("responding BigCouch version: ~p", [BigCouchVersion]),
             {'ok', add_couch_version(CouchVersion, BigCouchVersion, Conn)};
         {'error', {'conn_failed', {'error', 'timeout'}}} ->
-            lager:warning("connection timed out for ~s", [Url]),
+            lager:warning("connection timed out for ~s", [kz_log:redact_term(Url)]),
             {'error', 'timeout'};
         {'error', {'conn_failed', {'error', 'ehostunreach'}}} ->
-            lager:warning("connection to ~s failed: Host is unreachable", [Url]),
+            lager:warning("connection to ~s failed: Host is unreachable", [kz_log:redact_term(Url)]),
             {'error', 'ehostunreach'};
         {'error', _E}=E ->
-            lager:warning("connection to ~s failed: ~p", [Url, _E]),
+            lager:warning("connection to ~s failed: ~p", [kz_log:redact_term(Url), kz_log:redact_term(_E)]),
             E
     end.
 

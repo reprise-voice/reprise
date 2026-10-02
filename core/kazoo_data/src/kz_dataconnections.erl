@@ -238,6 +238,8 @@ maybe_start_new_connection(Connection) ->
         {'error', {'already_started', Pid}} ->
             ets:insert(?MODULE, Connection#data_connection{pid=Pid});
         {'error', _E} ->
-            lager:warning("failed to start dataconnection for ~p: ~p", [Connection, _E]),
+            lager:warning("failed to start dataconnection for ~p: ~p"
+                         ,[kz_log:redact_term(Connection), kz_log:redact_term(_E)]
+                         ),
             'false'
     end.

@@ -58,7 +58,7 @@ maybe_load_file([File|T]) ->
 -spec set_env() -> 'ok'.
 set_env() ->
     AppEnv = load_file(),
-    lager:notice("loaded settings : ~p", [AppEnv]),
+    lager:notice("loaded settings : ~p", [kz_log:redact_term(AppEnv)]),
     set_zone(AppEnv),
     application:set_env(?APP, 'kz_config', AppEnv).
 

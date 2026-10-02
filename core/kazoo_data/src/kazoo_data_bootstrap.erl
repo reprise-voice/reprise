@@ -25,7 +25,7 @@ start_link() ->
     kz_dataconnections:add(Connection),
 
     lager:info("waiting for first connection..."),
-    lager:debug("to ~p", [Connection]),
+    lager:debug("to ~p", [kz_log:redact_term(Connection)]),
 
     kz_dataconnections:wait_for_connection(),
 

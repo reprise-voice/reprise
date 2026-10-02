@@ -155,7 +155,7 @@ get_dataplan(DBName, DocType, DocOwner) ->
 -spec system_dataplan() -> dataplan().
 system_dataplan() ->
     #{<<"connections_map">> := Connections} = ?CACHED_SYSTEM_DATAPLAN,
-    lager:info("loaded system dataplan: ~p", [Connections]),
+    lager:info("loaded system dataplan: ~p", [kz_log:redact_term(Connections)]),
     SysTag = ?TAG_LOCAL,
     #{tag => SysTag
      ,server => maps:get(SysTag, Connections, #{})
@@ -178,7 +178,7 @@ system_dataplan(DBName, _Classification) ->
 account_dataplan(AccountDb) ->
     AccountId = kzs_util:format_account_id(AccountDb),
     Plan = ?CACHED_ACCOUNT_DATAPLAN(AccountId),
-    lager:info("account plan: ~p", [Plan]),
+    lager:info("account plan: ~p", [kz_log:redact_term(Plan)]),
     dataplan_match(<<"account">>, Plan, AccountId).
 
 account_dataplan(AccountDb, 'undefined') ->
@@ -451,7 +451,7 @@ dataplan_type_match_by_classification(Classification
     AccountId = kzs_util:format_account_id(DBName),
 
     DocTypes = plan_types(ClassificationPlan),
-    lager:info("plan types for ~s: ~p", [DocType, DocTypes]),
+    lager:info("plan types for ~s: ~p", [DocType, kz_log:redact_term(DocTypes)]),
 
     ClassificationConnection = plan_connection(ClassificationPlan),
     ClassificationAttachments = plan_attachments(ClassificationPlan, #{}),
