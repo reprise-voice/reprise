@@ -182,8 +182,8 @@ record_call_command(Data, Call) ->
 %% @doc Recording settings that name neither `record_on_answer' nor
 %% `record_on_bridge' start on answer while the call is unanswered.
 %%
-%% Account and endpoint outbound recordings start on the caller's leg before
-%% it is bridged. Started there right away, FreeSWITCH's `record_session'
+%% Account recordings and endpoint outbound recordings start on the caller's
+%% leg before it is bridged. Started there right away, FreeSWITCH's `record_session'
 %% pre-answers that leg, which settles its codec before the callee's leg is
 %% offered one. A leg that is already answered (or whose state cannot be
 %% read) starts recording now, as before, since its answer has passed.
