@@ -146,6 +146,8 @@ Key | Description | Type | Default | Required | Support Level
 `time_limit` | Time limit, in seconds, for the recording | `integer()` |   | `false` |
 `url` | The URL to use when sending the recording for storage | `string()` |   | `false` |
 
+Outbound account and endpoint recordings that set neither `record_on_answer` nor `record_on_bridge` start when the call is answered. They start on the caller's leg before it is bridged, and recording an unanswered leg makes FreeSWITCH pre-answer it, which settles its codec before the callee is offered one; a callee without that codec then cannot take the call. A call that is already answered when the recording starts (after an announcement, say) records from then on. Set `record_on_answer` to `false` to start recording before answer as before.
+
 ### Callflow action - Record Call
 
 You can enable call recording on a per-callflow basis by using the `record_call` callflow action. The callflow action can take the following parameters:
