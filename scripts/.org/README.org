@@ -76,8 +76,6 @@ Xref: listing undefined_functions
 Done
 #+END_SRC
 If there are any calls to non-existant modules, or non-exported functions, you will get errors listed here.
-** circleci-build-erlang.sh
-Fetches kerl and installs configured Erlang version (used in CircleCI)
 ** code_checks.bash
 Checks source code files for various formatting expectations and exits if any are found.
 #+BEGIN_SRC shell

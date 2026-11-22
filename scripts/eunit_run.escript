@@ -27,6 +27,8 @@ parse_args(["--with-cover" | Rest], Opts) ->
 parse_args(["--cover-project-name", ProjectName | Rest], Opts) ->
     parse_args(Rest, Opts#{coverdata => ProjectName ++ ".coverdata"});
 parse_args(["--cover-report-dir", Dir | Rest], Opts) ->
+    parse_args(Rest, Opts#{cover_dir => Dir});
+parse_args(["--report-dir", Dir | Rest], Opts) ->
     parse_args(Rest, Opts#{report_dir => Dir});
 parse_args([Mod | Rest], #{modules := Modules}=Opts) ->
     parse_args(Rest, Opts#{modules => [Mod | Modules]}).
@@ -35,6 +37,7 @@ run_eunit(#{modules := []}) ->
     io:format('user', "No modules are specified.\n", []),
     usage();
 run_eunit(#{modules := Modules}=Opts) ->
+    'ok' = ensure_report_dir(Opts),
     _Cover = maybe_start_cover(Opts),
     TestMods = filter_same_name_test_modules(Modules),
 
@@ -85,7 +88,7 @@ filter_same_name_test_modules(Modules) ->
 maybe_start_cover(#{cover := 'true'
                    ,coverdata := _
                    }=Opts) ->
-    'ok' = filelib:ensure_dir(maps:get('report_dir', Opts, "cover") ++ "/dummy"),
+    'ok' = filelib:ensure_dir(filename:join(cover_dir(Opts), "dummy")),
     _ = cover:start(),
     cover:compile_beam_directory("ebin");
 maybe_start_cover(#{cover := 'true'}) ->
@@ -98,11 +101,23 @@ maybe_stop_cover(#{cover := 'true'
                   ,coverdata := Coverdata
                   }=Opts) ->
     cover:export(Coverdata),
-    cover:analyse_to_file(['html', {'outdir', maps:get('report_dir', Opts, "cover")}]);
+    cover:analyse_to_file(['html', {'outdir', cover_dir(Opts)}]);
 maybe_stop_cover(_) ->
+    'ok'.
+
+cover_dir(Opts) ->
+    maps:get('cover_dir', Opts, "cover").
+
+%% eunit_surefire writes one TEST-<module>.xml per module into this directory.
+%% It is created here rather than left to the reporter so that a run without
+%% coverage -- which used to be the only thing that created it -- still lands
+%% its report.
+ensure_report_dir(#{report_dir := Dir}) ->
+    filelib:ensure_dir(filename:join(Dir, "dummy"));
+ensure_report_dir(_) ->
     'ok'.
 
 usage() ->
     Arg0 = escript:script_name(),
-    io:format('user', "Usage: ~s [--with-cover] [--cover-project-name <project name>] [--cover-report-dir <cover report dir>] <erlang module name/>+\n", [filename:basename(Arg0)]),
+    io:format('user', "Usage: ~s [--report-dir <junit xml dir>] [--with-cover] [--cover-project-name <project name>] [--cover-report-dir <cover report dir>] <erlang module name/>+\n", [filename:basename(Arg0)]),
     halt(1).

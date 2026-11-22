@@ -87,5 +87,5 @@ ci-release:
 .PHONY: ci-git
 ci-git:
 	@$(ROOT)/scripts/check-unstaged.bash
-	@$(ROOT)/kgit git --no-pager diff --staged
+	@git -C $(ROOT) --no-pager diff --staged
 	@$(ROOT)/scripts/check-git-diff-untracked.bash "$(ROOT)" "$(ROOT)/core" "$(ROOT)/applications/*"

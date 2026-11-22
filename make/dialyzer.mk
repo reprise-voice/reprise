@@ -35,11 +35,11 @@ clean-plt:
 	@rm -f $(PLT)
 
 .PHONY: dialyze-kazoo
-dialyze-kazoo: TO_DIALYZE  = $(shell find $(APPS_DIR) $(CORE_DIR) -name ebin)
+dialyze-kazoo: TO_DIALYZE  = $(shell $(call FIND_EBINS,$(APPS_DIR) $(CORE_DIR)))
 dialyze-kazoo: dialyze
 
 .PHONY: dialyze-apps
-dialyze-apps:  TO_DIALYZE  = $(shell find $(APPS_DIR) -name ebin)
+dialyze-apps:  TO_DIALYZE  = $(shell $(call FIND_EBINS,$(APPS_DIR)))
 dialyze-apps: dialyze
 
 .PHONY: dialyze-core
@@ -47,7 +47,7 @@ dialyze-core:  TO_DIALYZE  = $(shell find $(CORE_DIR)         -name ebin)
 dialyze-core: dialyze-it
 
 .PHONY: dialyze
-dialyze:       TO_DIALYZE ?= $(shell find $(APPS_DIR) -name ebin)
+dialyze:       TO_DIALYZE ?= $(shell $(call FIND_EBINS,$(APPS_DIR)))
 dialyze: dialyze-it
 
 .PHONY: dialyze-changed
@@ -59,7 +59,7 @@ dialyze-hard: CHECK_DIALYZER_OPTS += --hard
 dialyze-hard: dialyze-it-changed
 
 .PHONY: dialyze-types-kazoo
-dialyze-types-kazoo: TO_DIALYZE  = $(shell find $(APPS_DIR) $(CORE_DIR) -name ebin)
+dialyze-types-kazoo: TO_DIALYZE  = $(shell $(call FIND_EBINS,$(APPS_DIR) $(CORE_DIR)))
 dialyze-types-kazoo: dialyze-types-it
 
 .PHONY: dialyze-types

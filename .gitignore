@@ -53,30 +53,21 @@ erlang.mk
 
 
 /deps/
-/core/
-/applications/*/
 
 /TAGS
 
 compile_commands.json
 
-/doc/kazoocon/*.pdf
-/doc/kazoocon/*.tex
 
 /doc/mkdocs/docs
 /doc/mkdocs/site/
 /doc/mkdocs/*.local
 /doc/mkdocs/mkdocs.yml
 /doc/mkdocs/theme
-/doc/blog/.org/*.csv
-/doc/blog/.org/*.shell
 
 /make/core.mk
 /make/cover.mk
 /make/.deps.mk.*
-/make/.core.mk.*
-/make/.apps.mk.*
-/make/.app_urls.mk.*
 /make/circleci
 
 /out/
@@ -88,6 +79,14 @@ compile_commands.json
 /doc/engineering/.org/proper.tex
 /todo.org
 /make/pest-*
-# asdf-vm "local" versions handler
-/make/more_apps.mk
-/applications/Makefile
+
+## dev-tooling apps cloned on demand (see Makefile: $(KAST))
+/applications/ast/
+/applications/properly/
+
+## docker build staging
+/docker/**/*.tar
+.test-compiled/
+
+# eunit's JUnit/surefire XML (make/kz.mk: EUNIT_REPORT_DIR)
+test-results/

@@ -3,7 +3,9 @@ ROOT ?= $(realpath $(CWD)/../..)
 PROJECT = kazoo_web
 
 # Mimetypes module generator.
-GEN_URL = https://raw.githubusercontent.com/apache/httpd/trunk/docs/conf/mime.types
+# (apache/httpd's trunk as of 2026-11-21: a moving branch would change the
+# generated module under an unchanged tree)
+GEN_URL = https://raw.githubusercontent.com/apache/httpd/b5f6fbd7bf99fb7120f21d903931614e54606124/docs/conf/mime.types
 GEN_FILE = mime.types
 GEN_ERL_SRC = src/kz_mime.erl.src
 GEN_ERL = src/kz_mime.erl
@@ -17,6 +19,16 @@ compile: $(GEN_ERL)
 compile-test: $(GEN_ERL)
 
 compile-test-direct: $(GEN_ERL)
+
+## kz.mk's .app rules compile $(SOURCES) and $(TEST_SOURCES) wholesale without
+## naming them as prerequisites, so the generated module has to be named here
+## too. Declaring it on compile-test-direct above is not enough: that rule
+## carries a recipe in kz.mk, so its own prerequisites are ordered first and
+## $(GEN_ERL) is appended after test/$(PROJECT).app. Neither kz_mime.erl nor
+## the mime.types it is built from is checked in, so a tree that has not
+## already been compiled has nothing to fall back on.
+ebin/$(PROJECT).app: $(GEN_ERL)
+test/$(PROJECT).app: $(GEN_ERL)
 
 include $(ROOT)/make/kz.mk
 

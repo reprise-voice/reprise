@@ -17,15 +17,27 @@ main(Args) ->
                   M <- [module_name(Arg)],
                   M =/= 'undefined'
               ],
-    lists:foreach(fun run_generator/1
-                 ,[{fun cf_data_usage:to_schema_docs/1, Modules}
-                  ,fun kp_data_usage:to_schema_docs/0
-                  ,{fun kapps_config_usage:to_schema_docs/1, Modules}
-                  ,fun conference_schema_builder:to_schema/0
-                  ,{fun kapi_schemas:to_schemas/1, Modules}
-                  ,fun maintenance_docs:to_docs/0
-                  ]
-                 ).
+    lists:foreach(fun run_generator/1, generators(Modules)).
+
+%% With no .erl files named (CHANGED_ERL is empty, as in the CI job that
+%% checks the committed output), every module of the project is read;
+%% otherwise only the named modules are.
+generators([]) ->
+    [fun cf_data_usage:to_schema_docs/0
+    ,fun kp_data_usage:to_schema_docs/0
+    ,fun kapps_config_usage:to_schema_docs/0
+    ,fun conference_schema_builder:to_schema/0
+    ,fun kapi_schemas:to_schemas/0
+    ,fun maintenance_docs:to_docs/0
+    ];
+generators(Modules) ->
+    [{fun cf_data_usage:to_schema_docs/1, Modules}
+    ,fun kp_data_usage:to_schema_docs/0
+    ,{fun kapps_config_usage:to_schema_docs/1, Modules}
+    ,fun conference_schema_builder:to_schema/0
+    ,{fun kapi_schemas:to_schemas/1, Modules}
+    ,fun maintenance_docs:to_docs/0
+    ].
 
 run_generator({F, Args}) ->
     try F(Args)

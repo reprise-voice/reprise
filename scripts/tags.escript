@@ -10,8 +10,9 @@ main([TagsFile]) ->
     main(TagsFile, code:which('kz_ast_util')).
 
 main(_TagsFile, 'non_existing') ->
-    io:format("failed to find applications/kazoo_ast, not generating TAGS~n"
-              "add using:~necho \"DEPS += kazoo_ast~ndep_kazoo_ast = git https://github.com/2600hz/kazoo_ast master\" >> make/more_apps.mk~n"
+    io:format("failed to find applications/ast (kazoo-ast), not generating TAGS~n"
+              "add it with `make \"$PWD/applications/ast\"` from the repository root~n"
+              "(it clones KAZOO_AST_REPO at KAZOO_AST_REF, see the Makefile)~n"
              );
 main(TagsFile, _File) ->
     AppDirs = lists:foldl(fun add_app_dirs/2, [], kz_ast_util:project_apps()),

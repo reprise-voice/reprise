@@ -8,8 +8,13 @@ $(FMT):
 	@wget -qO - 'https://codeload.github.com/fenollp/erlang-formatter/tar.gz/$(FMT_SHA)' | tar -vxz -C $(ROOT)/make/
 	@mv $(ROOT)/make/erlang-formatter-$(FMT_SHA) $(ROOT)/make/erlang-formatter
 
+## The GLEAM_DIRS directories hold Gleam packages; their .erl files are FFI
+## shims the Erlang formatter does not own (`make gleam-format-check` is
+## theirs), and their build/ is downloaded hex sources.
+GLEAM_FMT_PRUNE = $(foreach dir,$(GLEAM_DIRS),-path '$(dir)' -prune -o)
+
 fmt-all: $(FMT)
-	@$(FMT) $(shell find core applications scripts -name "*.erl" -or -name "*.hrl" -or -name "*.escript")
+	@$(FMT) $(shell find core applications scripts $(GLEAM_FMT_PRUNE) \( -name "*.erl" -or -name "*.hrl" -or -name "*.escript" \) -print)
 
 fmt: TO_FMT ?= $(CHANGED_ERL)
 fmt: $(FMT)

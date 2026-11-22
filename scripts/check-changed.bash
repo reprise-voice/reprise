@@ -1,12 +1,14 @@
 #!/bin/bash
-# ./check-changed [directories]
-# directories should be absolute paths
+# ./check-changed.bash [directories]
+# Prints the files changed against the base branch (.base_branch at the root)
+# under the given directories (absolute paths), one tree: this is a monorepo.
+# Prints nothing (quietly) outside a git checkout, e.g. in a docker build.
 
 set -e
 
 pushd "$(dirname "$0")" > /dev/null
 
-ROOT=$(readlink -f "$(pwd -P)"/..)
+ROOT=$(cd "$(pwd -P)"/.. && pwd -P)
 
 _ci_debug() {
     msg="$1"
@@ -17,29 +19,25 @@ _ci_debug() {
     fi
 }
 
-_ci_debug "Checking for any changed files"
-_ci_debug "ROOT=${ROOT}"
-_ci_debug
+git -C "$ROOT" rev-parse --is-inside-work-tree > /dev/null 2>&1 || exit 0
 
-function get_changed {
-    base_branch=$(<$ROOT/.base_branch)
-    [ -f $1/.base_branch ] && base_branch=$(<$1/.base_branch);
-    _ci_debug "- checking $1 (base_branch=${base_branch})"
-    diff=""
-    for file in $(git -C $1 --no-pager diff --name-only HEAD $base_branch); do
-        diff+=" $1$file"
-    done
-    echo "$diff"
-}
+base_branch=$(<"$ROOT/.base_branch")
+_ci_debug "Checking for any changed files (base_branch=${base_branch})"
+_ci_debug "ROOT=${ROOT}"
+
+if ! git -C "$ROOT" rev-parse --verify --quiet "$base_branch" > /dev/null; then
+    _ci_debug "base branch ${base_branch} is not available, nothing to compare against"
+    exit 0
+fi
 
 changed=""
-for directory in $@; do
-    if [ -d $directory ]; then
-        dir_change=$(get_changed "$directory")
-        if [ -n "$dir_change" ]; then
-            changed+=" $dir_change"
-        fi
-    fi
+for file in $(git -C "$ROOT" --no-pager diff --name-only HEAD "$base_branch"); do
+    path="$ROOT/$file"
+    for directory in "$@"; do
+        case "$path" in
+            "${directory%/}"/*) changed+=" $path"; break ;;
+        esac
+    done
 done
 
 echo "$changed"

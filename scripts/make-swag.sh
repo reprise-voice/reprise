@@ -1,6 +1,9 @@
 #!/bin/bash
 
-# Generate Kazoo SDKs using the Swagger file
+# Generate Kazoo SDKs using the Swagger file in this tree
+# (applications/crossbar/priv/api/swagger.json)
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 ## Languages commented out either fail to generate or generate server code
 ## (we only want to generate client SDKs)
@@ -80,8 +83,9 @@ for lang in $langs; do
     echo Generating SDK in $lang
     docker run --rm \
            -v ${PWD}/out:/out \
+           -v "$ROOT/applications/crossbar/priv/api":/api:ro \
            $img generate \
-           -i https://raw.githubusercontent.com/2600hz/kazoo/master/applications/crossbar/priv/api/swagger.json \
+           -i /api/swagger.json \
            -l $lang \
            -o /out/$lang \
            >$log 2>&1

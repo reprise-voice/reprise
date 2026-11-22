@@ -132,11 +132,19 @@ fload(Schema, App) -> fload(kz_term:to_binary(Schema), App).
           {'ok', kz_json:object()} |
           {'error', 'not_found' | file:posix()}.
 find_and_fload(Schema, App) ->
-    PrivDir = code:priv_dir(App),
-    SchemaPath = filename:join([PrivDir, "couchdb", "schemas", maybe_add_ext(Schema)]),
-    case filelib:is_regular(SchemaPath) of
-        'true' -> fload_file(SchemaPath);
-        'false'-> {'error', 'not_found'}
+    case code:priv_dir(App) of
+        {'error', 'bad_name'} ->
+            %% The application is not on the code path (a test VM started
+            %% before it was built, or a node without it): the schema is
+            %% not found rather than a function_clause in filename:join/1.
+            lager:debug("no priv dir for ~s: schema ~s not found", [App, Schema]),
+            {'error', 'not_found'};
+        PrivDir ->
+            SchemaPath = filename:join([PrivDir, "couchdb", "schemas", maybe_add_ext(Schema)]),
+            case filelib:is_regular(SchemaPath) of
+                'true' -> fload_file(SchemaPath);
+                'false'-> {'error', 'not_found'}
+            end
     end.
 
 -spec fload_file(kz_term:ne_binary()) ->

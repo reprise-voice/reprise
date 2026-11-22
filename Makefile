@@ -29,28 +29,31 @@ export ERLANG_MK_COMMIT
 ELIXIR ?= disable
 export ELIXIR
 
-## If you use SSH keys instead
-## FETCH_AS = git@github.com:
-FETCH_AS ?= https://github.com/
+## REPRISE_GIT_BASE: where the reprise-voice forks are fetched from; set it to
+## git@github.com:reprise-voice for SSH keys or to a mirror (make/repos.mk)
+include $(ROOT)/make/repos.mk
 
 BASE_BRANCH := $(shell cat $(ROOT)/.base_branch)
 
-DEPS_HASH := $(shell md5sum $(ROOT)/make/deps.mk | cut -d' ' -f1)
+DEPS_HASH := $(shell cat $(ROOT)/make/repos.mk $(ROOT)/make/deps.mk | md5sum | cut -d' ' -f1)
 DEPS_HASH_FILE := $(ROOT)/make/.deps.mk.$(DEPS_HASH)
 
-APPS_HASH := $(shell md5sum $(ROOT)/make/apps.mk | cut -d' ' -f1)
-APPS_HASH_FILE := $(ROOT)/make/.apps.mk.$(APPS_HASH)
-
-APP_URLS_HASH := $(shell md5sum $(ROOT)/make/app_urls.mk | cut -d' ' -f1)
-APP_URLS_HASH_FILE := $(ROOT)/make/.app_urls.mk.$(APP_URLS_HASH)
-
-CORE_HASH := $(shell md5sum $(ROOT)/make/Makefile.core | cut -d' ' -f1)
-CORE_HASH_FILE := $(ROOT)/make/.core.mk.$(CORE_HASH)
-
-APPS := $(dir $(wildcard $(APPS_DIR)/*/.git))
+# core/ and applications/ are part of this tree; only deps/ is fetched
+APPS := $(dir $(wildcard $(APPS_DIR)/*/Makefile))
 CORE := $(wildcard $(CORE_DIR))/
 
 KAST = $(APPS_DIR)/ast
+
+## The Gleam packages in this tree, relative to the root: every core/ or
+## applications/ directory with a gleam.toml, so an application dropped into
+## applications/ is picked up without editing this list. core/ comes first,
+## so the shared library (core/kazoo_gleam) is checked before the
+## applications that build on it. A directory named here that is not present,
+## or that carries no gleam.toml, is skipped everywhere it is used below.
+GLEAM_DIRS ?= $(patsubst $(ROOT)/%/gleam.toml,%,$(sort $(wildcard $(ROOT)/core/*/gleam.toml)) $(sort $(wildcard $(ROOT)/applications/*/gleam.toml)))
+
+## The subset that is actually present, still relative to the root
+GLEAM_PACKAGES = $(patsubst $(ROOT)/%/gleam.toml,%,$(wildcard $(addsuffix /gleam.toml,$(addprefix $(ROOT)/,$(GLEAM_DIRS)))))
 
 ## list files changed for more focused checks
 ifeq ($(strip $(CHANGED)),)
@@ -63,14 +66,25 @@ else
 	CHANGED := $(CHANGED)
 endif
 
-STATUS = $($(ROOT)/scripts/check-git-status.bash $(ROOT) $(CORE_DIR) $(APPS))
-
-CHANGED_SWAGGER ?= $(shell $(ROOT)/kgit -kapps crossbar git --no-pager diff --name-only HEAD $(BASE_BRANCH) -- priv/api/swagger.json)
+CHANGED_SWAGGER ?= $(shell git -C $(ROOT) --no-pager diff --name-only HEAD $(BASE_BRANCH) -- applications/crossbar/priv/api/swagger.json 2>/dev/null)
 CHANGED_ERL=$(filter %.hrl %.erl %.escript,$(CHANGED))
 CHANGED_APPS=$(filter $(APPS_DIR)%,$(CHANGED_ERL))
 CHANGED_JSON=$(filter %.json,$(CHANGED))
 CHANGED_YML=$(filter %.yml,$(CHANGED))
 CHANGED_DOCS=$(filter %.md,$(CHANGED))
+
+## The .erl files under GLEAM_DIRS are FFI shims compiled by gleam, not by
+## kz.mk, so the Erlang checks driven by CHANGED (fmt, elvis, code_checks,
+## edoc, dialyze-changed) do not apply to them; `make gleam-check` is the
+## equivalent.
+CHANGED := $(filter-out $(addsuffix /%,$(addprefix $(ROOT)/,$(GLEAM_DIRS))),$(CHANGED))
+
+## `gleam build` writes an ebin per package under each Gleam directory's
+## build/, none of which belong to the release (an application's Makefile
+## installs the ones that do, into its own ebin and into deps/). Keep those
+## trees out of the sweeps that collect ebin dirs.
+GLEAM_BUILD_PRUNE = $(foreach dir,$(GLEAM_DIRS),-path '$(ROOT)/$(dir)/build' -prune -o)
+FIND_EBINS = find $(1) $(GLEAM_BUILD_PRUNE) -name ebin -print
 
 PRINTABLE_CHANGED=$(subst $(ROOT),,$(CHANGED))
 PRINTABLE_ERL=$(subst $(ROOT),,$(CHANGED_ERL))
@@ -90,6 +104,11 @@ export CHANGED_DOCS
 
 # You can override this when calling make, e.g. make JOBS=1
 # to prevent parallel builds, or make JOBS="8".
+#
+# Keep this at 1 while more than one Gleam application is in the tree: each
+# one installs its whole shipment into deps/<app>, so two of them sharing a
+# library (or any hex package) write the same deps/ directory, and a parallel
+# build can have one removing what the other is copying.
 JOBS ?= 1
 CLEAN_JOBS ?=
 
@@ -133,21 +152,12 @@ compile-lean-apps:
 compile: ACTION = all
 compile: deps kazoo
 
+## Everything except the checked-in sources: build output, deps, release, tags
 .PHONY: sparkly-clean
-sparkly-clean: stop-if-changed clean-kazoo clean-release clean-deps clean-tags
-	 @(rm -rf $(APPS_DIR) $(CORE_DIR))
-
-.PHONY: stop-if-changed
-stop-if-changed:
-	@[ -z "$(CHANGED)" ] && exit 0 || `echo Unstaged changes make this unsage && exit 1`
+sparkly-clean: clean clean-release clean-deps clean-tags
 
 .PHONY: clean-kazoo
-clean-kazoo: stop-if-changed
-	@$(ls -d $(APPS_DIR)/* | xargs rm -rf)
-	@$(rm -rf $(CORE_DIR))
-	@$(if $(wildcard $(CORE_HASH_FILE)), rm -rf $(CORE_HASH_FILE))
-	@$(if $(wildcard $(APPS_HASH_FILE)), rm -rf $(APPS_HASH_FILE))
-	@$(if $(wildcard $(APP_URLS_HASH_FILE)), rm -rf $(APP_URLS_HASH_FILE))
+clean-kazoo: clean
 
 .PHONY: clean
 clean: clean-core clean-apps
@@ -209,61 +219,27 @@ $(DEPS_DIR):
 	@mkdir -p $(DEPS_DIR)
 
 # Target: core
-# 1. make sure the 'deps' target is built
-# 2. make sure the core repo has been fetched (using the hash of the make/Makefile.core as a check)
-# Once satisfied, compile all the dirs under core/
+# Compile every application under core/ (core/Makefile orders kazoo_stdlib,
+# kazoo_amqp and kazoo_data first)
 .PHONY: core
-core: deps fetch-core
+core: deps
 	@ROOT=$(ROOT) $(MAKE) -j$(JOBS) -C $(CORE_DIR) all
 
-# Target: fetch-core
-# Alias for $(CORE_DIR)Makefile to fetch the core apps
-fetch-core: $(CORE_HASH_FILE) $(CORE_DIR)/Makefile
-
-# Target: core hash file
-# 1. Make sure erlang.mk is setup
-# 2. Make sure core/Makefile exists
-# Once satisfied, create the core hash file
-$(CORE_HASH_FILE): $(CORE_DIR)/Makefile
-	@touch $(CORE_HASH_FILE)
-
-# Target: core/Makefile
-# Using make/Makefile.core, use erlang.mk to fetch the kazoo-core repo (which includes the Makefile needed)
-$(CORE_DIR)/Makefile: $(DOT_ERLANG_MK)
-	@NO_AUTOPATCH_ERLANG_MK=1 $(MAKE) -f $(ROOT)/make/Makefile.core fetch-deps
-
 # Target: apps
-# Since kazoo-core comes with a Makefile for building all apps under it, erlang.mk is used to fetch deps
-# Since each app is fetched independently, use erlang.mk to call the Makefile in each fetched app
-# 1. Make sure core is built
-# 2. Check the apps hash file (hash of make/apps.mk)
-# Once satisfied, use erlang.mk to fetch the apps (via the erlang.mk deps target), and compile all the apps
+# Compile every application under applications/ (every directory with a
+# Makefile); APPS_MK can name a subset, e.g. APPS_MK=my_apps.mk with DEPS = a b
 .PHONY: apps
-apps: core fetch-apps
+apps: core
 	@ROOT=$(ROOT) $(MAKE) -j$(JOBS) -C $(APPS_DIR) all
 
-fetch-apps: $(APPS_HASH_FILE) $(APP_URLS_HASH_FILE) $(APPS_DIR)/Makefile
-	@NO_AUTOPATCH_ERLANG_MK=1 ROOT=$(ROOT) $(MAKE) -f $(ROOT)/make/Makefile.apps -C $(APPS_DIR) fetch-deps
-
-# Target: apps hash file
-# 1. Make sure elrang.mk is setup
-# Once satisfied, create the applications directory and the apps hash file
-$(APPS_HASH_FILE): $(DOT_ERLANG_MK) make/more_apps.mk
-	@touch $(APPS_HASH_FILE)
-
-$(APP_URLS_HASH_FILE):
-	@touch $(APP_URLS_HASH_FILE)
-
-# Bootstrap more_apps.mk with kazoo_properly and kazoo_ast
-make/more_apps.mk:
-	@cp make/more_apps.mk.default make/more_apps.mk
-
-.PHONY: apps-makefile
-apps-makefile: $(APPS_DIR)/Makefile
-
-$(APPS_DIR)/Makefile:
-	@$(shell mkdir -p $(APPS_DIR))
-	@cp $(ROOT)/make/Makefile.applications $(APPS_DIR)/Makefile
+# The dev-tooling applications 2600hz keeps in their own repos (kazoo-ast for
+# the schema generators, kazoo-properly for property tests) are not part of
+# this tree; `make $(KAST)` clones kazoo-ast into applications/ast (ignored)
+# (pinned: the reprise branch of the fork, upstream master as of 2026-11-21
+# plus the fixes this tree needs: OTP 28, applications it does not carry,
+# year-independent kzd templates, hand-written maintenance descriptions)
+KAZOO_AST_REPO ?= $(REPRISE_GIT_BASE)/kazoo-ast
+KAZOO_AST_REF ?= 05b9c135514baa5ed1e07797c7383cf990467cfe
 
 .PHONY: kazoo
 kazoo: deps apps $(TAGS)
@@ -287,7 +263,7 @@ fixture_shell:
 		erl -setcookie change_me -name '$(NODE_NAME)' -s reloader "$$@"
 
 .PHONY: xref
-xref: TO_XREF ?= $(shell find $(APPS_DIR) $(CORE_DIR) $(DEPS_DIR) -name ebin)
+xref: TO_XREF ?= $(shell $(call FIND_EBINS,$(APPS_DIR) $(CORE_DIR) $(DEPS_DIR)))
 xref:
 	@$(ROOT)/scripts/check-xref.escript $(TO_XREF)
 
@@ -364,9 +340,9 @@ check_stacktrace:
 apis: schemas api_endpoints kzd_builder
 	@$(ROOT)/scripts/generate-doc-schemas.py `egrep -rl '(#+) Schema' core/ applications/ | grep -v '.[h|e]rl'`
 	@$(ROOT)/scripts/format-json.py $(APPS_DIR)/crossbar/priv/api/swagger.json
-	@$(ROOT)/scripts/format-json.py $(shell find $(APPS_DIR) $(CORE_DIR) -wholename '*/api/*.json')
-	@$(ROOT)/scripts/format-couchdb-views.py $(shell find $(CORE_DIR)/kazoo_apps/priv/couchdb/account -name '*.json')
-	@$(ROOT)/scripts/format-couchdb-views.py $(shell find $(APPS_DIR) $(CORE_DIR) -wholename '*/couchdb/views/*.json')
+	@$(ROOT)/scripts/format-json.py `find $(APPS_DIR) $(CORE_DIR) $(GLEAM_BUILD_PRUNE) -wholename '*/api/*.json' -print`
+	@$(ROOT)/scripts/format-couchdb-views.py `find $(CORE_DIR)/kazoo_apps/priv/couchdb/account -name '*.json'`
+	@$(ROOT)/scripts/format-couchdb-views.py `find $(APPS_DIR) $(CORE_DIR) $(GLEAM_BUILD_PRUNE) -wholename '*/couchdb/views/*.json' -print`
 
 .PHONY: kzd_builder
 kzd_builder:
@@ -375,14 +351,19 @@ kzd_builder:
 .PHONY: schemas
 schemas: $(KAST)
 	@ERL_LIBS=$(DEPS_DIR):$(CORE_DIR):$(APPS_DIR) $(ROOT)/scripts/generate-schemas.escript $(CHANGED_ERL)
-	@$(ROOT)/scripts/format-json.py $(shell find $(APPS_DIR) $(CORE_DIR) -wholename '*/schemas/*.json')
+	@# the file list is read when this line runs (not when make expands the
+	@# recipe), so a schema the generator has just created is formatted too;
+	@# the copies under a Gleam application's build/ are not ours to format
+	@$(ROOT)/scripts/format-json.py `find $(APPS_DIR) $(CORE_DIR) $(GLEAM_BUILD_PRUNE) -wholename '*/schemas/*.json' -print`
 
 .PHONY: api_endpoints
 api_endpoints:
 	@ERL_LIBS=$(DEPS_DIR):$(CORE_DIR):$(APPS_DIR) $(ROOT)/scripts/generate-api-endpoints.escript
 
 $(KAST):
-	@DEPS=ast ROOT=$(ROOT) $(MAKE) -f $(ROOT)/make/Makefile.apps -C $(APPS_DIR)
+	git clone -q -n $(KAZOO_AST_REPO) $(KAST)
+	git -C $(KAST) checkout -q $(KAZOO_AST_REF)
+	@ROOT=$(ROOT) $(MAKE) -C $(KAST) all
 
 .PHONY: validate-swagger
 validate-swagger:
@@ -403,6 +384,50 @@ validate-schemas:
 whitespace:
 	@$(ROOT)/scripts/check-whitespace.sh $(CHANGED)
 
+## The checks the Gleam packages answer to, in place of the Erlang ones the
+## CHANGED filter keeps them out of. Without the gleam binary they are skipped
+## with a message, the way the packages' own Makefiles skip compiling.
+GLEAM ?= gleam
+HAS_GLEAM := $(shell command -v $(GLEAM) 2>/dev/null)
+
+## Runs `gleam $(1)` in every present Gleam package in turn, stopping at the
+## first failure.
+gleam_in_each = for dir in $(GLEAM_PACKAGES); do \
+	    echo ":: gleam $(1) in $$dir"; \
+	    ( cd "$(ROOT)/$$dir" && $(GLEAM) $(1) ) || exit 1; \
+	 done
+
+.PHONY: gleam-format-check gleam-test gleam-check check-gleam-manifests
+
+ifeq ($(HAS_GLEAM),)
+
+gleam-format-check gleam-test:
+	@echo "no gleam binary, skipping $@"
+
+else
+
+gleam-format-check:
+	@$(call gleam_in_each,format --check)
+
+gleam-test:
+	@$(call gleam_in_each,test)
+
+endif
+
+## Every Gleam application installs its whole shipment into deps/, so two of
+## them that resolve a shared package to different versions would overwrite
+## each other's copy. This needs no gleam binary: it reads the checked-in
+## manifests.
+check-gleam-manifests:
+	@$(ROOT)/scripts/check-gleam-manifests.bash $(wildcard $(addsuffix /manifest.toml,$(addprefix $(ROOT)/,$(GLEAM_PACKAGES))))
+
+## Serially: the manifests have to agree before the rest means anything, and
+## `gleam test` writes build/ trees that share a hex cache.
+gleam-check:
+	@$(MAKE) check-gleam-manifests
+	@$(MAKE) gleam-format-check
+	@$(MAKE) gleam-test
+
 include $(ROOT)/make/rebar.mk
 include $(ROOT)/make/ci.mk
 include $(ROOT)/make/dialyzer.mk
@@ -415,5 +440,3 @@ include $(ROOT)/make/pest.mk
 include $(ROOT)/make/releases.mk
 include $(ROOT)/make/splchk.mk
 include $(ROOT)/make/tests.mk
-
-circle: ci

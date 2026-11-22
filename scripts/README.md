@@ -163,6 +163,19 @@ Now you have a listing of registered processes to put in your .app.src
 
 Find git repos and accumulate changed files
 
+## check-gleam-manifests.bash
+
+```shell
+./check-gleam-manifests.bash [manifest.toml ...]
+```
+
+Fails when two Gleam packages in this tree lock a package they both depend on
+to different versions. Each Gleam application installs its whole shipment into
+`deps/<app>`, so a disagreement means whichever application is built last
+decides which version the release runs. The Makefile target
+`check-gleam-manifests` passes the manifests of every `GLEAM_DIRS` directory:
+by default, each `core/*` and `applications/*` directory with a `gleam.toml`.
+
 ## check-git-status.bash
 
 ```shell
@@ -254,14 +267,6 @@ If there are any calls to nonexistent modules, or non-exported functions, you wi
 
 Removes trailing whitespaces from files
 
-## circleci.bash
-
-When building applications that don't live in the kazoo src tree, this script will configure CircleCI to run the necessary tests against Kazoo with the application added in.
-
-## circleci-build-erlang.sh
-
-Fetches kerl and installs configured Erlang version (used in CircleCI)
-
 
 ## code\_checks.bash
 
@@ -273,51 +278,6 @@ Check for andalso/orelse dropped lines
 Check for uses of module in lieu of ?MODULE
 Check for TAB characters
 Check for trailing whitespaces
-```
-
-## `checkout_kapps_latest_tag.sh`
-
-This is script is helper in CI to check all Kapps for their latest tag and checkout that tag when are building releases.
-
-For this script to work you need have `BASE_BRANCH` variable exported (with value like `origin/5.0`) and all Kapps are checked out to a release branch.
-A Release branch is like `{MAJOR}.{MINOR}` for example: `5.0`.
-
-```shell
-$ # this variable is required
-$ export BASE_BRANCH=origin/5.0
-$ # next line is to simulate situation when the CI release build is running for `kazoo-call-inspector` repo.
-$ export KAZOO_APP=call_inspector
-$ # if you need to checkout all repos to their release branch
-$ # ./kgit git checkout 5.0
-$ ./scripts/checkout_kapps_latest_tag.sh
-BASE_BRANCH: origin/5.0
-Base major version: 5
-Base minor version: 0
-
-:: Checking ast repo for its latest tag...
-found latest tag '5.0.7', checking out
-Note: switching to '5.0.7'.
-
-You are in 'detached HEAD' state. You can look around, make experimental
-changes and commit them, and you can discard any commits you make in this
-state without impacting any branches by switching back to a branch.
-
-If you want to create a new branch to retain commits you create, you may
-do so (now or later) by using -c with the switch command. Example:
-
-  git switch -c <new-branch-name>
-
-Or undo this operation with:
-
-  git switch -
-
-Turn off this advice by setting config variable advice.detachedHead to false
-
-HEAD is now at bdd79a6 [5.0] PROD-199: handle generic IDs (#13)
-Removing ebin/
-.....
-.....
-.....
 ```
 
 ## `code_checks.bash`
@@ -575,6 +535,15 @@ Builds accessor modules (`.erl.src` files) in `core/kazoo_documents/src` from th
 Parses the core/applications code looking for calls to kapps\_config (module used to access documents in the system\_config database) and building a base JSON schema file for each document found.
 
 Also parses callflow's action modules looking for keys used to access values in the Data JSON object to build a base JSON schema file for each callflow action.
+
+## graft-upstream-history.sh
+
+Connects the baseline commits of this repository to the upstream Kazoo history kept in [reprise-voice/kazoo-archive](https://github.com/reprise-voice/kazoo-archive), so that `git blame` and `git log` reach 2600Hz's commits. It fetches the archive and uses `git replace --graft`; only local refs change, and `--undo` removes them.
+
+```shell
+./scripts/graft-upstream-history.sh
+./scripts/graft-upstream-history.sh --undo
+```
 
 ## `kzd_module_check.bash`
 

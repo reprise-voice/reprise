@@ -9,4 +9,4 @@
 # the dep
 # See https://erlang.mk/guide/deps.html#_adding_dependencies_to_your_project
 
-# dep_foobar = git https://github.com/2600hz/erlang-foobar {BRANCH_OR_TAG}
+# dep_foobar = git $(REPRISE_GIT_BASE)/erlang-foobar {BRANCH_OR_TAG}
