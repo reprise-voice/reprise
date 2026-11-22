@@ -369,8 +369,21 @@ do_ra_join(JoinLeader, Context) ->
             lager:info("failed to join ~s to cluster ~s", [node(), ra_name(Context)]),
             Context;
         {error, cluster_change_not_permitted} ->
-            lager:info("failed to join ~s to cluster ~s because changes are not allowed", [node(), ra_name(Context)]),
-            Context;
+            %% The leader has a membership change in flight. When that change
+            %% is our own join (it lists us, and our earlier server is gone),
+            %% it can only commit once we run a server that acknowledges it:
+            %% start one instead of asking again, which is refused forever.
+            case is_member_at(Context, JoinLeader) of
+                'true' ->
+                    lager:info("leader ~p lists ~s in cluster ~s with a change pending, starting our server so it can commit", [JoinLeader, node(), ra_name(Context)]),
+                    RaServerConfig = make_ra_server_config(Context, Member, Members),
+                    R = ra:start_server(ra_system(Context), RaServerConfig),
+                    lager:info("server started on cluster ~s with result ~p", [ra_name(Context), R]),
+                    Context#{running => 'true'};
+                'false' ->
+                    lager:info("failed to join ~s to cluster ~s because changes are not allowed", [node(), ra_name(Context)]),
+                    Context
+            end;
         {error, already_member} ->
             lager:info("this node is already part of the cluster ~s", [ra_name(Context)]),
             do_leave(Context#{leader => JoinLeader});
@@ -389,6 +402,13 @@ should_start_ra_cluster(Context) ->
 
 ra_start(#{sleeping := 'true'} = Context) -> Context;
 ra_start(#{running := 'true'} = Context) -> Context;
+ra_start(#{nodes := Nodes} = Context) when Nodes =/= [] ->
+    %% A peer that already leads a cluster is the one to join (ra_join);
+    %% starting our own beside it only creates a rival to reset.
+    case leaders(Context, Nodes) of
+        [] -> ra_start(maps:without(['nodes'], Context));
+        _Leaders -> Context
+    end;
 ra_start(Context) ->
     case should_start_ra_cluster(Context) of
         'true' -> do_ra_start(Context);
@@ -454,10 +474,21 @@ filter_leader_fun(Context) ->
     fun({'ok', {_, Node}}) ->
             case ra:members(ra_node(Context, Node), 100) of
                 {'ok', Members, {_, LeaderNode}} ->
-                    {'true', {Node, LeaderNode, [N || {_, N} <- Members, N =/= node()]}};
+                    {'true', {Node
+                             ,LeaderNode
+                             ,[N || {_, N} <- Members, N =/= node()]
+                             ,lists:keymember(node(), 2, Members)
+                             }};
                 _Other -> 'false'
             end;
        (_) -> 'false'
+    end.
+
+%% Does the cluster led from Node list this node as a member?
+is_member_at(Context, Node) ->
+    case ra:members(ra_node(Context, Node), 100) of
+        {'ok', Members, _Leader} -> lists:keymember(node(), 2, Members);
+        _Other -> 'false'
     end.
 
 leader_nodes(Context, Nodes) ->
@@ -467,7 +498,7 @@ leader_nodes(Context, Nodes) ->
                      )
      ).
 
-leader({_Node, LeaderNode, _MemberNodes}) -> LeaderNode.
+leader({_Node, LeaderNode, _MemberNodes, _IsMember}) -> LeaderNode.
 
 leaders(Context, Nodes) ->
     lists:usort(lists:map(fun leader/1, leader_nodes(Context, Nodes))).
@@ -478,9 +509,13 @@ check_leader(Context, Nodes) ->
 check_leader_fun(Context) ->
     RACount = length(ra_nodes(Context)),
     RALeaderNode = ra_leader_node(Context),
-    fun({_Node, LeaderNode, _Members}) when LeaderNode =:= RALeaderNode -> 'true';
-       ({_Node, _LeaderNode, Members}) when length(Members) =< RACount -> 'true';
-       ({_Node, _LeaderNode, _Members}) ->
+    ServerUp = whereis(ra_name(Context)) =/= 'undefined',
+    fun({_Node, LeaderNode, _Members, _IsMember}) when LeaderNode =:= RALeaderNode -> 'true';
+       ({_Node, _LeaderNode, _Members, 'true'}) when ServerUp ->
+            lager:debug("node ~s with leader ~s lists us as a member, waiting for its log", [_Node, _LeaderNode]),
+            'true';
+       ({_Node, _LeaderNode, Members, _IsMember}) when length(Members) =< RACount -> 'true';
+       ({_Node, _LeaderNode, _Members, _IsMember}) ->
             lager:info("node ~s with leader ~s has ~B member while we have ~B, resetting", [_Node, _LeaderNode, length(_Members), RACount]),
             'false'
     end.

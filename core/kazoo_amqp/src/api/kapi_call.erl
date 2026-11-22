@@ -129,6 +129,7 @@
 -ifdef(TEST).
 -export([call_routing_key/2
         ,update_name_and_values/2
+        ,event_publish_headers/1
         ]).
 -endif.
 
@@ -269,6 +270,7 @@ event_definition() ->
                                                             ,<<"Duration-Seconds">>
                                                             ,<<"Endpoint-Disposition">>
                                                             ,<<"Fax-Info">>
+                                                            ,<<"File-Exists">> %% RECORD_STOP: false once the switch discarded the file
                                                             ,<<"From">>
                                                             ,<<"From-Tag">>
                                                             ,<<"From-Uri">>
@@ -869,10 +871,21 @@ publish_event(Event, ContentType) when is_list(Event) ->
     kz_amqp_util:callevt_publish((kapi_definition:binding(Definition))(EventName, CallId)
                                 ,Payload
                                 ,ContentType
-                                ,[{'headers', [{<<"call-id">>, 'binary', CallId}]}]
+                                ,event_publish_headers(CallId)
                                 );
 publish_event(Event, ContentType) ->
     publish_event(kz_json:to_proplist(Event), ContentType).
+
+%%------------------------------------------------------------------------------
+%% @doc The `call-id' header the call events exchanges hash on
+%% (`kz_event_listener'). It is a string, as FreeSWITCH sends it: LavinMQ
+%% refuses to route on a header of any other type, closing the publishing
+%% channel with a 406 and dropping the event.
+%% @end
+%%------------------------------------------------------------------------------
+-spec event_publish_headers(kz_term:ne_binary()) -> kz_term:proplist().
+event_publish_headers(CallId) ->
+    [{'headers', [{<<"call-id">>, 'longstr', CallId}]}].
 
 %%------------------------------------------------------------------------------
 %% @doc Inquire into the status of a channel.

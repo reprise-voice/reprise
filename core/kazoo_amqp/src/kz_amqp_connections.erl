@@ -131,6 +131,9 @@ add(Broker, Zone) ->
           kz_amqp_connection() |
           {'error', any()}.
 add(Broker, Zone, Tags) ->
+    %% amqp_client 4.x resolves URI auth mechanisms via list_to_existing_atom;
+    %% make sure the module defining those atoms is loaded before first parse
+    _ = code:ensure_loaded('amqp_auth_mechanisms'),
     try amqp_uri:parse(kz_term:to_list(Broker)) of
         {'error', {Info, _}} ->
             lager:error("failed to parse AMQP URI '~s': ~p", [Broker, Info]),

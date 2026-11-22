@@ -78,8 +78,9 @@ request(#{control_q := ControlQ, control_p := ControlP, payload := FetchJObj}=Ma
 -spec request_headers(dialplan_context()) -> dialplan_context().
 request_headers(#{request_headers := _}=Map) -> Map;
 request_headers(#{call_id := CallId, core_uuid := CoreUUID}=Map) ->
-    Headers = [{<<"call-id">>, 'binary', CallId}
-              ,{<<"core-uuid">>, 'binary', kz_term:to_binary(CoreUUID)}
+    %% strings: LavinMQ will not hash callflow.route on a header of another type
+    Headers = [{<<"call-id">>, 'longstr', CallId}
+              ,{<<"core-uuid">>, 'longstr', kz_term:to_binary(CoreUUID)}
               ],
     KAPIHeaders = [{'headers', Headers}],
     Map#{request_headers => KAPIHeaders}.

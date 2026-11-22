@@ -241,10 +241,22 @@ do_track_pid(Pid, State) when is_pid(Pid) ->
 do_track_pid({Pid, Thresholds}, State) ->
     case State of
         #{Pid := _} -> State;
-        #{} ->
-            MonitorRef = erlang:monitor('process', Pid),
-            [{'total_heap_size', TotalHeapSize}, {'message_queue_len', MQLen}]
-                = process_info(Pid, ['total_heap_size', 'message_queue_len']),
+        #{} -> track_new_pid(Pid, Thresholds, State)
+    end.
+
+%% Tracking is asked for with a cast, so the process may be gone by the time
+%% it is handled -- a listener whose consumer the broker refused ends within
+%% its own init. Such a pid is left alone rather than matched on: this server
+%% crashing on it forgets every process it was tracking.
+-spec track_new_pid(pid(), proc_thresholds(), state()) -> state().
+track_new_pid(Pid, Thresholds, State) ->
+    MonitorRef = erlang:monitor('process', Pid),
+    case process_info(Pid, ['total_heap_size', 'message_queue_len']) of
+        'undefined' ->
+            _ = erlang:demonitor(MonitorRef, ['flush']),
+            lager:debug("pid ~p is gone already, not tracking it", [Pid]),
+            State;
+        [{'total_heap_size', TotalHeapSize}, {'message_queue_len', MQLen}] ->
             HasLongMQ = has_long_message_queue('false', MQLen, Thresholds),
 
             maybe_warn_large_heap(Pid, TotalHeapSize, Thresholds, 'true'),

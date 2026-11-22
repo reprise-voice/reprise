@@ -152,6 +152,7 @@
 -export([new_queue_name/0, new_queue_name/1]).
 -export([basic_consume/1, basic_consume/2]).
 -export([basic_publish/3, basic_publish/4, basic_publish/5]).
+-export([prepare_basic_publish/5]).
 -export([basic_cancel/0, basic_cancel/1]).
 -export([queue_delete/1, queue_delete/2]).
 -export([new_exchange/2, new_exchange/3]).
@@ -545,7 +546,33 @@ basic_publish(Exchange, RoutingKey, Payload, ContentType) ->
 basic_publish(Exchange, RoutingKey, Payload, ContentType, Prop)
   when is_list(Payload) ->
     basic_publish(Exchange, RoutingKey, iolist_to_binary(Payload), ContentType, Prop);
-basic_publish(Exchange, RoutingKey0, ?NE_BINARY = Payload, ContentType, Props0)
+basic_publish(Exchange, RoutingKey, ?NE_BINARY = Payload, ContentType, Props)
+  when is_binary(Exchange),
+       is_binary(RoutingKey),
+       is_binary(ContentType),
+       is_list(Props) ->
+    {BP, AM} = prepare_basic_publish(Exchange, RoutingKey, Payload, ContentType, Props),
+    case ?P_GET('maybe_publish', Props, 'false') of
+        'true' -> kz_amqp_channel:maybe_publish(BP, AM);
+        'false' -> kz_amqp_channel:publish(BP, AM)
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc The `basic.publish' and the message `basic_publish/5' would publish,
+%% built from the same arguments and not sent: for a caller that publishes
+%% them itself, on a channel of its own (`kz_amqp_channel:publish_on/3').
+%%
+%% `maybe_publish' is how `basic_publish/5' sends, and is not looked at here.
+%% A `consumer://' routing key is left as it is: `kz_amqp_channel:publish/2'
+%% is what resolves it to another consumer's channel.
+%% @end
+%%------------------------------------------------------------------------------
+-spec prepare_basic_publish(kz_term:ne_binary(), binary(), amqp_payload(), kz_term:ne_binary(), kz_term:proplist()) ->
+          {basic_publish(), amqp_msg()}.
+prepare_basic_publish(Exchange, RoutingKey, Payload, ContentType, Props)
+  when is_list(Payload) ->
+    prepare_basic_publish(Exchange, RoutingKey, iolist_to_binary(Payload), ContentType, Props);
+prepare_basic_publish(Exchange, RoutingKey0, ?NE_BINARY = Payload, ContentType, Props0)
   when is_binary(Exchange),
        is_binary(RoutingKey0),
        is_binary(ContentType),
@@ -582,11 +609,7 @@ basic_publish(Exchange, RoutingKey0, ?NE_BINARY = Payload, ContentType, Props0)
     AM = #'amqp_msg'{payload = encode(MsgProps#'P_basic'.content_encoding, Payload)
                     ,props = MsgProps
                     },
-
-    case ?P_GET('maybe_publish', Props, 'false') of
-        'true' -> kz_amqp_channel:maybe_publish(BP, AM);
-        'false' -> kz_amqp_channel:publish(BP, AM)
-    end.
+    {BP, AM}.
 
 -spec basic_routing(kz_term:api_binary(), kz_term:proplist()) -> {kz_term:api_binary(), kz_term:proplist()}.
 basic_routing(<<"pid://", _/binary>>=RoutingKey, Props) ->

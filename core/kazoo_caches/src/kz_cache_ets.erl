@@ -144,8 +144,23 @@ erase(Srv, Key) ->
         {'ok', _} -> kz_cache_callbacks:erased(Srv, Key)
     end.
 
+%% Done by the server that stores, and never beside it. A store writes the
+%% value and then its origin pointers; a flush clears the value table and
+%% then the pointer table. Run in two processes they can interleave so that
+%% a value written after the first clear keeps a pointer written before the
+%% second -- or loses it, and no change notice ever finds the value again.
+%% So a flush from outside is a call into this server, answered once the
+%% tables are clear; from inside it clears them directly.
 -spec flush(atom()) -> 'ok'.
 flush(Name) ->
+    case whereis(Name) of
+        'undefined' -> lager:info("cache ~s is not running, nothing to flush", [Name]);
+        Self when Self =:= self() -> flush_tables(Name);
+        _Server -> gen_server:call(Name, 'flush', 'infinity')
+    end.
+
+-spec flush_tables(atom()) -> 'ok'.
+flush_tables(Name) ->
     kz_cache_callbacks:flushed(Name, pointer_tab(Name), monitor_tab(Name), fetch_options(Name)).
 
 -spec cache_obj(any(), any(), kz_cache:store_options()) -> cache_obj().
@@ -289,6 +304,8 @@ init([Name, Options]) ->
 -spec handle_call(any(), kz_term:pid_ref(), state()) -> kz_types:handle_call_ret_state(state()).
 handle_call({'store', CacheObj}, _From, Name) ->
     {'reply', handle_store(CacheObj, Name), Name};
+handle_call('flush', _From, Name) ->
+    {'reply', flush_tables(Name), Name};
 handle_call(_Request, _From, Name) ->
     {'noreply', Name}.
 

@@ -79,7 +79,7 @@
         ,handle_info/2
         ,terminate/2
         ,code_change/3
-        ,format_status/2
+        ,format_status/1
         ]).
 
 %% gen_server API
@@ -1054,22 +1054,22 @@ handle_callback_info(Message
         {'stop', R, State}
         end.
 
--spec format_status('normal' | 'terminate', [kz_term:proplist() | state()]) -> any().
-format_status(_Opt
-             ,[_PDict
-              ,#state{module=Module
-                     ,module_state=ModuleState
-                     }=State
-              ]) ->
+-spec format_status(gen_server:format_status()) -> gen_server:format_status().
+format_status(#{'state' := #state{module=Module
+                                 ,module_state=ModuleState
+                                 }=State
+               }=Status) ->
     case erlang:function_exported(Module, 'format_status', 2) of
-        'true' -> Module:format_status(_Opt, [_PDict, ModuleState]);
+        'true' -> Status#{'state' => Module:format_status('normal', [get(), ModuleState])};
         'false' ->
-            [{'data', [{"Module State", ModuleState}
-                      ,{"Module", Module}
-                      ,{"Listener State", State}
-                      ]
-             }]
-    end.
+            Status#{'state' => [{'data', [{"Module State", ModuleState}
+                                         ,{"Module", Module}
+                                         ,{"Listener State", State}
+                                         ]
+                                }]
+                   }
+    end;
+format_status(Status) -> Status.
 
 -spec deliver_event(kz_json:object(), deliver(), state()) ->  kz_types:handle_info_ret().
 deliver_event(JObj, {_ , #'P_basic'{headers='undefined'}}=BasicDeliver, State) ->
@@ -1691,7 +1691,7 @@ handle_amqp_channel_available(#state{params=Params}=State, Reconnected) ->
 
     case maybe_declare_exchanges(props:get_value('declare_exchanges', Params, [])) of
         'ok' ->
-            handle_exchanges_ready(State);
+            handle_exchanges_ready(State, Reconnected);
         {'error', _E} ->
             lager:debug("error declaring exchanges : ~p", [_E]),
             handle_amqp_errored(State)
@@ -1708,10 +1708,11 @@ log_channel_status('true') ->
 log_channel_status('false') ->
     lager:debug("channel started, let's connect").
 
--spec handle_exchanges_ready(state()) -> state().
+-spec handle_exchanges_ready(state(), boolean()) -> state().
 handle_exchanges_ready(#state{params=Params
                              ,auto_ack=AutoAck
                              }=State
+                      ,Reconnected
                       ) ->
     case start_amqp(Params, AutoAck) of
         {'ok', QueueName} ->
@@ -1719,14 +1720,47 @@ handle_exchanges_ready(#state{params=Params
             %% basic.consume is sent and basic.consume_ok is
             %% received (blocking call) so we know we are consuming
 
-            handle_amqp_started(State#state{is_consuming='true'
-                                           ,queue=QueueName
-                                           }
-                               );
+            State1 = handle_amqp_started(State#state{is_consuming='true'
+                                                    ,queue=QueueName
+                                                    }
+                                        ),
+            notify_new_channel(start_delayed_bindings(State1), Reconnected);
         {'error', Reason} ->
             lager:warning("start amqp error ~p", [Reason]),
             handle_amqp_errored(State)
     end.
+
+%% A binding asked for before there was a channel to bind on is created
+%% here, once the queue exists and before the module hears of the channel,
+%% so that what the module does on hearing it does not run ahead of what it
+%% asked to hear: a cache that flushed and refilled before its binding for
+%% change notices existed would miss the next edit. These bindings used to
+%% wait for the basic.consume_ok message, which is handled after the notice
+%% would have been; that handler still applies the bindings delayed while
+%% the consumers were paused, and finds none left from here.
+-spec start_delayed_bindings(state()) -> state().
+start_delayed_bindings(#state{is_consuming='true', delayed_bindings=Delayed}=State) ->
+    lists:foldl(fun({Binding, Props}, StateAcc) ->
+                        handle_add_binding(Binding, Props, StateAcc)
+                end
+               ,State#state{delayed_bindings=[]}
+               ,lists:reverse(Delayed)
+               );
+start_delayed_bindings(State) -> State.
+
+%% The module hears `{'kz_amqp_channel', {'new_channel', Reconnected}}' once
+%% its consumer is up on the channel and its bindings exist, and not before.
+%% `Reconnected' is `true' for a channel that replaces one that was lost.
+%% What a module does on hearing it -- `kz_cache_listener' dropping
+%% everything a cache held while no change notice could reach it -- is only
+%% right from the moment notices are heard again: told earlier, a document
+%% read between the flush and the consume would be trusted with nothing
+%% left to invalidate it.
+-spec notify_new_channel(state(), boolean()) -> state().
+notify_new_channel(#state{is_consuming='true'}=State, Reconnected) ->
+    gen_server:cast(self(), {'kz_amqp_channel', {'new_channel', Reconnected}}),
+    State;
+notify_new_channel(State, _Reconnected) -> State.
 
 -spec maybe_start_other_queues(state()) -> state().
 maybe_start_other_queues(#state{other_queues=[]}=State) ->

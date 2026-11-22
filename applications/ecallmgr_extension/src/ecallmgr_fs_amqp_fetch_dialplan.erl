@@ -30,8 +30,10 @@
 -define(HASHED_EXCHANGE_NAME(N), list_to_binary(["callmgr.route.", N])).
 
 -define(HASHED_EXCHANGE_HASH_HEADER(A), maps:get(hash_header, A, <<"call-id">>)).
+%% hash-header for RabbitMQ, x-hash-on for LavinMQ; each broker ignores the other's
 -define(HASHED_EXCHANGE_HASH(A), {<<"hash-header">>, 'longstr', ?HASHED_EXCHANGE_HASH_HEADER(A)}).
--define(HASHED_EXCHANGE_ARGS(A), [?HASHED_EXCHANGE_HASH(A)]).
+-define(HASHED_EXCHANGE_HASH_LAVIN(A), {<<"x-hash-on">>, 'longstr', ?HASHED_EXCHANGE_HASH_HEADER(A)}).
+-define(HASHED_EXCHANGE_ARGS(A), [?HASHED_EXCHANGE_HASH(A), ?HASHED_EXCHANGE_HASH_LAVIN(A)]).
 -define(HASHED_EXCHANGE_OPTIONS(A), [{'auto_delete', 'true'}
                                     ,{'arguments', ?HASHED_EXCHANGE_ARGS(A)}
                                     ]).

@@ -141,6 +141,9 @@
         "Fax-Info": {
             "type": "object"
         },
+        "File-Exists": {
+            "type": "string"
+        },
         "From": {
             "type": "string"
         },

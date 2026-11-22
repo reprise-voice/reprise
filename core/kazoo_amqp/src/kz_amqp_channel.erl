@@ -44,6 +44,7 @@
         ]).
 -export([maybe_publish/2]).
 -export([publish/2]).
+-export([publish_on/3]).
 -export([command/1
         ,command/2
         ]).
@@ -264,6 +265,30 @@ publish(#'basic.publish'{routing_key=RoutingKey}=BasicPub, AmqpMsg) ->
                          ,BasicPub#'basic.publish'{routing_key=RemoteRoutingKey}
                          ,ensure_amqp_zone(AmqpMsg)
                          )
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Publish on `Channel', and nowhere else, and answer what the channel
+%% said: `ok', or `blocked' while the broker holds publishers back, or
+%% `closing'. A channel that is gone is `{error, {noproc, _}}', and any other
+%% exit of the call is `{error, Reason}'.
+%%
+%% For a process that holds a channel and has to know what became of a
+%% publish on it -- one in confirm mode, reading the publish sequence number
+%% around the publish. `publish/2' finds its channel through
+%% `consumer_channel/0', which waits for `kz_amqp_assignments' when that one
+%% is gone, and does not say what the channel answered; this does neither.
+%% The message goes out as it is given -- `kz_amqp_util:prepare_basic_publish/5'
+%% builds one -- and a `consumer://' routing key is not resolved here.
+%% @end
+%%------------------------------------------------------------------------------
+-spec publish_on(pid(), basic_publish(), amqp_msg()) ->
+          'ok' | 'blocked' | 'closing' | {'error', any()}.
+publish_on(Channel, #'basic.publish'{}=BasicPub, #'amqp_msg'{}=AmqpMsg) when is_pid(Channel) ->
+    assert_valid_amqp_method(BasicPub),
+    try amqp_channel:call(Channel, BasicPub, AmqpMsg)
+    catch
+        'exit':Reason -> {'error', Reason}
     end.
 
 -spec extract_msg_id(binary()) -> binary().

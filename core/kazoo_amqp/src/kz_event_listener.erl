@@ -129,7 +129,10 @@ bindings('call_events') ->
     [{'bind', [{'exchange', [{'name', ?KZ_CALL_EVENTS_EXCHANGE}
                             ,{'type', <<"x-consistent-hash">>}
                             ,{'options', [{'auto_delete', 'true'}
-                                         ,{'arguments', [{<<"hash-header">>, 'longstr', <<"call-id">>}]}
+                                         %% hash-header for RabbitMQ, x-hash-on for LavinMQ; each ignores the other's
+                                         ,{'arguments', [{<<"hash-header">>, 'longstr', <<"call-id">>}
+                                                        ,{<<"x-hash-on">>, 'longstr', <<"call-id">>}
+                                                        ]}
                                          ]
                              }
                             ,{'bindings', [{'call', [{'source', ?EXCHANGE_CALLEVT}
@@ -149,7 +152,9 @@ bindings('presence') ->
     [{'bind', [{'exchange', [{'name', ?KZ_PRESENCE_EVENTS_EXCHANGE}
                             ,{'type', <<"x-consistent-hash">>}
                             ,{'options', [{'auto_delete', 'true'}
-                                         ,{'arguments', [{<<"hash-header">>, 'longstr', <<"presence-id">>}]}
+                                         ,{'arguments', [{<<"hash-header">>, 'longstr', <<"presence-id">>}
+                                                        ,{<<"x-hash-on">>, 'longstr', <<"presence-id">>}
+                                                        ]}
                                          ]
                              }
                             ,{'bindings', presence_bindings()}

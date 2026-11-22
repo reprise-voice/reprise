@@ -34,6 +34,36 @@ call_routing_key_test_() ->
      }
     ].
 
+%% LavinMQ's consistent-hash exchange routes only on a string header; a
+%% `binary' (AMQP byte array) closes the publisher's channel.
+event_publish_headers_test_() ->
+    CallId = kz_binary:rand_hex(4),
+    [?_assertEqual([{'headers', [{<<"call-id">>, 'longstr', CallId}]}]
+                  ,kapi_call:event_publish_headers(CallId)
+                  )
+    ].
+
+%% ecallmgr republishes switch events through publish_event, which keeps
+%% only the headers the definition lists; the recorder skips a RECORD_STOP
+%% whose file the switch already deleted only if File-Exists survives.
+record_stop_keeps_file_exists_test() ->
+    Event = [{<<"Event-Category">>, <<"call_event">>}
+            ,{<<"Event-Name">>, <<"RECORD_STOP">>}
+            ,{<<"Call-ID">>, kz_binary:rand_hex(4)}
+            ,{<<"File-Exists">>, 'false'}
+            ,{<<"Not-A-Call-Event-Header">>, <<"dropped">>}
+            | kz_api:default_headers(<<"ecallmgr">>, <<"test">>)
+            ],
+    {'ok', Payload} = kz_api:prepare_api_payload(Event
+                                                ,[]
+                                                ,[{'formatter', fun kapi_call:event/1}
+                                                 ,{'remove_recursive', 'false'}
+                                                 ]
+                                                ),
+    Built = kz_json:decode(Payload),
+    ?assertEqual('false', kz_json:get_value(<<"File-Exists">>, Built)),
+    ?assertEqual('undefined', kz_json:get_value(<<"Not-A-Call-Event-Header">>, Built)).
+
 update_name_and_values_test_() ->
     Test = fun kapi_call:update_name_and_values/2,
     EventName = kz_binary:rand_hex(4),

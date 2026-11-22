@@ -35,6 +35,9 @@
             "type": "string"
         },
         "Options": {
+            "items": {
+                "type": "string"
+            },
             "type": "string"
         },
         "Outbound-Flags": {

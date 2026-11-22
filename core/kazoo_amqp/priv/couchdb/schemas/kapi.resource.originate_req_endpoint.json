@@ -24,6 +24,10 @@
                 "sip"
             ]
         },
+        "Exclude-Outgoing-Extra-Header": {
+            "minLength": 1,
+            "type": "string"
+        },
         "Ignore-Early-Media": {
             "type": "boolean"
         }

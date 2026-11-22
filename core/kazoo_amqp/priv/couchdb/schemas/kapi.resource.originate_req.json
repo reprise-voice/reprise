@@ -110,6 +110,10 @@
             "type": "string"
         },
         "Endpoints": {
+            "items": {
+                "$ref": "kapi.dialplan.bridge_endpoint",
+                "type": "object"
+            },
             "type": "string"
         },
         "Event-Category": {

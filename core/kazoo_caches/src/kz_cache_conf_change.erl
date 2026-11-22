@@ -43,13 +43,16 @@ add_bindings(Name, NewChannelFlush, ChannelReconnectFlush) ->
     _ = maybe_bind_for_new_channel(Name, NewChannelFlush),
     maybe_bind_for_reconnected_channel(Name, ChannelReconnectFlush).
 
+%% Bound with the bare name: `kazoo_bindings' prepends a responder's payload
+%% to the mapped arguments as one argument, so `[Name]' here would have
+%% reached `new_channel_flush/1' as a list and flushed nothing.
 maybe_bind_for_new_channel(_Name, 'false') -> 'ok';
 maybe_bind_for_new_channel(Name, 'true') ->
-    kazoo_bindings:bind(kz_cache_listener:new_channel_flush_binding(), ?MODULE, 'new_channel_flush', [Name]).
+    kazoo_bindings:bind(kz_cache_listener:new_channel_flush_binding(), ?MODULE, 'new_channel_flush', Name).
 
 maybe_bind_for_reconnected_channel(_Name, 'false') -> 'ok';
 maybe_bind_for_reconnected_channel(Name, 'true') ->
-    kazoo_bindings:bind(kz_cache_listener:channel_reconnect_flush_binding(), ?MODULE, 'channel_reconnect_flush', [Name]).
+    kazoo_bindings:bind(kz_cache_listener:channel_reconnect_flush_binding(), ?MODULE, 'channel_reconnect_flush', Name).
 
 -spec new_channel_flush(atom()) -> 'ok'.
 new_channel_flush(Name) ->
@@ -58,7 +61,7 @@ new_channel_flush(Name) ->
 
 -spec channel_reconnect_flush(atom()) -> 'ok'.
 channel_reconnect_flush(Name) ->
-    lager:debug("reconnected channel, flush everything from ~s", [Name]),
+    lager:info("channel came back: flushing everything from ~s", [Name]),
     kz_cache_ets:flush(Name).
 
 -spec handle_change(atom(), kapi_conf:doc()) -> 'ok'.

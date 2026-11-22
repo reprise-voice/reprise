@@ -4,6 +4,9 @@
     "description": "AMQP API for authz.balance_check_req",
     "properties": {
         "Accounts": {
+            "items": {
+                "type": "string"
+            },
             "type": "string"
         },
         "Event-Category": {
