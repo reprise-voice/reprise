@@ -43,7 +43,7 @@
             "type": "string"
         },
         "realm": {
-            "default": "mobile.k.zswitch.net",
+            "default": "mobile.example.com",
             "description": "kazoo_endpoint.mobile realm",
             "type": "string"
         },

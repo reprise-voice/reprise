@@ -4,7 +4,7 @@
     "description": "Schema for crossbar.accounts system_config",
     "properties": {
         "account_realm_suffix": {
-            "default": "sip.2600hz.com",
+            "default": "sip.example.com",
             "description": "crossbar.accounts account realm suffix",
             "type": "string"
         },

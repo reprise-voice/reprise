@@ -24,7 +24,7 @@
 
 -include("crossbar.hrl").
 
--define(DEFAULT_FAX_SMTP_DOMAIN, <<"fax.kazoo.io">>).
+-define(DEFAULT_FAX_SMTP_DOMAIN, <<"fax.example.com">>).
 
 -define(SMTP_EMAIL_FIELD, {<<"pvt_smtp_email_address">>, <<"custom_smtp_address">>}).
 

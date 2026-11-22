@@ -66,7 +66,7 @@ Key | Description | Type | Default | Required | Support Level
 `default_fax_extension` | fax default fax extension | `string()` | `.tiff` | `false` |
 `default_retry_count` | fax default retry count | `integer()` | `3` | `false` |
 `default_retry_period` | fax default retry period | `integer()` | `300` | `false` |
-`default_smtp_domain` | fax default smtp domain | `string()` | `fax.kazoo.io` | `false` |
+`default_smtp_domain` | fax default smtp domain | `string()` | `fax.example.com` | `false` |
 `delete_empty_faxes` | fax delete empty faxes | `boolean()` | `false` | `false` |
 `denied_content_types` | fax denied content types | `array(object())` | `["{"prefix":"image/"}"]` | `false` |
 `endpoint_timeout` | fax endpoint timeout | `integer()` | `40` | `false` |

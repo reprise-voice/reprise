@@ -144,7 +144,7 @@
 -define(ACCOUNTS_CONFIG_CAT, <<"crossbar.accounts">>).
 
 -define(ACCOUNT_REALM_SUFFIX
-       ,kapps_config:get_binary(?ACCOUNTS_CONFIG_CAT, <<"account_realm_suffix">>, <<"sip.2600hz.com">>)
+       ,kapps_config:get_binary(?ACCOUNTS_CONFIG_CAT, <<"account_realm_suffix">>, <<"sip.example.com">>)
        ).
 -define(RANDOM_REALM_STRENGTH
        ,kapps_config:get_integer(?ACCOUNTS_CONFIG_CAT, <<"random_realm_strength">>, 3)

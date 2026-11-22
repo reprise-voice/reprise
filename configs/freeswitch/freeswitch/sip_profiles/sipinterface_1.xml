@@ -61,7 +61,7 @@
             <!--<param name="outbound-proxy" value="127.0.0.1"/>-->
             <!--<param name="sip-domain" value="sip.2600hz.com"/>-->
             <!--<param name="contact-user" value="2600hz"/>-->
-            <param name="user-agent-string" value="2600Hz"/>
+            <param name="user-agent-string" value="Reprise"/>
             <param name="enable-100rel" value="false"/>
             <param name="max-proceeding" value="5000"/>
             <!--<param name="max-calls" value="250"/>-->

@@ -57,7 +57,7 @@ If no matches are found for the `from` email address in either user or `smtp_per
 
 This is an example of a simple bind configuration for the faxboxes generated `smtp_email_address` addresses.
 
-Note: this example assumes that `fax.kazoo.io` is the `default_smtp_domain` configured in `v2/system_config/fax`.
+Note: this example assumes that `fax.example.com` is the `default_smtp_domain` configured in `v2/system_config/fax`.
 
 ```
 $ORIGIN kazoo.io.
@@ -66,7 +66,7 @@ $ORIGIN kazoo.io.
         TXT "v=spf1 mx ptr -all"
 mail-01     A   x.x.x.x
 mail-02     A   x.x.x.x
-$ORIGIN fax.kazoo.io.
+$ORIGIN fax.example.com.
 *			MX	5 mail-01.kazoo.io.
 *           MX  5 mail-02.kazoo.io.
 ```

@@ -60,7 +60,7 @@ create_config() ->
     write_conf('standard_entry', 'write_standard_config', ADir
               ,[['sysDescr', "Erlang/OTP Agent"]
                ,['sysName', "Kazoo agent"]
-               ,['sysContact', "info@2600hz.com"]
+               ,['sysContact', ""]
                ,['sysLocation', "US"]
                ,['sysObjectID', [3, 6, 1, 4, 1, 193, 19]]
                ,['sysServices', 72]

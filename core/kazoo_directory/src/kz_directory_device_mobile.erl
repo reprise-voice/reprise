@@ -34,7 +34,7 @@
 -define(DEFAULT_MOBILE_FORMATER, <<"^\\+?1?([2-9][0-9]{2}[2-9][0-9]{6})$">>).
 -define(DEFAULT_MOBILE_PREFIX, <<>>).
 -define(DEFAULT_MOBILE_SUFFIX, <<>>).
--define(DEFAULT_MOBILE_REALM, <<"mobile.k.zswitch.net">>).
+-define(DEFAULT_MOBILE_REALM, <<"mobile.example.com">>).
 -define(DEFAULT_MOBILE_CODECS, [<<"PCMU">>]).
 -define(DEFAULT_CALLER_ID_NAME, <<"unknown">>).
 

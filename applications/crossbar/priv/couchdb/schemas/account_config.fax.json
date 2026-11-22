@@ -4,7 +4,7 @@
     "description": "Schema for fax account_config",
     "properties": {
         "default_smtp_domain": {
-            "default": "fax.kazoo.io",
+            "default": "fax.example.com",
             "description": "fax defaultsmtp domain",
             "type": "string"
         },

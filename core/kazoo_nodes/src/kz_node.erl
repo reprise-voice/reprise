@@ -394,9 +394,6 @@ maybe_print_node_info(NodeInfo) ->
     maybe_print_node_info(kz_json:to_proplist(NodeInfo)).
 
 -spec print_node_info({kz_term:ne_binary(), term()}) -> 'ok'.
-print_node_info({<<"telemetry">>, Info}) ->
-    Leader = kz_json:get_ne_binary_value(<<"leader">>, Info),
-    format(?HEADER_COL ++ ": Leader is ~s~n", [<<"Telemetry">>, Leader]);
 print_node_info({<<"amqp">>, Info}) ->
     kz_json:foreach(fun print_node_info/1, Info);
 print_node_info({<<"couch">>, Info}) ->
