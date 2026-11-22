@@ -16,6 +16,8 @@
         ,add_firebase_app/2
         ,add_apple_app/2, add_apple_app/3
         ,add_apple_pem_file/1
+        ,set_device_push/5
+        ,clear_device_push/2
         ,push/2
         ]).
 
@@ -72,6 +74,39 @@ add_apple_pem_file(PemKeyFile) ->
                 {'error', _} = Err -> Err
             end;
         {'error', _} = Err -> Err
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Arm a device for push wakes by hand: write the push object a client
+%% would write once it registers. `TokenType' selects the push module (see
+%% pusher.md), `TokenApp' the app it pushes for, `TokenId' the device token.
+%% @end
+%%------------------------------------------------------------------------------
+-spec set_device_push(kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binary()) -> 'ok'.
+set_device_push(AccountId, DeviceId, TokenType, TokenApp, TokenId) ->
+    Push = kz_json:from_list([{<<"Token-App">>, TokenApp}
+                             ,{<<"Token-Type">>, TokenType}
+                             ,{<<"Token-ID">>, TokenId}
+                             ]),
+    update_device(AccountId, DeviceId, fun(Device) -> kzd_devices:set_push(Device, Push) end).
+
+-spec clear_device_push(kz_term:ne_binary(), kz_term:ne_binary()) -> 'ok'.
+clear_device_push(AccountId, DeviceId) ->
+    update_device(AccountId, DeviceId, fun(Device) -> kz_json:delete_key(<<"push">>, Device) end).
+
+-spec update_device(kz_term:ne_binary(), kz_term:ne_binary(), fun((kzd_devices:doc()) -> kzd_devices:doc())) -> 'ok'.
+update_device(AccountId, DeviceId, Update) ->
+    case kzd_devices:fetch(AccountId, DeviceId) of
+        {'ok', Device} ->
+            AccountDb = kzs_util:format_account_db(AccountId),
+            case kz_datamgr:save_doc(AccountDb, Update(Device)) of
+                {'ok', Saved} ->
+                    io:format("push object for ~s/~s: ~s~n"
+                             ,[AccountId, DeviceId, kz_json:encode(kzd_devices:push(Saved, kz_json:new()))]
+                             );
+                {'error', Error} -> io:format("error: ~p~n", [Error])
+            end;
+        {'error', Error} -> io:format("error: ~p~n", [Error])
     end.
 
 -spec push(kz_term:ne_binary(), kz_term:ne_binary()) -> 'ok'.

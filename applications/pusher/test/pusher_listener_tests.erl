@@ -19,6 +19,33 @@
 %%%=============================================================================
 
 %%------------------------------------------------------------------------------
+%% @doc Token types beyond the built-in ones are served by the modules
+%% `token_type_modules' maps them to, when those are loadable push modules.
+%% @end
+%%------------------------------------------------------------------------------
+configured_pm_module_test_() ->
+    Modules = kz_json:from_list([{<<"example">>, <<"pm_apple">>}
+                                ,{<<"not_a_pusher">>, <<"lists">>}
+                                ,{<<"missing">>, <<"pm_no_such_module">>}
+                                ]),
+    [{"a token type mapped to a push module is served by it"
+     ,?_assertEqual('pm_apple', pusher_listener:configured_pm_module(<<"example">>, Modules))
+     }
+    ,{"a token type that is not mapped has no module"
+     ,?_assertEqual('undefined', pusher_listener:configured_pm_module(<<"unmapped">>, Modules))
+     }
+    ,{"a module without the pusher_module callbacks is refused"
+     ,?_assertEqual('undefined', pusher_listener:configured_pm_module(<<"not_a_pusher">>, Modules))
+     }
+    ,{"a module that cannot be loaded is refused"
+     ,?_assertEqual('undefined', pusher_listener:configured_pm_module(<<"missing">>, Modules))
+     }
+    ,{"nothing is mapped by default"
+     ,?_assertEqual('undefined', pusher_listener:configured_pm_module(<<"example">>, kz_json:new()))
+     }
+    ].
+
+%%------------------------------------------------------------------------------
 %% @doc Test converting legacy push reqs into endpoint push reqs.
 %% @end
 %%------------------------------------------------------------------------------

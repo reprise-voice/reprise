@@ -8,6 +8,21 @@ freeswitch will send the failover to kamailio, kamailio uses kazoo_query to call
 
 if the device is already registered, and the client is alive, kamailio will allow the SIP transaction to continue and the call will be handled as usual
 
+## Push modules
+
+The `Token-Type` of the device's `push` object selects the module that sends the notification.
+
+* `apple` - `pm_apple`, APNs, see [apns.md](apns.md)
+* `firebase` / `firebase_v1` - `pm_firebase`, FCM
+
+Further token types can be served by modules that live outside this application, for example in an application added to the release. A module implements the `pusher_module` behaviour (`enabled/1` and `push/4`) and is mapped to its token type in `system_config/pusher`, key `token_type_modules` (default `{}`):
+
+```json
+{"token_type_modules": {"example": "pm_example"}}
+```
+
+Set it in the `default` section of `system_configs/pusher` for the whole cluster (`sup kapps_config set_json pusher token_type_modules '{"example": "pm_example"}'` sets it for the node it runs on). A token type that is neither built in nor mapped to a loadable module is refused as unknown. A mapping cannot replace a built-in token type.
+
 ## Quick Start
 
 ### What you need
@@ -104,6 +119,8 @@ In order for the push services from Apple / Firebase to work they need to be con
 * `sup pusher_maintenance add_firebase_v1_app_from_service_account_file AppId ServiceAccountFilename` (if you have the service file on the Kazoo server)
 * `sup pusher_maintenance add_apple_app AppId CertFile` (uses the default APNs host: api.push.apple.com)
 * `sup pusher_maintenance add_apple_app AppId CertFile Host` (uses a custom APNs host, i.e. api.development.push.apple.com)
+* `sup pusher_maintenance set_device_push AccountId DeviceId TokenType TokenApp TokenId` (writes a device's push object by hand, as a client would once it registers)
+* `sup pusher_maintenance clear_device_push AccountId DeviceId`
 
 ### iOS Certificates and Private Keys
 

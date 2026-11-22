@@ -8,4 +8,6 @@
 | `add_firebase_app/2` | `(AppId,Secret)` | |
 | `add_firebase_v1_app/2` | `(AppId,ServiceAccountData)` | |
 | `add_firebase_v1_app_from_service_account_file/2` | `(AppId,ServiceAccountFilename)` | |
+| `clear_device_push/2` | `(AccountId,DeviceId)` | |
 | `push/2` | `(AccountId,DeviceId)` | |
+| `set_device_push/5` | `(AccountId,DeviceId,TokenType,TokenApp,TokenId)` | |

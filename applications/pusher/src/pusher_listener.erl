@@ -32,7 +32,9 @@
         ]).
 
 -ifdef(TEST).
--export([to_endpoint_push_req/2]).
+-export([to_endpoint_push_req/2
+        ,configured_pm_module/2
+        ]).
 -endif.
 
 -include("pusher.hrl").
@@ -105,13 +107,53 @@ handle_push(JObj, _Props) ->
     _ = maybe_push_to_target(JObj1, PushProps),
     'ok'.
 
+%%------------------------------------------------------------------------------
+%% @doc The push module for a token type: the built-in ones, then the
+%% `token_type_modules' object of `system_config/pusher', which maps further
+%% token types to modules (`{"<token type>": "<module>"}', default `{}'). A
+%% configured module has to implement the `pusher_module' behaviour and be on
+%% the code path, for example in an application added to the release; one
+%% that is not is `undefined', so the push is refused as an unknown type.
+%% @end
+%%------------------------------------------------------------------------------
 -spec pm_module(kz_term:api_ne_binary()) -> maybe_pm_module().
 pm_module(<<"google">>) -> pm_module(?TOKEN_TYPE_FIREBASE);
 pm_module(<<"android">>) -> pm_module(?TOKEN_TYPE_FIREBASE);
 pm_module(?TOKEN_TYPE_APPLE) -> 'pm_apple';
 pm_module(?TOKEN_TYPE_FIREBASE) -> 'pm_firebase';
 pm_module(?TOKEN_TYPE_FIREBASE_V1) -> 'pm_firebase';
-pm_module(_) -> 'undefined'.
+pm_module('undefined') -> 'undefined';
+pm_module(TokenType) ->
+    configured_pm_module(TokenType
+                        ,kapps_config:get_json(?CONFIG_CAT, ?TOKEN_TYPE_MODULES_KEY, kz_json:new())
+                        ).
+
+%%------------------------------------------------------------------------------
+%% @doc The module `token_type_modules' names for a token type, if it is
+%% loadable and exports the `pusher_module' callbacks. The module name comes
+%% from system_config, not from the push request, so it may become an atom.
+%% @end
+%%------------------------------------------------------------------------------
+-spec configured_pm_module(kz_term:ne_binary(), kz_json:object()) -> maybe_pm_module().
+configured_pm_module(TokenType, Modules) ->
+    case kz_json:get_ne_binary_value(TokenType, Modules) of
+        'undefined' -> 'undefined';
+        Name -> loadable_pm_module(TokenType, kz_term:to_atom(Name, 'true'))
+    end.
+
+-spec loadable_pm_module(kz_term:ne_binary(), module()) -> maybe_pm_module().
+loadable_pm_module(TokenType, Module) ->
+    case code:ensure_loaded(Module) =:= {'module', Module}
+        andalso erlang:function_exported(Module, 'enabled', 1)
+        andalso erlang:function_exported(Module, 'push', 4)
+    of
+        'true' -> Module;
+        'false' ->
+            lager:warning("push module ~s configured for token type ~s is not a loadable pusher_module"
+                         ,[Module, TokenType]
+                         ),
+            'undefined'
+    end.
 
 -spec add_timestamp_to_req(kz_json:object()) -> kz_json:object().
 add_timestamp_to_req(JObj) ->

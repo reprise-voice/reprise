@@ -63,6 +63,14 @@
                 }
             },
             "type": "object"
+        },
+        "token_type_modules": {
+            "additionalProperties": {
+                "type": "string"
+            },
+            "default": {},
+            "description": "Further push token types and the module (pusher_module behaviour, outside the pusher application) that serves each, as {\"<token type>\": \"<module>\"}; built-in token types cannot be remapped",
+            "type": "object"
         }
     },
     "type": "object"

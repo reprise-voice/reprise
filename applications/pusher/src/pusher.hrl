@@ -17,7 +17,11 @@
 -define(TOKEN_TYPE_APPLE, <<"apple">>).
 -define(TOKEN_TYPE_FIREBASE, <<"firebase">>).
 -define(TOKEN_TYPE_FIREBASE_V1, <<"firebase_v1">>).
+%% Token types with a gen_server pusher module started by pusher_module_sup
 -define(TOKEN_MOD_TYPES, [?TOKEN_TYPE_APPLE, ?TOKEN_TYPE_FIREBASE]).
+%% system_config/pusher object mapping further token types to push modules
+%% (pusher_module behaviour) that live outside this application
+-define(TOKEN_TYPE_MODULES_KEY, <<"token_type_modules">>).
 
 -define(KEY_TIMESTAMP_MS, <<"Timestamp-MS">>).
 
