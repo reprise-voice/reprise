@@ -1,0 +1,70 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "system_config.number_manager.telnyx2",
+    "description": "Schema for number_manager.telnyx2 system_config",
+    "properties": {
+        "connection_id": {
+            "description": "Telnyx connection id assigned to numbers ordered through this carrier",
+            "type": "string"
+        },
+        "debug": {
+            "default": false,
+            "description": "number_manager.telnyx2 debug",
+            "type": "boolean"
+        },
+        "default_country_code": {
+            "default": "US",
+            "description": "country code used for E911 addresses when the address does not carry one",
+            "type": "string"
+        },
+        "enable_provisioning": {
+            "default": true,
+            "description": "number_manager.telnyx2 enable provisioning",
+            "type": "boolean"
+        },
+        "messaging_profile_id": {
+            "description": "Telnyx messaging profile id assigned to numbers ordered through this carrier",
+            "type": "string"
+        },
+        "monthly_cost": {
+            "default": 1.0,
+            "description": "allowed monthly recurring cost when acquiring number",
+            "type": "number"
+        },
+        "order_poll_attempts": {
+            "default": 10,
+            "description": "how many times to poll a pending number order before giving up",
+            "type": "integer"
+        },
+        "order_poll_interval_ms": {
+            "default": 2000,
+            "description": "time to wait between polls of a pending number order in milliseconds",
+            "type": "integer"
+        },
+        "sandbox_provisioning": {
+            "default": false,
+            "description": "number_manager.telnyx2 sandbox provisioning",
+            "type": "boolean"
+        },
+        "should_filter_rates": {
+            "default": false,
+            "description": "should search results be filtered based on configured allowed cost?",
+            "type": "boolean"
+        },
+        "should_keep_best_effort": {
+            "default": false,
+            "description": "should search results also contain 'best effort' results?",
+            "type": "boolean"
+        },
+        "token": {
+            "description": "number_manager.telnyx2 token",
+            "type": "string"
+        },
+        "upfront_cost": {
+            "default": 1.0,
+            "description": "allowed upfront cost when acquiring number",
+            "type": "number"
+        }
+    },
+    "type": "object"
+}

@@ -1,0 +1,82 @@
+{
+    "data": [
+        {
+            "best_effort": false,
+            "cost_information": {
+                "currency": "USD",
+                "monthly_cost": "1.00000",
+                "upfront_cost": "1.00000"
+            },
+            "features": [
+                {
+                    "name": "fax"
+                },
+                {
+                    "name": "emergency"
+                },
+                {
+                    "name": "voice"
+                },
+                {
+                    "name": "sms"
+                },
+                {
+                    "name": "mms"
+                }
+            ],
+            "phone_number": "+18006198104",
+            "phone_number_type": "toll_free",
+            "quickship": true,
+            "record_type": "available_phone_number",
+            "region_information": [
+                {
+                    "region_name": "US",
+                    "region_type": "country_code"
+                }
+            ],
+            "reservable": true,
+            "vanity_format": null
+        },
+        {
+            "best_effort": false,
+            "cost_information": {
+                "currency": "USD",
+                "monthly_cost": "1.00000",
+                "upfront_cost": "1.00000"
+            },
+            "features": [
+                {
+                    "name": "fax"
+                },
+                {
+                    "name": "emergency"
+                },
+                {
+                    "name": "voice"
+                },
+                {
+                    "name": "sms"
+                },
+                {
+                    "name": "mms"
+                }
+            ],
+            "phone_number": "+18009177894",
+            "phone_number_type": "toll_free",
+            "quickship": true,
+            "record_type": "available_phone_number",
+            "region_information": [
+                {
+                    "region_name": "US",
+                    "region_type": "country_code"
+                }
+            ],
+            "reservable": true,
+            "vanity_format": null
+        }
+    ],
+    "meta": {
+        "best_effort_results": 50,
+        "total_results": 100
+    }
+}

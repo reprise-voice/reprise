@@ -1,0 +1,88 @@
+{
+    "data": [
+        {
+            "best_effort": false,
+            "cost_information": {
+                "currency": "USD",
+                "monthly_cost": "1.00000",
+                "upfront_cost": "1.00000"
+            },
+            "features": [
+                {
+                    "name": "voice"
+                },
+                {
+                    "name": "local_calling"
+                },
+                {
+                    "name": "emergency"
+                },
+                {
+                    "name": "fax"
+                }
+            ],
+            "phone_number": "+441514561131",
+            "phone_number_type": "local",
+            "quickship": false,
+            "record_type": "available_phone_number",
+            "region_information": [
+                {
+                    "region_name": "LIVERPOOL",
+                    "region_type": "location"
+                },
+                {
+                    "region_name": "GB",
+                    "region_type": "country_code"
+                }
+            ],
+            "reservable": true,
+            "vanity_format": null
+        },
+        {
+            "best_effort": false,
+            "cost_information": {
+                "currency": "USD",
+                "monthly_cost": "1.00000",
+                "upfront_cost": "1.00000"
+            },
+            "features": [
+                {
+                    "name": "voice"
+                },
+                {
+                    "name": "local_calling"
+                },
+                {
+                    "name": "emergency"
+                },
+                {
+                    "name": "fax"
+                }
+            ],
+            "phone_number": "+441514561152",
+            "phone_number_type": "local",
+            "quickship": false,
+            "record_type": "available_phone_number",
+            "region_information": [
+                {
+                    "region_name": "LIVERPOOL",
+                    "region_type": "location"
+                },
+                {
+                    "region_name": "GB",
+                    "region_type": "country_code"
+                }
+            ],
+            "reservable": true,
+            "vanity_format": null
+        }
+    ],
+    "meta": {
+        "best_effort_results": 0,
+        "total_results": 5
+    },
+    "metadata": {
+        "best_effort_results": 0,
+        "total_results": 5
+    }
+}

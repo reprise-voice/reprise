@@ -1,0 +1,17 @@
+{
+    "data": {
+        "address_book": true,
+        "administrative_area": "CA",
+        "business_name": "Valued Customer",
+        "country_code": "US",
+        "created_at": "2018-01-01T00:00:00.000000Z",
+        "extended_address": null,
+        "id": "1293384261075731501",
+        "locality": "SAN FRANCISCO",
+        "postal_code": "94123",
+        "record_type": "address",
+        "street_address": "301 MARINA BLVD",
+        "updated_at": "2018-01-01T00:00:00.000000Z",
+        "validate_address": true
+    }
+}

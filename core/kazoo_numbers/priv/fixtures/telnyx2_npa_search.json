@@ -1,0 +1,143 @@
+{
+    "data": [
+        {
+            "best_effort": false,
+            "cost_information": {
+                "currency": "USD",
+                "monthly_cost": "6.54",
+                "upfront_cost": "3.21"
+            },
+            "features": [
+                {
+                    "name": "sms"
+                },
+                {
+                    "name": "voice"
+                }
+            ],
+            "phone_number": "+13013596695",
+            "quickship": true,
+            "record_type": "available_phone_number",
+            "region_information": [
+                {
+                    "region_name": "US",
+                    "region_type": "country_code"
+                }
+            ],
+            "reservable": true,
+            "vanity_format": ""
+        },
+        {
+            "best_effort": false,
+            "cost_information": {
+                "currency": "USD",
+                "monthly_cost": "6.54",
+                "upfront_cost": "3.21"
+            },
+            "features": [
+                {
+                    "name": "sms"
+                },
+                {
+                    "name": "voice"
+                }
+            ],
+            "phone_number": "+13013591789",
+            "quickship": true,
+            "record_type": "available_phone_number",
+            "region_information": [
+                {
+                    "region_name": "US",
+                    "region_type": "country_code"
+                }
+            ],
+            "reservable": true,
+            "vanity_format": ""
+        },
+        {
+            "best_effort": false,
+            "cost_information": {
+                "currency": "USD",
+                "monthly_cost": "6.54",
+                "upfront_cost": "3.21"
+            },
+            "features": [
+                {
+                    "name": "sms"
+                },
+                {
+                    "name": "voice"
+                }
+            ],
+            "phone_number": "+13013590340",
+            "quickship": true,
+            "record_type": "available_phone_number",
+            "region_information": [
+                {
+                    "region_name": "US",
+                    "region_type": "country_code"
+                }
+            ],
+            "reservable": true,
+            "vanity_format": ""
+        },
+        {
+            "best_effort": false,
+            "cost_information": {
+                "currency": "USD",
+                "monthly_cost": "6.54",
+                "upfront_cost": "3.21"
+            },
+            "features": [
+                {
+                    "name": "sms"
+                },
+                {
+                    "name": "voice"
+                }
+            ],
+            "phone_number": "+13013596520",
+            "quickship": true,
+            "record_type": "available_phone_number",
+            "region_information": [
+                {
+                    "region_name": "US",
+                    "region_type": "country_code"
+                }
+            ],
+            "reservable": true,
+            "vanity_format": ""
+        },
+        {
+            "best_effort": false,
+            "cost_information": {
+                "currency": "USD",
+                "monthly_cost": "6.54",
+                "upfront_cost": "3.21"
+            },
+            "features": [
+                {
+                    "name": "sms"
+                },
+                {
+                    "name": "voice"
+                }
+            ],
+            "phone_number": "+13013596526",
+            "quickship": true,
+            "record_type": "available_phone_number",
+            "region_information": [
+                {
+                    "region_name": "US",
+                    "region_type": "country_code"
+                }
+            ],
+            "reservable": true,
+            "vanity_format": ""
+        }
+    ],
+    "meta": {
+        "best_effort_results": 50,
+        "total_results": 100
+    }
+}

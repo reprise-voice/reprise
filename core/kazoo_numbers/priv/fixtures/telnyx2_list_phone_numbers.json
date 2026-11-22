@@ -1,0 +1,29 @@
+{
+    "data": [
+        {
+            "billing_group_id": null,
+            "call_forwarding_enabled": false,
+            "caller_id_name_enabled": false,
+            "cnam_listing_enabled": false,
+            "connection_id": "346789098765567",
+            "connection_name": "test connection",
+            "customer_reference": null,
+            "emergency_address_id": null,
+            "emergency_enabled": false,
+            "external_pin": null,
+            "id": "1293384261075731499",
+            "phone_number": "+14355550107",
+            "phone_number_type": "local",
+            "purchased_at": "2018-01-01T00:00:00.000000Z",
+            "record_type": "phone_number",
+            "status": "active",
+            "t38_fax_gateway_enabled": false
+        }
+    ],
+    "meta": {
+        "page_number": 1,
+        "page_size": 20,
+        "total_pages": 1,
+        "total_results": 1
+    }
+}
