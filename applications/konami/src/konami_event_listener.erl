@@ -37,7 +37,7 @@
         ]).
 
 -include("konami.hrl").
--include_lib("kazoo_events/include/kz_hooks.hrl").
+-include_lib("kazoo_hooks/include/kz_hooks.hrl").
 
 -define(SERVER, ?MODULE).
 
@@ -53,12 +53,13 @@
 -define(BINDINGS, [{'self', []}]).
 -define(RESPONDERS, [{{?MODULE, 'handle_call_event'}
                      ,[{<<"call_event">>, <<"*">>}
-                      ,{<<"error">>, <<"*">>}
+                      ,{<<"error">>, <<"dialplan">>}
                       ]
                      }
                     ,{{?MODULE, 'handle_originate_event'}
                      ,[{<<"resource">>, <<"*">>}
-                      ,{<<"error">>, <<"*">>}
+                      ,{<<"dialplan">>, <<"originate_ready">>}
+                      ,{<<"error">>, <<"originate_resp">>}
                       ]
                      }
                     ,{{?MODULE, 'handle_metaflow_req'}
@@ -226,7 +227,7 @@ handle_call_event(JObj, _Props, Event) ->
 
 -spec handle_originate_event(kz_json:object(), kz_term:proplist()) -> any().
 handle_originate_event(JObj, _Props) ->
-    CallId = kz_json:get_first_defined([<<"Call-ID">>, <<"Outbound-Call-ID">>], JObj),
+    CallId = konami_originate:event_key(JObj),
     relay_to_pids(CallId, JObj).
 
 -spec handle_metaflow_req(kz_json:object(), kz_term:proplist()) -> any().
@@ -290,7 +291,7 @@ relay_to_fsm(CallId, Event, JObj) ->
 relay_to_pids(CallId, JObj) ->
     [begin
          kapps_call_command:relay_event(Pid, JObj),
-         lager:debug("relaying ~p to ~p", [kz_util:get_event_type(JObj), Pid])
+         lager:debug("relaying ~p to ~p", [kz_api:event_type(JObj), Pid])
      end
      || Pid <- pids_for_callid(CallId)
     ].

@@ -19,6 +19,10 @@
 
 -include("konami.hrl").
 
+-ifdef(TEST).
+-export([maybe_update_metaflow/3]).
+-endif.
+
 -spec handle(kz_json:object(), kapps_call:call()) ->
           {'continue', kapps_call:call()} |
           {'stop', kapps_call:call()}.
@@ -37,26 +41,12 @@ handle(Data, Call) ->
 -spec maybe_update_metaflow(kz_json:object(), kapps_call:call(), kz_json:objects()) ->
           {'stop', kapps_call:call()}.
 maybe_update_metaflow(Data, Call, Results) ->
-    case [Result || Result <- Results, is_resp(Result)] of
-        [] ->
-            lager:debug("no useful responses"),
-            {'stop', Call};
-        [Resp|_] ->
-            CallId = kz_json:get_value(<<"Call-ID">>, Resp),
-            maybe_update_metaflow(Data, Call, Results, CallId)
-    end.
-
--spec maybe_update_metaflow(kz_json:object(), kapps_call:call(), kz_json:objects(), kz_term:api_binary()) ->
-          {'stop', kapps_call:call()}.
-maybe_update_metaflow(Data, Call, Results, CallId) ->
-    case [Result || Result <- Results, is_originate_uuid(Result, CallId)] of
-        [] ->
-            lager:debug("no matching originate_uuid"),
-            {'stop', Call};
-        [OriginateUUID|_] ->
-            ControlQueue = kz_json:get_value(<<"Outbound-Call-Control-Queue">>, OriginateUUID),
-            lager:debug("should use ~s for control of ~s", [ControlQueue, CallId]),
-            maybe_update_metaflow_control(Data, Call, CallId, ControlQueue, source_leg_of_dtmf(Data, Call))
+    case konami_originate:control(Results) of
+        {'ok', CallId, ControlQueue} ->
+            maybe_update_metaflow_control(Data, Call, CallId, ControlQueue, source_leg_of_dtmf(Data, Call));
+        {'error', 'no_control'} ->
+            lager:debug("no successful originate response with matching control"),
+            {'stop', Call}
     end.
 
 -spec maybe_update_metaflow_control(kz_json:object(), kapps_call:call(), kz_term:ne_binary(), kz_term:ne_binary(), 'a' | 'b') ->
@@ -71,10 +61,10 @@ maybe_update_metaflow_control(_Data, Call, CallId, ControlQueue, 'a') ->
                                   ),
 
     {'stop', Call};
-maybe_update_metaflow_control(_Data, Call, CallId, _ControlQueue, 'b') ->
-    lager:debug("update ~s to ~s with ctl ~s", [kapps_call:other_leg_call_id(Call), CallId, _ControlQueue]),
+maybe_update_metaflow_control(_Data, Call, CallId, ControlQueue, 'b') ->
+    lager:debug("update ~s to ~s with ctl ~s", [kapps_call:other_leg_call_id(Call), CallId, ControlQueue]),
 
-    konami_code_statem:transfer_to(kapps_call:set_other_leg_call_id(CallId, Call)
+    konami_code_statem:transfer_to(konami_util:set_leg_control(CallId, ControlQueue, kapps_call:set_other_leg_call_id(CallId, Call))
                                   ,'b'
                                   ),
 
@@ -175,13 +165,6 @@ is_resp([JObj|_]) ->
     is_resp(JObj);
 is_resp(JObj) ->
     kapi_resource:originate_resp_v(JObj).
-
--spec is_originate_uuid(kz_json:object(), kz_term:api_binary()) -> boolean().
-is_originate_uuid(JObj, CallId) ->
-    kapi_resource:originate_uuid_v(JObj)
-        andalso (CallId =:= 'undefined'
-                 orelse CallId =:= kz_json:get_value(<<"Outbound-Call-ID">>, JObj)
-                ).
 
 -spec find_device_id_for_leg(kz_term:ne_binary()) -> kz_term:api_binary().
 find_device_id_for_leg(CallId) ->

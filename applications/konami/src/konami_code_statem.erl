@@ -31,7 +31,7 @@
         ,code_change/4
         ]).
 
--export([format_status/2]).
+-export([format_status/1]).
 
 -include("konami.hrl").
 
@@ -147,6 +147,7 @@ init({Call, JObj}) ->
                                    )
                             ,call_id=kapps_call:call_id_direct(Call)
 
+                            ,other_leg=kapps_call:other_leg_call_id(Call)
                             ,b_endpoint_id=BEndpointId
                             }}.
 
@@ -221,9 +222,26 @@ armed('info', {'timeout', Ref, 'digit_timeout'}, #state{b_digit_timeout_ref = Re
     lager:debug("disarming 'b' leg"),
     _ = maybe_handle_bleg_code(State),
     ?WSD_NOTE(_OtherLeg, 'right', <<"disarming">>),
-    {'next_state', 'unarmed', disarm_state(State), 'hibernate'}.
+    {'next_state', 'unarmed', disarm_state(State), 'hibernate'};
+armed('info', _StaleOrUnrelated, State) ->
+    %% cancel_timer cannot retract a timeout already in the mailbox.
+    {'keep_state', State}.
 
 -spec handle_event(any(), atom(), state()) -> kz_types:handle_fsm_ret(state()).
+handle_event({'transfer_to', Call, Leg}, _StateName, State) ->
+    {'next_state', 'unarmed', handoff(Call, Leg, disarm_state(State))};
+handle_event(?EVENT(Id, <<"CHANNEL_REPLACED">>, Evt), StateName,
+             #state{call=Call, call_id=A, other_leg=B}=State) when Id =:= A; Id =:= B ->
+    case kz_call_event:replaced_by(Evt) of
+        New when is_binary(New), New =/= Id ->
+            Leg = case Id of A -> 'a'; B -> 'b' end,
+            NewCall = case Leg of
+                          'a' -> kapps_call:set_call_id(New, Call);
+                          'b' -> kapps_call:set_other_leg_call_id(New, Call)
+                      end,
+            {'next_state', 'unarmed', handoff(NewCall, Leg, disarm_state(State))};
+        _ -> {'next_state', StateName, State}
+    end;
 handle_event(?EVENT(CallId, <<"metaflow_exe">>, Metaflow), StateName, #state{call=Call}=State) ->
     _Pid = proc_lib:spawn('konami_code_exe', 'handle', [Metaflow, Call]),
     lager:debug("recv metaflow exe request for ~s, processing in ~p", [CallId, _Pid]),
@@ -291,11 +309,14 @@ terminate(_Reason, _StateName, #state{call_id=CallId
 code_change(_OldVsn, StateName, State, _Extra) ->
     {'ok', StateName, State}.
 
--spec format_status(any(), any()) -> any().
-format_status(_, [_Dict, #state{call_id=CallId
-                               ,other_leg=OtherLeg
-                               }]) ->
-    [{'data', [{"StateData", {CallId, OtherLeg}}]}].
+%% OTP 25+ gen_statem callback (format_status/2 is deprecated and OTP 28
+%% rejects it under -Werror)
+-spec format_status(map()) -> map().
+format_status(#{data := #state{call_id=CallId
+                              ,other_leg=OtherLeg
+                              }} = Status) ->
+    Status#{data => {CallId, OtherLeg}};
+format_status(Status) -> Status.
 
 %%%=============================================================================
 %%% Internal functions
@@ -360,19 +381,15 @@ listen_on(Call, JObj) ->
 
     case kz_json:get_value(<<"Listen-On">>, JObj) of
         <<"both">> ->
-            konami_util:listen_on_other_leg(Call, ?B_LEG_EVENTS),
             'ab';
         <<"self">> when IsALegEndpoint -> 'a';
         <<"self">> ->
-            konami_util:listen_on_other_leg(Call, ?B_LEG_EVENTS),
             'b';
         <<"peer">> when IsALegEndpoint ->
-            konami_util:listen_on_other_leg(Call, ?B_LEG_EVENTS),
             'b';
         <<"peer">> -> 'a';
         _ when IsALegEndpoint -> 'a';
         _ ->
-            konami_util:listen_on_other_leg(Call, ?B_LEG_EVENTS),
             'b'
     end.
 
@@ -539,9 +556,11 @@ maybe_add_call_event_bindings(Call, 'a') ->
     konami_event_listener:add_konami_binding(kapps_call:call_id(Call)),
     maybe_add_call_event_bindings(Call);
 maybe_add_call_event_bindings(Call, 'b') ->
+    maybe_add_call_event_bindings(kapps_call:other_leg_call_id(Call)),
     konami_event_listener:add_konami_binding(kapps_call:other_leg_call_id(Call)),
     maybe_add_call_event_bindings(Call);
 maybe_add_call_event_bindings(Call, 'ab') ->
+    maybe_add_call_event_bindings(kapps_call:other_leg_call_id(Call)),
     konami_event_listener:add_konami_binding(kapps_call:call_id(Call)),
     konami_event_listener:add_konami_binding(kapps_call:other_leg_call_id(Call)),
     maybe_add_call_event_bindings(Call).
@@ -561,14 +580,15 @@ handle_channel_answer(#state{call_id=CallId}=State, CallId, _Evt) ->
 handle_channel_answer(#state{other_leg=OtherLeg}=State, OtherLeg, _Evt) ->
     lager:debug("'b' leg ~s answered", [OtherLeg]),
     State;
-handle_channel_answer(#state{other_leg='undefined'}=State
+handle_channel_answer(#state{call_id=Original, other_leg='undefined'}=State
                      ,CallId
                      ,Evt
                      ) ->
-    maybe_other_leg_answered(State
-                            ,CallId
-                            ,kz_call_event:authorizing_id(Evt)
-                            );
+    %% Account hooks include answers from unrelated calls on the same account.
+    case is_binary(Original) andalso kz_call_event:other_leg_call_id(Evt) =:= Original of
+        'true' -> maybe_other_leg_answered(State, CallId, kz_call_event:authorizing_id(Evt));
+        'false' -> State
+    end;
 handle_channel_answer(#state{call_id=_CallId
                             ,other_leg=_OtherLeg
                             }=State
@@ -622,13 +642,11 @@ handle_channel_bridge(#state{call_id=CallId
     State#state{call=kapps_call:set_other_leg_call_id(OtherLeg, Call)
                ,other_leg=OtherLeg
                };
-handle_channel_bridge(#state{call_id=CallId
-                            ,listen_on='b'
-                            }=State, CallId, _OtherLeg) ->
-    lager:debug("joy, 'b' is bridged to ~s. Removing binding to a-leg", [CallId]),
-    konami_event_listener:rm_call_binding(CallId),
-    konami_event_listener:rm_konami_binding(CallId),
-    State;
+handle_channel_bridge(#state{call_id=CallId, call=Call, other_leg=OldB}=State, CallId, OtherLeg) ->
+    case OldB =:= OtherLeg of
+        'true' -> State;
+        'false' -> handoff(kapps_call:set_other_leg_call_id(OtherLeg, Call), 'b', State)
+    end;
 handle_channel_bridge(#state{call_id=CallId
                             ,other_leg=OtherLeg
                             }=State, CallId, OtherLeg) ->
@@ -686,6 +704,9 @@ handle_channel_destroy(#state{call_id=CallId
     State#state{call_id='undefined'
                ,call=kapps_call:set_call_id('undefined', Call)
                };
+handle_channel_destroy(#state{call_id='undefined', other_leg=OtherLeg}, OtherLeg) ->
+    %% Both legs are gone; retaining the account hook could adopt a later call.
+    exit('normal');
 handle_channel_destroy(#state{other_leg=OtherLeg
                              ,listen_on='b'
                              }
@@ -702,3 +723,26 @@ handle_channel_destroy(#state{other_leg=OtherLeg
     State#state{other_leg='undefined'
                ,call=kapps_call:set_other_leg_call_id('undefined', Call)
                }.
+
+%% A move replaces the requesting leg. Keep its control queue attached to that
+%% leg, and reset digit collection so digits from the retired channel cannot
+%% execute a feature against its replacement.
+-spec handoff(kapps_call:call(), 'a' | 'b', state()) -> state().
+handoff(Call, Leg, #state{call_id=OldA, other_leg=OldB, listen_on=ListenOn}=State) ->
+    NewA = kapps_call:call_id(Call),
+    NewB = kapps_call:other_leg_call_id(Call),
+    Old = case Leg of 'a' -> OldA; 'b' -> OldB end,
+    New = case Leg of 'a' -> NewA; 'b' -> NewB end,
+    case Old =:= New of
+        'true' -> 'ok';
+        'false' ->
+            konami_event_listener:rm_call_binding(Old),
+            konami_event_listener:rm_konami_binding(Old),
+            maybe_add_call_event_bindings(New)
+    end,
+    maybe_add_call_event_bindings(Call, ListenOn),
+    kapps_call:put_callid(Call),
+    State#state{call=kapps_call:kvs_store(?MODULE, self(), Call)
+                ,call_id=NewA
+                ,other_leg=NewB
+                }.
