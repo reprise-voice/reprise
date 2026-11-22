@@ -206,6 +206,48 @@ empty_device() ->
 empty_object() ->
     kz_json:new().
 
+%% A user or device that sets only some cells inherits the level below it for
+%% the rest (the account's endpoint defaults under a user, the user under a
+%% device), in both endpoint modules: tests default to v4, v5 is the
+%% production default.
+unset_cells_inherit_test_() ->
+    lists:flatmap(fun unset_cells_inherit/1, ['kz_endpoint_v4', 'kz_endpoint_v5']).
+
+unset_cells_inherit(Module) ->
+    AccountOn = kzd_accounts:set_call_recording(kzd_accounts:new(), kz_json:from_list([{<<"endpoint">>, all_on_object()}])),
+    AccountOff = kzd_accounts:set_call_recording(kzd_accounts:new(), kz_json:from_list([{<<"endpoint">>, all_off_object()}])),
+    NoDevice = kzd_devices:new(),
+    Merge = fun(Account, Device, User) -> Module:merge_attribute(<<"call_recording">>, Account, Device, User) end,
+
+    UserOneOff = kzd_users:set_call_recording(kzd_users:new(), cell(<<"inbound">>, <<"onnet">>, 'false')),
+    UserOneOn = kzd_users:set_call_recording(kzd_users:new(), cell(<<"outbound">>, <<"offnet">>, 'true')),
+    UserAllOn = kzd_users:set_call_recording(kzd_users:new(), all_on_object()),
+    UserAnyOff = kzd_users:set_call_recording(kzd_users:new()
+                                             ,kz_json:from_list([{<<"any">>, kz_json:from_list([{<<"any">>, kz_json:from_list([{<<"enabled">>, 'false'}])}])}])
+                                             ),
+    UserEmpty = kzd_users:set_call_recording(kzd_users:new(), empty_object()),
+    DeviceOneOff = kzd_devices:set_call_recording(kzd_devices:new(), cell(<<"outbound">>, <<"onnet">>, 'false')),
+
+    endpoint_expectations(Module, 'user_cell_off_rest_inherit_account_on', Merge(AccountOn, NoDevice, UserOneOff), 'false', 'true', 'true', 'true')
+        ++ endpoint_expectations(Module, 'user_cell_on_rest_inherit_account_off', Merge(AccountOff, NoDevice, UserOneOn), 'false', 'false', 'false', 'true')
+        ++ endpoint_expectations(Module, 'device_cell_off_rest_inherit_user_on', Merge(AccountOff, DeviceOneOff, UserAllOn), 'true', 'true', 'false', 'true')
+        ++ endpoint_expectations(Module, 'user_any_overrides_account', Merge(AccountOn, NoDevice, UserAnyOff), 'false', 'false', 'false', 'false')
+        ++ endpoint_expectations(Module, 'empty_user_inherits_account', Merge(AccountOn, NoDevice, UserEmpty), 'true', 'true', 'true', 'true').
+
+%% Expected endpoint-level `enabled' for inbound onnet, inbound offnet, outbound onnet, outbound offnet.
+endpoint_expectations(Module, Test, Merged, InOn, InOff, OutOn, OutOff) ->
+    check_expectations(kz_binary:join([kz_term:to_binary(Module), kz_term:to_binary(Test)], <<" ">>)
+                      ,Merged
+                      ,[{<<"endpoint">>, <<"inbound">>, <<"onnet">>, InOn}
+                       ,{<<"endpoint">>, <<"inbound">>, <<"offnet">>, InOff}
+                       ,{<<"endpoint">>, <<"outbound">>, <<"onnet">>, OutOn}
+                       ,{<<"endpoint">>, <<"outbound">>, <<"offnet">>, OutOff}
+                       ]
+                      ).
+
+cell(Direction, Network, Enabled) ->
+    kz_json:set_value([Direction, Network, <<"enabled">>], Enabled, kz_json:new()).
+
 check_expectations(Test, Merged, Expectations) ->
     [{kz_term:to_list(kz_binary:join([Test, Type, Direction, Network]))
      ,?_assertEqual(Result, kz_json:is_true([<<"call_recording">>, Type, Direction, Network, <<"enabled">>], Merged))

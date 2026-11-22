@@ -180,6 +180,13 @@
 -define(SET_CCV(Key, Value), <<?CHANNEL_VAR_PREFIX, Key/binary, "=", Value/binary>>).
 -define(GET_CCV_HEADER(Key), <<"variable_sip_h_X-", ?CHANNEL_VAR_PREFIX, Key/binary>>).
 
+%% Custom channel variable ecallmgr_channel_redirect sets on an unanswered
+%% channel before sending it to another media server with a 302. The
+%% redirected INVITE keeps its Call-ID, so the channel carrying this variable
+%% is the bounce and the channel that arrives at the destination is the call:
+%% ecallmgr_cdr_event_publisher drops the bounce's CDR report.
+-define(REDIRECTED_TO_CCV, <<"Redirected-To">>).
+
 -define(CAV(Key), <<?APPLICATION_VAR_PREFIX, Key/binary>>).
 -define(GET_CAV(Key), <<"variable_", ?APPLICATION_VAR_PREFIX, Key/binary>>).
 -define(GET_CAV_HEADER(Key), <<"variable_sip_h_X-", ?APPLICATION_VAR_PREFIX, Key/binary>>).
@@ -265,6 +272,7 @@
                               ,{<<"Endpoint-Ignore-Mark-Ring-Ready">>, <<"kz-endpoint-ignore-mark-ring-ready">>}
                               ,{<<"Endpoint-Progress-Timeout">>, <<"leg_progress_timeout">>}
                               ,{<<"Endpoint-Timeout">>, <<"leg_timeout">>}
+                              ,{<<"Exclude-Outgoing-Extra-Header">>, <<"exclude_outgoing_extra_header">>}
                               ,{<<"Export-Variables">>, <<"export_vars">>}
                               ,{<<"Export-Bridge-Variables">>, <<"bridge_export_vars">>}
                               ,{<<"Fail-On-Single-Reject">>, <<"fail_on_single_reject">>}

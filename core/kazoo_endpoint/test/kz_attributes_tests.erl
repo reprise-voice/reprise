@@ -46,6 +46,9 @@ kz_attributes_test_() ->
      end
     }.
 
+%% get_flags returns a set (deduplicated through sets/2; the callers match
+%% resources on membership), so its order is not part of the contract and
+%% changed with OTP 28's map-based sets: the expectations are compared sorted.
 test_get_flags_callflow() ->
     Call = kapps_call_tests:create_callflow_call(),
     ExpectedOld = [<<"user_old_static_flag">>
@@ -66,13 +69,13 @@ test_get_flags_callflow() ->
                     ,<<"account_new_static_flag">>
                     ],
     [{"verify that get flags will pull the static and dynamic flags from all sources with old formats"
-     ,?_assertEqual(ExpectedOld, kz_attributes:get_flags(<<"callflows">>, Call))
+     ,?_assertEqual(lists:sort(ExpectedOld), lists:sort(kz_attributes:get_flags(<<"callflows">>, Call)))
      }
     ,{"verify that get flags will pull the static and dynamic flags from all sources with new formats"
-     ,?_assertEqual(ExpectedNew, kz_attributes:get_flags(<<"callflows">>, kapps_call:exec(?NEW_CF_FLAGS, Call)))
+     ,?_assertEqual(lists:sort(ExpectedNew), lists:sort(kz_attributes:get_flags(<<"callflows">>, kapps_call:exec(?NEW_CF_FLAGS, Call))))
      }
     ,{"verify that get flags will pull the static and dynamic flags from all sources with mixed formats"
-     ,?_assertEqual(ExpectedMixed, kz_attributes:get_flags(<<"callflows">>, kapps_call:exec(?MIXED_CF_FLAGS, Call)))
+     ,?_assertEqual(lists:sort(ExpectedMixed), lists:sort(kz_attributes:get_flags(<<"callflows">>, kapps_call:exec(?MIXED_CF_FLAGS, Call))))
      }
     ].
 
@@ -83,10 +86,10 @@ test_get_flags_trunkstore() ->
                   ,<<"account_new_static_flag">>
                   ],
     [{"verify that get flags will pull the static and dynamic flags from all sources with old formats"
-     ,?_assertEqual(ExpectedOld, kz_attributes:get_flags(<<"trunkstore">>, Call))
+     ,?_assertEqual(lists:sort(ExpectedOld), lists:sort(kz_attributes:get_flags(<<"trunkstore">>, Call)))
      }
     ,{"verify that get flags will pull the static and dynamic flags from all sources with new formats"
-     ,?_assertEqual(ExpectedNew, kz_attributes:get_flags(<<"trunkstore">>, kapps_call:exec(?NEW_TS_FLAGS, Call)))
+     ,?_assertEqual(lists:sort(ExpectedNew), lists:sort(kz_attributes:get_flags(<<"trunkstore">>, kapps_call:exec(?NEW_TS_FLAGS, Call))))
      }
     ].
 

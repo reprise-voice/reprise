@@ -81,7 +81,7 @@ handle_config(JObj, Props) ->
 handle_config(JObj, Srv, ?DOC_CREATED) ->
     case kapi_conf:get_doc(JObj) of
         'undefined' -> find_and_add_hook(JObj, Srv);
-        Hook -> webhooks_util:load_hook(Srv, Hook)
+        Hook -> handle_created_hook(Srv, Hook)
     end;
 handle_config(JObj, Srv, ?DOC_EDITED) ->
     case kapi_conf:get_id(JObj) of
@@ -106,15 +106,28 @@ handle_config(JObj, Srv, ?DOC_DELETED) ->
                                             )
     end.
 
+%% A hook created disabled stays out of memory, as the start-up load
+%% (the webhooks_listing view) leaves it out; editing it to enabled adds it.
+-spec handle_created_hook(pid(), kzd_webhooks:doc()) -> 'ok'.
+handle_created_hook(Srv, Hook) ->
+    case is_active(Hook) of
+        'true' -> webhooks_util:load_hook(Srv, Hook);
+        'false' -> lager:debug("not adding hook ~s: disabled or deleted",[webhooks_util:hook_id(Hook)])
+    end.
+
+-spec handle_edited_hook(pid(), kzd_webhooks:doc()) -> 'ok'.
 handle_edited_hook(Srv, Hook) ->
-    case (not kz_doc:is_soft_deleted(Hook))
-        andalso kzd_webhooks:enabled(Hook)
-    of
+    case is_active(Hook) of
         'true' ->
             gen_listener:cast(Srv, {'update_hook', webhooks_util:jobj_to_rec(Hook)});
         'false' ->
             gen_listener:cast(Srv, {'remove_hook', webhooks_util:jobj_to_rec(Hook)})
     end.
+
+-spec is_active(kzd_webhooks:doc()) -> boolean().
+is_active(Hook) ->
+    (not kz_doc:is_soft_deleted(Hook))
+        andalso kzd_webhooks:enabled(Hook).
 
 -spec maybe_remove_account_hooks(pid(), kz_term:ne_binary(), kz_term:ne_binary()) -> 'ok'.
 maybe_remove_account_hooks(Srv, <<"account">>, <<AccountId/binary>>) ->
@@ -125,8 +138,7 @@ maybe_remove_account_hooks(_Srv, _Type, _AccountId) -> 'ok'.
 -spec find_and_add_hook(kz_json:object(), pid()) -> 'ok'.
 find_and_add_hook(JObj, Srv) ->
     case find_hook(JObj) of
-        {'ok', Hook} ->
-            gen_listener:cast(Srv, {'add_hook', webhooks_util:jobj_to_rec(Hook)});
+        {'ok', Hook} -> handle_created_hook(Srv, Hook);
         {'error', _E} ->
             lager:debug("failed to add hook ~s: ~p", [webhooks_util:hook_id(JObj), _E])
     end.
@@ -134,8 +146,7 @@ find_and_add_hook(JObj, Srv) ->
 -spec find_and_update_hook(kz_json:object(), pid()) -> 'ok'.
 find_and_update_hook(JObj, Srv) ->
     case find_hook(JObj) of
-        {'ok', Hook} ->
-            gen_listener:cast(Srv, {'update_hook', webhooks_util:jobj_to_rec(Hook)});
+        {'ok', Hook} -> handle_edited_hook(Srv, Hook);
         {'error', _E} ->
             lager:debug("failed to update hook ~s: ~p", [webhooks_util:hook_id(JObj), _E])
     end.

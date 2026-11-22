@@ -27,7 +27,7 @@ Key | Description | Type | Default | Required | Support Level
 `sca.enabled` | is sca enabled | `boolean()` |   | `false` |  
 `sca` |   | `object()` |   | `false` |  
 `skip_module` | When set to true this callflow action is skipped, advancing to the wildcard branch (if any) | `boolean()` |   | `false` |  
-`strategy` | How to ring the endpoints | `string('single' | 'simultaneous')` | `simultaneous` | `false` |  
+`strategy` | How to ring the endpoints | `string('single' \| 'simultaneous')` | `simultaneous` | `false` |  
 `timeout` | How long to attempt the group | `integer()` | `20` | `false` |  
 
 

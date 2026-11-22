@@ -541,7 +541,9 @@ merge_attribute(<<"call_recording">> = Key, Account, Endpoint, Owner) ->
     EndpointAttr = get_device_record_call_properties(Endpoint),
     case lists:filter(fun is_valid_call_recording_object/1, [AccountAttr, OwnerAttr, EndpointAttr]) of
         [] -> kz_json:delete_key(Key, Endpoint);
-        JObjs -> kz_json:set_value(Key, kz_json:merge(JObjs), Endpoint)
+        %% recursive: an empty object from a lower level must not wipe out
+        %% the settings above it (the account's endpoint defaults)
+        JObjs -> kz_json:set_value(Key, kz_json:merge(JObjs, #{'recursive' => 'true'}), Endpoint)
     end;
 merge_attribute(<<"outbound_flags">>, Account, Endpoint, Owner) ->
     Static = lists:flatten([kzd_devices:outbound_static_flags(Account)
@@ -653,13 +655,24 @@ is_valid_call_recording_object(JObj) ->
 -spec merge_call_recording_direction(kz_term:ne_binary(), kzd_call_recording:doc(), kz_json:object()) -> kz_json:object().
 merge_call_recording_direction(Direction, RecordingSettings, AnyDirectionSettings) ->
     case kz_json:get_json_value(Direction, RecordingSettings) of
-        'undefined' -> kz_json:set_value(Direction, AnyDirectionSettings, RecordingSettings);
+        'undefined' -> maybe_set_any(Direction, AnyDirectionSettings, RecordingSettings);
         V -> kz_json:set_value(Direction, kz_json:merge(AnyDirectionSettings, V), RecordingSettings)
+    end.
+
+%% Only fill in a missing direction or network when an `any' was actually set.
+%% Otherwise leave it missing, so the level below it (a user's under a
+%% device's, the account's endpoint defaults under a user's) shows through;
+%% a missing setting reads as not recording.
+-spec maybe_set_any(kz_term:ne_binary(), kz_json:object(), kz_json:object()) -> kz_json:object().
+maybe_set_any(Key, AnySettings, RecordingSettings) ->
+    case kz_json:is_empty(AnySettings) of
+        'true' -> RecordingSettings;
+        'false' -> kz_json:set_value(Key, AnySettings, RecordingSettings)
     end.
 
 -spec merge_call_recording_networks(kz_term:ne_binary(), kz_json:object(), kz_json:object(), kz_term:ne_binaries()) -> kz_json:object().
 merge_call_recording_networks(Direction, NetworksJObj, RecordingSettings, AnyNetworks) ->
-    AnyNetworkSettings = kzd_call_recording:any(NetworksJObj, kz_json:from_list([{<<"enabled">>, 'false'}])),
+    AnyNetworkSettings = kzd_call_recording:any(NetworksJObj, kz_json:new()),
     Fun = fun(Network, NetworksAcc) -> merge_call_recording_direction(Network, NetworksAcc, AnyNetworkSettings) end,
     UpdatedNetworks = lists:foldl(Fun, kz_json:delete_key(<<"any">>, NetworksJObj), AnyNetworks),
     kz_json:set_value(Direction, UpdatedNetworks, RecordingSettings).

@@ -39,13 +39,13 @@
 -include_lib("kazoo_amqp/include/kapi_conf.hrl").
 -include_lib("kazoo_stdlib/include/kazoo_json.hrl").
 
--define(NON_DIRECT_MODULES, [<<"cf_ring_group">>, <<"acdc_util">>]).
+-define(NON_DIRECT_MODULES, [<<"cf_ring_group">>, <<"callcenter">>]).
 
 -define(MOBILE_CONFIG_CAT, <<(?CONFIG_CAT)/binary, ".mobile">>).
 -define(DEFAULT_MOBILE_FORMATER, <<"^\\+?1?([2-9][0-9]{2}[2-9][0-9]{6})$">>).
 -define(DEFAULT_MOBILE_PREFIX, <<>>).
 -define(DEFAULT_MOBILE_SUFFIX, <<>>).
--define(DEFAULT_MOBILE_REALM, <<"mobile.k.zswitch.net">>).
+-define(DEFAULT_MOBILE_REALM, <<"mobile.example.com">>).
 -define(DEFAULT_MOBILE_PATH, <<>>).
 -define(DEFAULT_MOBILE_CODECS, [<<"PCMU">>]).
 -define(DEFAULT_CALLER_ID_NAME, <<"unknown">>).
@@ -394,7 +394,9 @@ merge_attribute(<<"call_recording">> = Key, Account, Endpoint, Owner) ->
     AccountAttr = get_account_record_call_properties(Account),
     OwnerAttr = get_user_record_call_properties(Owner),
     EndpointAttr = get_device_record_call_properties(Endpoint),
-    Merged = kz_json:merge([AccountAttr, OwnerAttr, EndpointAttr]),
+    %% recursive: an empty object from a lower level must not wipe out the
+    %% settings above it (the account's endpoint defaults)
+    Merged = kz_json:merge([AccountAttr, OwnerAttr, EndpointAttr], #{'recursive' => 'true'}),
     kz_json:set_value(Key, Merged, Endpoint);
 merge_attribute(<<"outbound_flags">>, Account, Endpoint, Owner) ->
     Static = lists:flatten([kzd_devices:outbound_static_flags(Account)
@@ -457,13 +459,24 @@ merge_call_recording(RecordingSettings) ->
 -spec merge_call_recording_direction(kz_term:ne_binary(), kzd_call_recording:doc(), kz_json:object()) -> kz_json:object().
 merge_call_recording_direction(Direction, RecordingSettings, AnyDirectionSettings) ->
     case kz_json:get_json_value(Direction, RecordingSettings) of
-        'undefined' -> kz_json:set_value(Direction, AnyDirectionSettings, RecordingSettings);
+        'undefined' -> maybe_set_any(Direction, AnyDirectionSettings, RecordingSettings);
         V -> kz_json:set_value(Direction, kz_json:merge(AnyDirectionSettings, V), RecordingSettings)
+    end.
+
+%% Only fill in a missing direction or network when an `any' was actually set.
+%% Otherwise leave it missing, so the level below it (a user's under a
+%% device's, the account's endpoint defaults under a user's) shows through;
+%% a missing setting reads as not recording.
+-spec maybe_set_any(kz_term:ne_binary(), kz_json:object(), kz_json:object()) -> kz_json:object().
+maybe_set_any(Key, AnySettings, RecordingSettings) ->
+    case kz_json:is_empty(AnySettings) of
+        'true' -> RecordingSettings;
+        'false' -> kz_json:set_value(Key, AnySettings, RecordingSettings)
     end.
 
 -spec merge_call_recording_networks(kz_term:ne_binary(), kz_json:object(), kz_json:object(), kz_term:ne_binaries()) -> kz_json:object().
 merge_call_recording_networks(Direction, NetworksJObj, RecordingSettings, AnyNetworks) ->
-    AnyNetworkSettings = kzd_call_recording:any(NetworksJObj, kz_json:from_list([{<<"enabled">>, 'false'}])),
+    AnyNetworkSettings = kzd_call_recording:any(NetworksJObj, kz_json:new()),
     Fun = fun(Network, NetworksAcc) -> merge_call_recording_direction(Network, NetworksAcc, AnyNetworkSettings) end,
     UpdatedNetworks = lists:foldl(Fun, kz_json:delete_key(<<"any">>, NetworksJObj), AnyNetworks),
     kz_json:set_value(Direction, UpdatedNetworks, RecordingSettings).

@@ -18,7 +18,7 @@ Key | Description | Type | Default | Required | Support Level
 `id` | User ID | `string()` |   | `false` |  
 `skip_module` | When set to true this callflow action is skipped, advancing to the wildcard branch (if any) | `boolean()` |   | `false` |  
 `static_invite` | Override the SIP Username | `string()` |   | `false` |  
-`strategy` | Ringing strategy for the endpoint(s) | `string('simultaneous' | 'single')` | `simultaneous` | `false` |  
+`strategy` | Ringing strategy for the endpoint(s) | `string('simultaneous' \| 'single')` | `simultaneous` | `false` |  
 `suppress_clid` | Toggle whether to suppress caller ID | `boolean()` |   | `false` |  
 `timeout` | Timeout, in seconds, to wait for answer | `integer()` | `20` | `false` |  
 

@@ -10,6 +10,9 @@
 %%% @end
 %%%-----------------------------------------------------------------------------
 -module(ecallmgr_registrar).
+-ifdef(TEST).
+-include_lib("eunit/include/eunit.hrl").
+-endif.
 -behaviour(gen_listener).
 
 -export([start_link/0]).
@@ -43,6 +46,7 @@
 
 -ifdef(TEST).
 -export([breakup_contact/1]).
+-export([same_binding/2]).
 -endif.
 
 -include("ecallmgr.hrl").
@@ -151,10 +155,86 @@ start_link() ->
 
 -spec handle_reg_success(kapi_registration:success(), kz_term:proplist()) -> 'ok'.
 handle_reg_success(RegSuccess, _Props) ->
-    'true' = kapi_registration:success_v(RegSuccess),
     _ = kz_log:put_callid(RegSuccess),
-    Registration = create_registration(RegSuccess),
-    insert_registration(Registration).
+    case validate_registration(RegSuccess) of
+        'ok' -> maybe_insert_registration(RegSuccess);
+        {'error', Field} ->
+            lager:warning("event=registration_rejected field=~s call_id=~p"
+                         ,[Field, kz_api:call_id(RegSuccess)]
+                         )
+    end.
+
+%% A deregistration names the contact it removes. When that is not the contact
+%% this node holds, the user's binding was replaced by another contact and the
+%% old one is unregistering late: from another SBC, which never saw the
+%% replacement, or from the same SBC before usrloc's write-back sweep removed
+%% the replaced binding. Deleting the row would drop the live contact, so the
+%% event is ignored. Decided before create_registration/1 runs, so it does not
+%% depend on previous_contact, which existing_or_new_registration/2 rewrites.
+-spec maybe_insert_registration(kapi_registration:success()) -> 'ok'.
+maybe_insert_registration(RegSuccess) ->
+    case stale_deregistration(RegSuccess) of
+        'false' -> insert_registration(create_registration(RegSuccess));
+        {'true', Held} ->
+            lager:info("ignoring deregistration of ~s for ~s@~s; holding ~s"
+                      ,[event_contact(RegSuccess)
+                       ,kz_json:get_value(<<"Username">>, RegSuccess)
+                       ,get_realm(RegSuccess)
+                       ,Held
+                       ]
+                      )
+    end.
+
+-spec stale_deregistration(kapi_registration:success()) -> 'false' | {'true', kz_term:ne_binary()}.
+stale_deregistration(RegSuccess) ->
+    Id = registration_id(kz_json:get_value(<<"Username">>, RegSuccess), get_realm(RegSuccess)),
+    case kz_json:get_integer_value(<<"Expires">>, RegSuccess) =:= 0
+        andalso ets:lookup(?MODULE, Id)
+    of
+        [#registration{contact=Held}] when is_binary(Held) ->
+            case same_binding(Held, event_contact(RegSuccess)) of
+                'true' -> 'false';
+                'false' -> {'true', Held}
+            end;
+        _ -> 'false'
+    end.
+
+%% The contact create_registration/1 stores, before fix_contact/1.
+-spec event_contact(kapi_registration:success()) -> kz_term:ne_binary().
+event_contact(RegSuccess) ->
+    kz_json:get_first_defined([<<"Original-Contact">>, <<"Contact">>], RegSuccess).
+
+%% Presence of a required Contact is not SIP URI validation. Reject malformed
+%% input before constructing or inserting a row; never destroy a valid binding
+%% because another producer sent a malformed update.
+-spec validate_registration(kz_json:object()) -> 'ok' | {'error', binary()}.
+validate_registration(JObj) ->
+    case kapi_registration:success_v(JObj) of
+        'false' -> {'error', <<"schema">>};
+        'true' -> validate_registration_uris([<<"Contact">>, <<"Original-Contact">>, <<"Proxy-Path">>], JObj)
+    end.
+
+-spec validate_registration_uris([binary()], kz_json:object()) -> 'ok' | {'error', binary()}.
+validate_registration_uris([], _JObj) -> 'ok';
+validate_registration_uris([Field | Rest], JObj) ->
+    Value = kz_json:get_value(Field, JObj),
+    WildcardRemoval = Field =/= <<"Proxy-Path">>
+        andalso Value =:= <<"*">>
+        andalso kz_json:get_integer_value(<<"Expires">>, JObj) =:= 0,
+    case Value =:= 'undefined' orelse WildcardRemoval orelse valid_registration_uri(Value) of
+        'true' -> validate_registration_uris(Rest, JObj);
+        'false' -> {'error', Field}
+    end.
+
+-spec valid_registration_uri(any()) -> boolean().
+valid_registration_uri(Value) when is_binary(Value) ->
+    case kzsip_uri:uris(Value) of
+        [#uri{scheme=Scheme, domain=Domain}] ->
+            (Scheme =:= 'sip' orelse Scheme =:= 'sips')
+                andalso is_binary(Domain) andalso Domain =/= <<>>;
+        _ -> 'false'
+    end;
+valid_registration_uri(_) -> 'false'.
 
 -spec handle_reg_query(kapi_registration:query_req(), kz_term:proplist()) -> 'ok'.
 handle_reg_query(QueryJObj, Props) ->
@@ -217,7 +297,8 @@ lookup_endpoint(<<EndpointId/binary>>, <<AccountId/binary>>) ->
         [#registration{endpoint_token='undefined'}] ->
             {'ok', []};
         [#registration{endpoint_token=Token}] ->
-            {'ok', [{'token', Token}]}
+            {'ok', [{'token', Token}]};
+        Regs -> ambiguous_registration(AccountId, EndpointId, length(Regs))
     end.
 
 -spec lookup_proxy_path(kz_term:ne_binary(), kz_term:ne_binary()) ->
@@ -233,8 +314,19 @@ lookup_proxy_path(<<Realm/binary>>, <<Username/binary>>) ->
                              },
     case ets:match_object(?MODULE, MatchSpec) of
         [] -> lookup_meta_path(Realm, Username);
-        [#registration{proxy = Proxy}=Reg] -> {'ok', Proxy, proxy_vars(Reg)}
+        [#registration{proxy = Proxy}=Reg] -> {'ok', Proxy, proxy_vars(Reg)};
+        Regs -> ambiguous_registration(Realm, Username, length(Regs))
     end.
+
+%% Preserve the public not_found contract: callers complete the fetch instead
+%% of crashing or selecting an arbitrary AOR/token. Multiple-contact routing
+%% requires an explicit policy; the meta-ID API already has a separate one.
+-spec ambiguous_registration(binary(), binary(), pos_integer()) -> {'error', 'not_found'}.
+ambiguous_registration(AccountId, EndpointId, Count) ->
+    lager:warning("event=registration_ambiguous account_id=~s endpoint_id=~s matches=~B"
+                 ,[AccountId, EndpointId, Count]
+                 ),
+    {'error', 'not_found'}.
 
 -spec lookup_meta_path(kz_term:ne_binary(), kz_term:ne_binary()) ->
           {'ok', [{kz_term:api_ne_binary(), kz_term:proplist()}]} |
@@ -287,7 +379,10 @@ proxy_vars_fold({<<"Proxy-Protocol">>, Proto}, Props, _Options) ->
             ];
         _ -> Props
     end;
-proxy_vars_fold({<<"AOR">>, AOR}, Props, #{token_registration := 'true'}) ->
+%% The location key is device-id@account-id, not the phone's SIP identity.
+%% Stock Sofia needs the AOR for password registrations as well as tokens so
+%% in-dialog requests authenticate against the registered SIP realm.
+proxy_vars_fold({<<"AOR">>, AOR}, Props, _Options) ->
     [{<<"SIP-Invite-To-URI">>, AOR}
     ,{<<"KAZOO-AOR">>, AOR}
     | Props
@@ -640,6 +735,11 @@ insert_registration(#registration{initial='true'}=Registration) ->
     initial_registration(Registration);
 insert_registration(#registration{}=Registration) ->
     gen_server:cast(?SERVER, {'insert_registration', Registration}),
+    %% A refresh may reach a node that missed the initial event or lost its
+    %% table. Identity recovery depends on missing identity, not the SBC's
+    %% First-Registration flag. This uses the same authenticated path as initial
+    %% registration and does not emit another initial-registration notice.
+    _ = maybe_query_authn(Registration),
     lager:debug("updated registration ~s@~s with contact ~s"
                ,[Registration#registration.username
                 ,Registration#registration.realm
@@ -1027,9 +1127,57 @@ fix_contact('undefined') -> 'undefined';
 fix_contact(Contact) ->
     binary:replace(Contact, [<<"<">>, <<">">>], <<>>, ['global']).
 
+%% Two contact strings name the same binding when their URIs agree on scheme,
+%% user, host, port and transport. Header parameters outside the angle brackets
+%% (expires, q, +sip.instance) and the other URI parameters are not part of the
+%% binding; host and transport compare case-insensitively; a missing port is
+%% the scheme's default. `*` removes every binding. A contact the parser
+%% rejects is compared as a string, without its brackets.
+-spec same_binding(kz_term:ne_binary(), kz_term:ne_binary()) -> boolean().
+same_binding(_Held, <<"*">>) -> 'true';
+same_binding(Held, Contact) ->
+    case {binding(Held), binding(Contact)} of
+        {'error', _} -> fix_contact(Held) =:= fix_contact(Contact);
+        {_, 'error'} -> fix_contact(Held) =:= fix_contact(Contact);
+        {Binding, Binding} -> 'true';
+        {_, _} -> 'false'
+    end.
+
+-type binding() :: {binary(), binary(), binary(), pos_integer(), kz_term:api_binary()}.
+
+-spec binding(kz_term:ne_binary()) -> binding() | 'error'.
+binding(Contact) ->
+    case kzsip_uri:uris(Contact) of
+        [#uri{scheme=Scheme, user=User, domain=Domain, port=Port, opts=Opts, ext_opts=ExtOpts}] ->
+            %% a bare URI's parameters parse as ext_opts, a bracketed one's as opts
+            {kz_term:to_lower_binary(Scheme)
+            ,User
+            ,kz_term:to_lower_binary(Domain)
+            ,binding_port(Scheme, Port)
+            ,transport(Opts ++ ExtOpts)
+            };
+        _ -> 'error'
+    end.
+
+-spec binding_port(atom() | binary(), non_neg_integer()) -> pos_integer().
+binding_port(Scheme, 0) ->
+    case kz_term:to_lower_binary(Scheme) of
+        <<"sips">> -> 5061;
+        _ -> 5060
+    end;
+binding_port(_Scheme, Port) -> Port.
+
+-spec transport(list()) -> kz_term:api_binary().
+transport(Opts) ->
+    case [V || {K, V} <- Opts, kz_term:to_lower_binary(K) =:= <<"transport">>] of
+        [Transport | _] -> kz_term:to_lower_binary(Transport);
+        [] -> 'undefined'
+    end.
+
 -spec bridge_uri(kz_term:api_binary(), kz_term:api_binary(), binary(), binary()) -> kz_term:api_binary().
 bridge_uri(_Contact, 'undefined', _, _) -> 'undefined';
 bridge_uri('undefined', _Proxy, _, _) -> 'undefined';
+bridge_uri(<<"*">>, _Proxy, _, _) -> 'undefined';
 bridge_uri(Contact, Proxy, Username, Realm) ->
     [#uri{opts = ContactOptions}=UriContact] = kzsip_uri:uris(Contact),
     [#uri{}=UriProxy] = kzsip_uri:uris(Proxy),
@@ -1469,3 +1617,7 @@ get_realm(JObj) ->
 
 get_lower_realm(JObj) ->
     kz_term:to_lower_binary(get_realm(JObj)).
+
+-ifdef(TEST).
+-include("../test/ecallmgr_registration_state_tests.hrl").
+-endif.

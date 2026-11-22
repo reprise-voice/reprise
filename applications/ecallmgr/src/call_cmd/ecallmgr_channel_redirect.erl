@@ -53,17 +53,38 @@ redirect_via_endpoint(DestNodeURL, UUID) ->
 
 -spec send_redirect(kz_term:api_binary(), kz_term:ne_binary(), channel()) ->
           ecallmgr_util:send_cmd_ret().
-send_redirect('undefined', Contact, #channel{node=Node
-                                            ,uuid=UUID
-                                            ,answered=IsAnswered
-                                            }) ->
-    ecallmgr_util:send_cmd(Node, UUID, redirect_app(IsAnswered), Contact);
 send_redirect(RedirectUrl, Contact, #channel{node=Node
                                             ,uuid=UUID
                                             ,answered=IsAnswered
                                             }) ->
-    _ = ecallmgr_fs_command:set(Node, UUID, [{redirect_server_header(IsAnswered), RedirectUrl}]),
+    _ = ecallmgr_fs_command:set(Node, UUID, redirect_vars(RedirectUrl, Contact, IsAnswered)),
     ecallmgr_util:send_cmd(Node, UUID, redirect_app(IsAnswered), Contact).
+
+%% @doc The variables to set on the channel before the redirect.
+%%
+%% An unanswered channel is sent a 302 and hangs up, and the same Call-ID
+%% then arrives at the destination as a new channel, which is the one that
+%% reports the call. This channel is marked with `Redirected-To' so that
+%% mod_reprise fires no CDR report for it, a zero-second stub that would
+%% be filed under the same Call-ID; the media server checks the answer
+%% state itself when the channel reports, so a channel that answered before
+%% the redirect could execute, and stayed, keeps its record. The marker is
+%% not `process_cdr=false': FreeSWITCH honours that before any reporting
+%% hook runs and could not re-check the answer. An answered channel is
+%% deflected with a REFER instead: the endpoint's new call has its own
+%% Call-ID and this channel's record stands, so it is not marked.
+%% @end
+-spec redirect_vars(kz_term:api_binary(), kz_term:ne_binary(), boolean()) -> kz_term:proplist().
+redirect_vars(RedirectUrl, Contact, IsAnswered) ->
+    props:filter_undefined(
+      [{redirect_server_header(IsAnswered), RedirectUrl}
+      ,{?REDIRECTED_TO_CCV, redirected_to(RedirectUrl, Contact, IsAnswered)}
+      ]).
+
+-spec redirected_to(kz_term:api_binary(), kz_term:ne_binary(), boolean()) -> kz_term:api_binary().
+redirected_to(_RedirectUrl, _Contact, 'true') -> 'undefined';
+redirected_to('undefined', Contact, 'false') -> Contact;
+redirected_to(RedirectUrl, _Contact, 'false') -> RedirectUrl.
 
 -spec redirect_app(boolean()) -> kz_term:ne_binary().
 redirect_app('true') -> <<"deflect">>;

@@ -1262,9 +1262,12 @@ record_app_vars(UUID, JObj) ->
     InitialTimeout = kz_json:get_integer_value([<<"Record-Silence-Detection">>, <<"Initial-Timeout">>], JObj),
     FinalTimeout = kz_json:get_integer_value([<<"Record-Silence-Detection">>, <<"Final-Timeout">>], JObj),
 
+    %% RECORD_APPEND is left to mod_reprise, which decides it as the
+    %% recording starts: appending to a file still awaiting upload, and not
+    %% to a new one, which FreeSWITCH would otherwise never hold to
+    %% record_min_sec.
     Vars = lists:foldl(fun(F, V) -> F(V) end
-                      ,[{<<"RECORD_APPEND">>, <<"true">>}
-                       ,{<<"RECORD_STEREO">>, should_record_stereo(JObj)}
+                      ,[{<<"RECORD_STEREO">>, should_record_stereo(JObj)}
                        ,{<<"RECORD_SOFTWARE">>, ecallmgr_util:fs_arg_encode(?RECORD_SOFTWARE)}
                        ,{<<"RECORD_SILENCE_THRESHOLD">>, Threshold}
                        ,{<<"RECORD_INITIAL_TIMEOUT_MS">>, InitialTimeout}

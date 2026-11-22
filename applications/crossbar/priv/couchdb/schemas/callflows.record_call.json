@@ -68,6 +68,25 @@
             "description": "If true, the recording will continue after a transfer on the active leg",
             "type": "boolean"
         },
+        "silence_detection": {
+            "description": "Stop the recording when the caller goes quiet, as the other silence settings direct",
+            "type": "boolean"
+        },
+        "silence_final_timeout": {
+            "default": 5,
+            "description": "With silence_detection: milliseconds of silence, once sound has been heard, after which the recording stops (FreeSWITCH's RECORD_FINAL_TIMEOUT_MS)",
+            "type": "integer"
+        },
+        "silence_initial_timeout": {
+            "default": 0,
+            "description": "With silence_detection: milliseconds to wait for the first sound before the recording stops; 0 waits indefinitely (FreeSWITCH's RECORD_INITIAL_TIMEOUT_MS)",
+            "type": "integer"
+        },
+        "silence_threshold": {
+            "default": 200,
+            "description": "With silence_detection: the energy level below which audio counts as silence (FreeSWITCH's RECORD_SILENCE_THRESHOLD)",
+            "type": "integer"
+        },
         "skip_module": {
             "description": "When set to true this callflow action is skipped, advancing to the wildcard branch (if any)",
             "type": "boolean"

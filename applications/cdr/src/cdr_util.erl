@@ -56,7 +56,7 @@ get_cdr_doc_id(Timestamp, CallId) ->
 get_cdr_doc_id(Year, Month, CallId) ->
     kzd_cdrs:create_doc_id(CallId, Year, Month).
 
--spec save_cdr(kz_term:api_binary(), kz_json:object()) -> 'ok' | {'error', 'max_save_retries'}.
+-spec save_cdr(kz_term:api_binary(), kz_json:object()) -> 'ok' | {'error', any()}.
 save_cdr(?KZ_ANONYMOUS_CDR_DB=Db, Doc) ->
     case kapps_config:get_is_true(?CONFIG_CAT, <<"store_anonymous">>, 'false') of
         'false' -> lager:debug("ignoring storage for anonymous cdr");
@@ -65,15 +65,111 @@ save_cdr(?KZ_ANONYMOUS_CDR_DB=Db, Doc) ->
 save_cdr(AccountMOD, Doc) ->
     do_save_cdr(AccountMOD, Doc).
 
--spec do_save_cdr(kz_term:api_binary(), kz_json:object()) -> 'ok' | {'error', 'max_save_retries'}.
+%% How many times a conflicting save is re-read and re-evaluated before the
+%% report is given up on: the stored record can change under us (an
+%% interaction update, a concurrent report) between the read and the save.
+-define(CONFLICT_RETRIES, 3).
+
+-spec do_save_cdr(kz_term:api_binary(), kz_json:object()) -> 'ok' | {'error', any()}.
 do_save_cdr(AccountMODb, Doc) ->
+    do_save_cdr(AccountMODb, Doc, ?CONFLICT_RETRIES).
+
+-spec do_save_cdr(kz_term:api_binary(), kz_json:object(), non_neg_integer()) -> 'ok' | {'error', any()}.
+do_save_cdr(AccountMODb, Doc, Retries) ->
     case kazoo_modb:save_doc(AccountMODb, Doc, [{'max_retries', 3}]) of
         {'ok', _}-> 'ok';
-        {'error', 'conflict'} -> 'ok';
+        {'error', 'conflict'} -> resolve_conflict(AccountMODb, Doc, Retries);
         {'error', _E} ->
             lager:debug("failed to save cdr ~s : ~p", [kz_doc:id(Doc), _E]),
             {'error', 'max_save_retries'}
     end.
+
+%% @doc A record is already filed under this report's id.
+%%
+%% The id is the month and the Call-ID, so this is either the same report
+%% delivered again or another channel that carried the Call-ID in the same
+%% month: a call that moved media servers, a nightmare transfer. The stored
+%% record is never replaced silently. An answered report replaces a record
+%% that was never answered, because a channel that was never answered was
+%% not the call; anything else keeps the stored record and says so. A
+%% replacement that conflicts in turn is re-read and re-evaluated, a bounded
+%% number of times; a report that cannot be resolved is an error, not a
+%% success.
+%% @end
+-spec resolve_conflict(kz_term:ne_binary(), kz_json:object(), non_neg_integer()) -> 'ok' | {'error', any()}.
+resolve_conflict(_AccountMODb, Doc, 0) ->
+    lager:error("cdr ~s kept conflicting with the stored record, giving up on the report from ~s (~s)"
+               ,[kz_doc:id(Doc), kzd_cdrs:media_server(Doc), kzd_cdrs:disposition(Doc)]
+               ),
+    {'error', 'conflict'};
+resolve_conflict(AccountMODb, Doc, Retries) ->
+    DocId = kz_doc:id(Doc),
+    case open_stored_cdr(AccountMODb, DocId) of
+        {'ok', Stored} -> resolve_conflict(AccountMODb, Doc, Stored, Retries);
+        {'error', 'not_found'} ->
+            lager:info("cdr ~s conflicted but no record is stored any more, saving it again", [DocId]),
+            do_save_cdr(AccountMODb, kz_json:delete_key(<<"_rev">>, Doc), Retries - 1);
+        {'error', _E}=Error ->
+            lager:error("cdr ~s conflicted with a stored record that could not be read: ~p", [DocId, _E]),
+            Error
+    end.
+
+-spec resolve_conflict(kz_term:ne_binary(), kz_json:object(), kz_json:object(), pos_integer()) -> 'ok' | {'error', any()}.
+resolve_conflict(AccountMODb, Doc, Stored, Retries) ->
+    case {is_same_channel(Doc, Stored), is_answered(Stored), is_answered(Doc)} of
+        {'true', _, _} ->
+            lager:debug("cdr ~s is already stored, ignoring the repeated report", [kz_doc:id(Doc)]),
+            'ok';
+        {'false', 'false', 'true'} ->
+            lager:info("cdr ~s stored from ~s was ~s and never answered, replacing it with the answered report from ~s"
+                      ,[kz_doc:id(Doc), kzd_cdrs:media_server(Stored), kzd_cdrs:disposition(Stored), kzd_cdrs:media_server(Doc)]
+                      ),
+            do_save_cdr(AccountMODb, kz_doc:set_revision(Doc, kz_doc:revision(Stored)), Retries - 1);
+        {'false', _, _} ->
+            lager:warning("cdr ~s is already stored from ~s (~s, ~p billing ms), dropping the report from ~s (~s, ~p billing ms)"
+                         ,[kz_doc:id(Doc)
+                          ,kzd_cdrs:media_server(Stored), kzd_cdrs:disposition(Stored), billing_milli_seconds(Stored)
+                          ,kzd_cdrs:media_server(Doc), kzd_cdrs:disposition(Doc), billing_milli_seconds(Doc)
+                          ]
+                         ),
+            'ok'
+    end.
+
+-spec open_stored_cdr(kz_term:ne_binary(), kz_term:ne_binary()) ->
+          {'ok', kz_json:object()} | {'error', any()}.
+open_stored_cdr(?KZ_ANONYMOUS_CDR_DB=Db, DocId) ->
+    kz_datamgr:open_doc(Db, DocId);
+open_stored_cdr(AccountMODb, DocId) ->
+    kazoo_modb:open_doc(AccountMODb, DocId).
+
+%% @doc Whether two records describe the same channel, which is to say the
+%% same report delivered twice.
+-spec is_same_channel(kz_json:object(), kz_json:object()) -> boolean().
+is_same_channel(Doc, Stored) ->
+    lists:all(fun(Field) -> Field(Doc) =:= Field(Stored) end
+             ,[fun kzd_cdrs:media_server/1
+              ,fun kzd_cdrs:disposition/1
+              ,fun kzd_cdrs:hangup_cause/1
+              ,fun kzd_cdrs:billing_seconds/1
+              ,fun kzd_cdrs:channel_created_time/1
+              ]
+             ).
+
+%% A call answered and hung up within the second bills 0 seconds but some
+%% hundred milliseconds, with an endpoint disposition of `ANSWER'. The
+%% disposition alone does not settle it: FreeSWITCH's originate reports
+%% `SUCCESS' for accepted early media or ringing too, so only billing and
+%% the endpoint's `ANSWER' count.
+-spec is_answered(kz_json:object()) -> boolean().
+is_answered(Doc) ->
+    billing_milli_seconds(Doc) > 0
+        orelse kzd_cdrs:billing_seconds(Doc, 0) > 0
+        orelse kzd_cdrs:disposition(Doc) =:= <<"ANSWER">>
+        orelse kz_json:get_ne_binary_value(<<"endpoint_disposition">>, Doc) =:= <<"ANSWER">>.
+
+-spec billing_milli_seconds(kz_json:object()) -> non_neg_integer().
+billing_milli_seconds(Doc) ->
+    kz_json:get_integer_value(<<"billing_milli_seconds">>, Doc, 0).
 
 -spec register_views() -> 'ok'.
 register_views() ->
@@ -159,9 +255,10 @@ ccv_path(Key) -> ?CCV(Key).
 save_cdr(_AcctId, _Timestamp, JObj) ->
     CDRDb = kz_doc:account_db(JObj),
     case save_cdr(CDRDb, kz_json:normalize_jobj(JObj)) of
-        {'error', 'max_save_retries'} ->
-            lager:error("write failed to ~s, too many retries", [CDRDb]);
-        'ok' -> 'ok'
+        'ok' -> 'ok';
+        {'error', _E} ->
+            lager:error("failed to store cdr ~s in ~s: ~p", [kz_doc:id(JObj), CDRDb, _E]),
+            'ok'
     end.
 
 %% @doc checks for sensitive information and removes it from the payload

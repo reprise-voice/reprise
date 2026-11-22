@@ -58,6 +58,10 @@
 
 -export([init_cf_exe/2]).
 
+-ifdef(TEST).
+-export([maybe_announce_call_is_being_recorded/1]).
+-endif.
+
 -include("callflow.hrl").
 -include_lib("kazoo_stdlib/include/kazoo_json.hrl").
 -include_lib("kazoo_amqp/include/kz_api.hrl").
@@ -992,7 +996,7 @@ maybe_announce_call_is_being_recorded(Call) ->
 -spec maybe_announce_call_is_being_recorded(kapps_call:call(), boolean()) -> 'ok'.
 maybe_announce_call_is_being_recorded(Call, 'true') ->
     {'ok', Account} = kzd_accounts:fetch(kapps_call:account_id(Call)),
-    AccCallRecConf = kz_endpoint:merge_call_recording(kzd_accounts:call_recording_account(Account)),
+    AccCallRecConf = kz_endpoint:merge_call_recording(kzd_accounts:call_recording_account(Account, kz_json:new())),
     ShouldPlayPrompt = kz_json:is_true([kapps_call:direction(Call) %% Direction: inbound | outbound.
                                        ,kapps_call:inception_type(Call) %% Origin: onnet | offnet
                                        ,<<"should_announce_when_recording">>

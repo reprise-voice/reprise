@@ -4,6 +4,11 @@
 		<field name="recording" type="reference" />
 		<field name="variable_playback_terminator_used" as="Terminator" />
 		<field name="variable_record_ms" as="Length" />
+		<field name="File-Exists" type="expand" value="${file_exists(${Record-File-Path})}" serialize-as="boolean">
+			<filters>
+				<filter name="Record-File-Path" type="include" compare="exists" />
+			</filters>
+		</field>
 		<field name="from-to" type="reference" />
 		<field name="variable_silence_hits_exhausted" as="Silence-Terminated" serialize-as="boolean" />
 		<field name="Silence-Terminated" type="expand" value="${cond(${variable_record_silence_hits} == 0 ? true : false)}"	serialize-as="boolean">

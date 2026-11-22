@@ -19,6 +19,10 @@
 
 -export([cancel/1]).
 
+-ifdef(TEST).
+-export([storing_state/2]).
+-endif.
+
 %% gen_listener callbacks
 -export([init/1
         ,handle_call/3
@@ -242,10 +246,11 @@ handle_cast({'retry_store_attachment', _Error}, #state{monitor={_, Ref}, fax_sto
     erlang:demonitor(Ref),
     {'noreply', State#state{fax_store_count=StoreCount + 1}, ?POLL_INTERVAL};
 handle_cast({'store_attachment', FaxDoc}, #state{monitor={_, Ref}}=State) ->
-    erlang:demonitor(Ref),
-    {'noreply', State#state{fax_doc=FaxDoc
-                           ,status = <<"storing attachment">>
-                           }, ?POLL_INTERVAL};
+    erlang:demonitor(Ref, ['flush']),
+    NewState = State#state{fax_doc=FaxDoc
+                          ,status = <<"storing attachment">>
+                          },
+    {'noreply', NewState#state{monitor=store_attachment(NewState)}};
 handle_cast('success', State) ->
     notify_success(State),
     {'stop', 'normal', State};
@@ -262,8 +267,12 @@ handle_cast({'channel_event', <<"CHANNEL_DESTROY">>, _JObj}, #state{monitor='und
     lager:warning("received channel destroy for fax receiver"),
     {'stop', 'normal', State};
 
-handle_cast({'channel_event', <<"CHANNEL_DESTROY">>, _JObj}, State) ->
-    {'noreply', State, ?POLL_INTERVAL};
+handle_cast({'channel_event', <<"CHANNEL_DESTROY">>, _JObj}, #state{monitor={Pid, _}}=State) ->
+    %% a store still running reports back itself; only a pending retry needs its timer again
+    case erlang:is_process_alive(Pid) of
+        'true' -> {'noreply', State};
+        'false' -> {'noreply', State, ?POLL_INTERVAL}
+    end;
 
 handle_cast(_Msg, State) ->
     lager:debug("unhandled cast : ~p", [_Msg]),
@@ -798,3 +807,16 @@ cancel(Id) ->
         'undefined' -> io:format("job ~s not found", [Id]);
         Pid -> gen_server:cast(Pid, 'cancel')
     end.
+
+-ifdef(TEST).
+-spec storing_state(kapps_call:call(), kz_term:pid_ref()) -> state().
+storing_state(Call, Monitor) ->
+    #state{call=Call
+          ,fax_id = <<"202609-fax">>
+          ,storage=#fax_storage{id = <<"202609-fax">>
+                               ,attachment_id = <<"received_file_202609-fax.tiff">>
+                               ,db = <<"account%2Fac%2Fco%2Funt-202609">>
+                               }
+          ,monitor=Monitor
+          }.
+-endif.

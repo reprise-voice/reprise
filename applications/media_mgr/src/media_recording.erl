@@ -27,6 +27,10 @@
         ,code_change/3
         ]).
 
+-ifdef(TEST).
+-export([is_discarded/1]).
+-endif.
+
 -include("media.hrl").
 
 -define(SERVER, ?MODULE).
@@ -492,15 +496,49 @@ store_recording({DirName, MediaName}, StoreUrl, #{event := JObj, pid := Pid} = M
 maybe_save_recording(Pid, RecordStop) ->
     case is_channel_loopback_bowout(RecordStop) of
         'false' ->
-            maybe_save_recording(Pid, RecordStop, kz_recording:recorder(RecordStop));
+            maybe_save_kept_recording(Pid, RecordStop);
         'true' ->
             lager:info("recording not stored since it was done in a loopback bowout leg")
     end.
+
+-spec maybe_save_kept_recording(pid(), kz_json:object()) -> 'ok'.
+maybe_save_kept_recording(Pid, RecordStop) ->
+    case is_discarded(RecordStop) of
+        'false' ->
+            maybe_save_recording(Pid, RecordStop, kz_recording:recorder(RecordStop));
+        'true' ->
+            log_discarded(kz_recording:file_path(RecordStop)
+                         ,kz_json:get_ne_binary_value([<<"Recording">>, <<"Completion-Cause">>], RecordStop, <<"no cause">>)
+                         )
+    end.
+
+%% Any other cause means the file went for some other reason, such as an
+%% earlier upload of the same file finishing while this recording appended
+%% to it, and the audio is lost.
+-spec log_discarded(kz_term:api_ne_binary(), kz_term:ne_binary()) -> 'ok'.
+log_discarded(FilePath, Cause)
+  when Cause =:= <<"input-too-short">>;
+       Cause =:= <<"empty-file">> ->
+    lager:info("recording ~s not stored since the media server discarded it (~s)", [FilePath, Cause]);
+log_discarded(FilePath, Cause) ->
+    lager:warning("recording ~s was gone from the media server before it was stored (~s)", [FilePath, Cause]).
 
 -spec is_channel_loopback_bowout(kz_json:object()) -> boolean().
 is_channel_loopback_bowout(RecordStop) ->
     kz_json:is_true(<<"Channel-Is-Loopback">>, RecordStop)
         andalso kz_json:is_true(<<"Channel-Loopback-Bowout">>, RecordStop).
+
+%%------------------------------------------------------------------------------
+%% @doc FreeSWITCH deletes a recording shorter than `record_min_sec', or one
+%% that never received audio, before it sends RECORD_STOP. The completion
+%% cause does not say so reliably, since silence detection sets it first, so
+%% the event carries whether the file is still there. An event without the
+%% field is stored as before.
+%% @end
+%%------------------------------------------------------------------------------
+-spec is_discarded(kz_json:object()) -> boolean().
+is_discarded(RecordStop) ->
+    kz_json:is_false(<<"File-Exists">>, RecordStop).
 
 -spec maybe_save_recording(pid(), kz_json:object(), kz_term:api_ne_binary()) -> 'ok'.
 maybe_save_recording(Pid, JObj, ?KZ_RECORDER) ->
