@@ -1,0 +1,2262 @@
+<document type="freeswitch/xml" node="ecallmgr@ecallmgr.example.com"><section name="configuration"><configuration name="com.kazoo.conf" description="Built by Kazoo" version="5.4.0" timestamp="1788295114"><X-PRE-PROCESS cmd="stun-set" data="external_rtp_ip=stun:stun.l.google.com:19302"/><definitions><definition name="Call-Control">
+	<field name="Call-Control" type="static" serialize-as="object">
+		<filters>
+			<filter name="ecallmgr" type="include" compare="prefix" value="variable_Call-Control-"/>
+		</filters>
+		<fields>
+			<field name="variable_Call-Control-" type="prefix" exclude-prefix="true"/>
+		</fields>
+	</field>
+</definition><definition name="Metaflow-Control">
+	<field name="Metaflow-Control" type="static" serialize-as="object">
+		<filters>
+			<filter name="ecallmgr" type="include" compare="prefix" value="variable_Metaflow-Control-"/>
+		</filters>
+		<fields>
+			<field name="variable_Metaflow-Control-" type="prefix" exclude-prefix="true"/>
+		</fields>
+	</field>
+</definition><definition name="Switch-URI">
+	<field name="variable_Switch-URI" as="Switch-URI"/>
+</definition><definition name="interaction-id">
+	<filters>
+		<filter name="Call-Interaction-ID" type="include" compare="exists"/>
+	</filters>
+	<field name="Call-Interaction-ID"/>
+	<field name="Call-Interaction-Is-Root" serialize-as="boolean"/>
+</definition><definition name="fetch-params">
+
+    <field name="Fetch-Params" type="static" serialize-as="object">
+		<filters>
+			<filter name="fetch-params" type="include" compare="prefix" value="Fetch-Param-" exclude-prefix="true"/>
+        </filters>
+
+		<fields>
+			<field name="Fetch-Param-" type="prefix" exclude-prefix="true"/>
+            <field name="Fetch-Param-Endpoint-Call-Limits" as="Endpoint-Call-Limits" serialize-as="raw"/>
+        </fields>
+    </field>
+
+</definition><definition name="Custom-Channel-Vars">
+	<field name="Custom-Channel-Vars" type="static" serialize-as="object">
+		<fields>
+
+			<field name="ccvs" type="prefixes" exclude-prefix="true" value="X-ecallmgr_|variable_sip_h_X-ecallmgr_|variable_ecallmgr_|ecallmgr_"/>
+
+			<field name="variable_Fetch-UUID" as="Fetch-ID"/>
+			<field name="Fetch-UUID" as="Fetch-ID"/>
+
+			<field name="Referred-To" type="expand" value="sip:${regex(${url_decode(${variable_sip_refer_to})}|&lt;sips?:(.*)>|%1)}">
+				<filters>
+					<filter name="variable_sip_refer_to" type="include" compare="exists"/>
+				</filters>
+			</field>
+			<field name="variable_sip_h_Referred-By" as="Referred-By"/>
+
+			<field name="interaction-id" type="reference"/>
+
+            <field name="variable_presence_id" as="Presence-ID"/>
+            <field name="redirect" type="group">
+				<filters>
+					<filter name="variable_sip_redirected_by" type="include" compare="exists"/>
+				</filters>
+				<fields>
+					<field name="Redirected-By" type="expand" value="sip:${regex(${variable_sip_redirected_by}|&lt;sips?:(.*)>|%1)}"/>
+					<field name="Redirected-By" type="expand" value="sip:${regex(${variable_sip_redirected_by}|&lt;sips?:(.*)>|%1)};endpoint_id=${variable_redirected_by_Endpoint-ID}">
+						<filters>
+							<filter name="variable_redirected_by_Endpoint-ID" type="include" compare="exists"/>
+						</filters>
+					</field>
+					<field name="Redirected-Reason" type="expand" value="${regex(${variable_sip_redirected_by}|reason=(.*)|%1)}"/>
+				</fields>
+			</field>
+
+			<field name="Caller-Privacy-Hide-Number" as="Privacy-Hide-Number" serialize-as="boolean"/>
+			<field name="Caller-Privacy-Hide-Name" as="Privacy-Hide-Name" serialize-as="boolean"/>
+
+		</fields>
+	</field>
+</definition><definition name="Custom-Application-Vars">
+	<field name="Custom-Application-Vars" type="static" serialize-as="object">
+		<filters>
+			<filter name="cav" type="include" compare="prefixes" value="variable_cav_|variable_json_cav_"/>
+		</filters>
+
+		<fields>
+			<field name="variable_cav_" type="prefix" exclude-prefix="true"/>
+			<field name="variable_json_cav_" type="prefix" exclude-prefix="true" serialize-as="raw"/>
+		</fields>
+
+	</field>
+</definition><definition name="freeswitch-url">
+	<field name="FreeSWITCH-Hostname" as="Media-Server"/>
+	<field name="FreeSWITCH-Hostname" as="Switch-Hostname"/>
+	<field name="Switch-Nodename"/>
+	<field name="variable_Switch-URL" as="Switch-URL"/>
+	<field name="Switch-URI" type="reference"/>
+</definition><definition name="Control">
+	<field name="Call-Control" type="reference"/>
+	<field name="Metaflow-Control" type="reference"/>
+</definition><definition name="Custom-SIP-Headers">
+	<field name="Custom-SIP-Headers" type="static" serialize-as="object">
+		<filters>
+			<filter name="ecallmgr" type="include" compare="prefix" value="variable_sip_h_" exclude-prefix="true">
+				<prefix-exception value="variable_sip_h_X-AUTH"/>
+				<prefix-exception value="variable_sip_h_X-Proxy-Core"/>
+				<prefix-exception value="variable_sip_h_X-FS-"/>
+				<prefix-exception value="variable_sip_h_Referred-By"/>
+				<prefix-exception value="variable_sip_h_Refer-To"/>
+				<prefix-exception value="variable_sip_h_Diversion"/>
+			</filter>
+		</filters>
+		<fields>
+			<field name="variable_sip_h_" type="prefix" exclude-prefix="true">
+				<prefix-exception value="variable_sip_h_X-AUTH"/>
+				<prefix-exception value="variable_sip_h_X-Proxy-Core"/>
+				<prefix-exception value="variable_sip_h_X-FS-"/>
+				<prefix-exception value="variable_sip_h_Referred-By"/>
+				<prefix-exception value="variable_sip_h_Refer-To"/>
+				<prefix-exception value="variable_sip_h_Diversion"/>
+			</field>
+		</fields>
+	</field>
+</definition><definition name="Custom-AUTH-Headers">
+	<field name="Custom-AUTH-Headers" type="static" serialize-as="object">
+		<fields>
+			<field name="variable_sip_h_X-AUTH-" type="prefix" exclude-prefix="true"/>
+			<field name="variable_sip_h_X-FS-AUTH-" type="prefix" exclude-prefix="true"/>
+			<field name="X-AUTH-" type="prefix" exclude-prefix="true"/>
+			<field name="X-FS-AUTH-" type="prefix" exclude-prefix="true"/>
+		</fields>
+	</field>
+</definition><definition name="conference-config">
+	<field name="Conference-Config-Request" type="static" serialize-as="object">
+		<fields>
+			<field name="profile_name" as="Profile-ID"/>
+			<field name="conference_name" as="Conference-ID"/>
+
+			<field name="Conf-Profile" as="Profile-ID"/>
+			<field name="Conf-Name" as="Conference-ID"/>
+			<field name="Action"/>
+			<field name="Controls"/>
+		</fields>
+		<filters>
+			<filter name="Fetch-Key-Value" type="include" value="conference.conf"/>
+		</filters>
+	</field>
+</definition><definition name="debug-call">
+	<filters>
+		<filter name="Trace-Call-Variables" type="include" value="true"/>
+	</filters>
+	<field name="Call-Debug" type="static" serialize-as="object">
+		<fields verbose="true"/>
+	</field>
+</definition><definition name="fetch-info">
+	<field name="Event-Category" type="static" value="fetch"/>
+	<field name="Event-Name"/>
+	<field name="App-Name" type="static" value="freeswitch"/>
+	<field name="App-Version" type="static" value="1.0"/>
+	<field name="Switch-Nodename" as="Node"/>
+	<field name="Core-UUID"/>
+	<field name="Fetch-UUID"/>
+	<field name="Fetch-UUID" as="Msg-ID"/>
+	<field name="Call-ID" as="Fetch-Call-UUID"/>
+	<field name="Unique-ID" as="Call-ID"/>
+	<field name="Fetch-Section"/>
+	<field name="Fetch-Timeout" serialize-as="number"/>
+	<field name="Fetch-Timestamp-Micro" serialize-as="number"/>
+	<field name="Fetch-Key-Name"/>
+	<field name="Fetch-Key-Value"/>
+	<field name="Fetch-Tag"/>
+
+	<field name="fetch-params" type="reference"/>
+
+	<field name="Kazoo-Bundle" as="Fetch-Version"/>
+	<field name="Custom-Channel-Vars" type="reference"/>
+	<field name="Custom-Application-Vars" type="reference"/>
+	<field name="freeswitch-url" type="reference"/>
+	<field name="Control" type="reference"/>
+	<field name="Custom-SIP-Headers" type="reference"/>
+	<field name="Custom-AUTH-Headers" type="reference"/>
+	<field name="conference-config" type="reference"/>
+	<field name="debug-call" type="reference"/>
+</definition><definition name="fetch-channels">
+
+	<field name="fetch-info" type="reference"/>
+
+	<field name="Event-Category" type="static" value="channels"/>
+	<field name="Event-Name" type="static" value="channel_req"/>
+
+	<field name="purpose"/>
+	<field name="profile"/>
+	<field name="refer-to-user"/>
+	<field name="refer-to-host"/>
+	<field name="refer-to-params"/>
+	<field name="refer-to-headers"/>
+	<field name="replaces-call-id"/>
+	<field name="refer-from-channel-id"/>
+	<field name="refer-for-channel-id"/>
+
+</definition><definition name="hunt-context">
+	<field name="variable_sofia_profile_name" as="Hunt-Profile"/>
+	<field name="Hunt-Context"/>
+	<field name="Hunt-Dialplan"/>
+	<field name="Hunt-Destination-Number"/>
+	<field name="Hunt-Extension"/>
+</definition><definition name="call-direction">
+	<field name="Call-Direction"/>
+</definition><definition name="hunt-caller-id">
+	<field name="caller-id" type="group">
+		<filters>
+			<filter name="Call-Direction" type="include" compare="value" value="inbound"/>
+		</filters>
+		<fields>
+			<field name="Caller-ID-Number" type="first-of" value="variable_origination_caller_id_number|variable_effective_caller_id_number|Caller-Caller-ID-Number"/>
+			<field name="Caller-ID-Name" type="first-of" value="variable_origination_caller_id_name|variable_effective_caller_id_name|Caller-Caller-ID-Name"/>
+		</fields>
+	</field>
+	<field name="caller-id" type="group">
+		<filters>
+			<filter name="Call-Direction" type="include" compare="value" value="outbound"/>
+		</filters>
+		<fields>
+			<field name="Caller-ID-Number" type="first-of" value="variable_origination_callee_id_number|Hunt-Callee-ID-Number|Caller-Callee-ID-Number"/>
+			<field name="Caller-ID-Name" type="first-of" value="variable_origination_callee_id_name|Hunt-Callee-ID-Name|Caller-Callee-ID-Name"/>
+		</fields>
+	</field>
+</definition><definition name="from-network">
+	<field name="From-Network-Addr" type="first-of" value="variable_sip_h_X-AUTH-IP|variable_sip_received_ip"/>
+	<field name="From-Network-Port" type="first-of" value="variable_sip_h_X-AUTH-PORT|variable_sip_received_port"/>
+</definition><definition name="user-agent">
+	<field name="variable_sip_user_agent" as="User-Agent"/>
+</definition><definition name="to-did">
+	<field name="To-DID" type="first-of" value="variable_ecallmgr_E164-Destination|variable_ecallmgr_Original-Number|Caller-Destination-Number"/>
+</definition><definition name="loopback">
+	<field name="variable_is_loopback" as="Channel-Is-Loopback" serialize-as="boolean"/>
+	<field name="Loopback" type="group">
+		<filters>
+			<filter name="variable_is_loopback" type="include" compare="value" value="1"/>
+		</filters>
+		<fields>
+			<field name="variable_loopback_leg" as="Channel-Loopback-Leg"/>
+			<field name="variable_other_loopback_leg_uuid" as="Channel-Loopback-Other-Leg-ID"/>
+			<field name="variable_loopback_bowout" as="Channel-Loopback-Bowout" serialize-as="boolean"/>
+			<field name="variable_loopback_bowout_on_execute" as="Channel-Loopback-Bowout-Execute" serialize-as="boolean"/>
+			<field name="variable_hangup_cause" as="Channel-Loopback-Hangup-Cause"/>
+			<field name="variable_loopback_bowout_used" as="Channel-Loopback-Bowout-Used" serialize-as="boolean"/>
+			<field name="variable_loopback_cross_boundary" as="Channel-Loopback-Cross-Boundary" serialize-as="boolean"/>
+		</fields>
+	</field>
+</definition><definition name="sip-tags">
+	<field name="variable_sip_to_tag" as="To-Tag"/>
+	<field name="variable_sip_from_tag" as="From-Tag"/>
+</definition><definition name="destination-number">
+	<field name="Destination-Number" type="first-of" value="KZ-Originator-Destination-Number|KZ-Origination-Destination-Number|KZ-Destination-Number|variable_sip_h_X-FS-Destination-Number|Hunt-Destination-Number|Caller-Destination-Number"/>
+</definition><definition name="hunt-request">
+	<field name="Is-Transfer" type="static" serialize-as="boolean" value="true">
+		<filters>
+			<filter name="Hunt-Transfer-Source" type="include" compare="exists"/>
+		</filters>
+	</field>
+
+	<field name="Request" type="expand" value="${regex(${first-of(variable_sip_h_X-FS-Destination-Number|Hunt-Destination-Number|Caller-Destination-Number)}|([^@]*)|%1)}@${first-of(variable_sip_invite_domain|variable_sip_to_host|variable_sip_req_host|variable_ecallmgr_Realm)}"/>
+	<field name="To" type="expand" value="${regex(${first-of(variable_sip_to_user|Hunt-Destination-Number)}|([^@]*)|%1)}@${first-of(variable_sip_invite_domain|variable_sip_to_host|variable_sip_req_host|variable_ecallmgr_Realm)}"/>
+    <field name="variable_sip_to_uri" as="To-URI"/>
+	<field name="From" type="expand" value="${first-of(variable_origination_caller_id_number|Hunt-Caller-ID-Number|origination_callee_id_number|variable_sip_from_user)}@${first-of(variable_sip_invite_domain|variable_sip_from_host|variable_sip_req_host|variable_ecallmgr_Realm)}"/>
+</definition><definition name="hunt-privacy">
+	<field name="Privacy" type="static" serialize-as="object">
+		<fields>
+			<field name="Hunt-Privacy-Hide-Number" as="Hide-Number" serialize-as="boolean"/>
+			<field name="Hunt-Privacy-Hide-Name" as="Hide-Name" serialize-as="boolean"/>
+			<field name="Hunt-Screen-Bit" as="Screen-Bit" serialize-as="boolean"/>
+		</fields>
+	</field>
+</definition><definition name="proxy-origin">
+	<field name="Originating-Proxy" type="expand" value="sip:${variable_sip_via_host}:${first-of(variable_sip_via_port|#5060)};transport=${first-of(variable_sip_via_protocol|#udp)}">
+		<filters>
+			<filter name="variable_sip_via_host" type="include" compare="exists"/>
+		</filters>
+	</field>
+</definition><definition name="fetch-dialplan">
+	<field name="fetch-info" type="reference"/>
+	<field name="Event-Date-Timestamp-Gregorian" as="Timestamp" serialize-as="number"/>
+	<field name="Unique-ID" as="Call-ID"/>
+	<field name="variable_sip_invite_domain" as="Domain-Name"/>
+	<field name="call-direction" type="reference"/>
+	<field name="hunt-caller-id" type="reference"/>
+	<field name="from-network" type="reference"/>
+	<field name="user-agent" type="reference"/>
+	<field name="to-did" type="reference"/>
+	<field name="loopback" type="reference"/>
+	<field name="sip-tags" type="reference"/>
+	<field name="freeswitch-url" type="reference"/>
+	<field name="destination-number" type="reference"/>
+	<field name="Resource-Type" type="static" value="audio"/>
+	<field name="hunt-context" type="reference"/>
+	<field name="hunt-request" type="reference"/>
+	<field name="hunt-privacy" type="reference"/>
+	<field name="Call-Setup" type="static" value="true" serialize-as="boolean"/>
+	<field name="Hunt-Prepend-CID-Name" as="Prepend-CID-Name"/>
+
+	<field name="proxy-origin" type="reference"/>
+
+	<field name="Event-Category" type="static" value="dialplan"/>
+	<field name="Event-Name" type="static" value="route_req"/>
+	<field name="Hunt-Context" as="Fetch-Key-Value"/>
+
+	<field name="variable_sip_diversions" as="SIP-Diversions" as-array="true"/>
+
+</definition><definition name="fetch-directory">
+	<field name="fetch-info" type="reference"/>
+	<field name="Event-Date-Timestamp-Gregorian" as="Timestamp" serialize-as="number"/>
+	<field name="Action"/>
+	<field name="user"/>
+	<field name="group"/>
+	<field name="Call-ID" type="first-of" value="Call-ID|Fetch-Call-UUID|Unique-ID"/>
+</definition><definition name="fax_data">
+	<field name="variable_fax_result_text" as="Fax-Result-Text"/>
+	<field name="variable_fax_result_code" as="Fax-Result-Code" serialize-as="number"/>
+	<field name="variable_fax_success" as="Fax-Success" serialize-as="boolean"/>
+	<field name="variable_has_t38" as="Fax-T38-Used" serialize-as="boolean"/>
+	<field name="variable_fax_t38_status" as="Fax-T38-Status"/>
+	<field name="variable_fax_ecm_used" as="Fax-ECM-Used" serialize-as="boolean"/>
+	<field name="variable_fax_ecm_requested" as="Fax-ECM-Requested" serialize-as="boolean"/>
+	<field name="variable_fax_document_transferred_pages" as="Fax-Transferred-Pages" serialize-as="number"/>
+	<field name="variable_fax_document_total_pages" as="Fax-Total-Pages" serialize-as="number"/>
+	<field name="variable_fax_bad_rows" as="Fax-Bad-Rows" serialize-as="number"/>
+	<field name="variable_fax_transfer_rate" as="Fax-Transfer-Rate" serialize-as="number"/>
+	<field name="variable_fax_local_station_id" as="Fax-Local-Station-ID"/>
+	<field name="variable_fax_remote_station_id" as="Fax-Remote-Station-ID"/>
+	<field name="variable_fax_remote_country" as="Fax-Remote-Country"/>
+	<field name="variable_fax_remote_vendor" as="Fax-Remote-Vendor"/>
+	<field name="variable_fax_remote_model" as="Fax-Remote-Model"/>
+	<field name="variable_fax_image_resolution" as="Fax-Image-Resolution"/>
+	<field name="variable_fax_file_image_resolution" as="Fax-File-Image-Resolution"/>
+	<field name="variable_fax_image_size" as="Fax-Image-Size" serialize-as="number"/>
+	<field name="variable_fax_image_pixel_size" as="Fax-Image-Pixel-Size"/>
+	<field name="variable_fax_file_image_pixel_size" as="Fax-File-Image-Pixel-Size"/>
+	<field name="variable_fax_longest_bad_row_run" as="Fax-Longest-Bad-Row-Run" serialize-as="number"/>
+	<field name="variable_fax_encoding" as="Fax-Encoding"/>
+	<field name="variable_fax_encoding_name" as="Fax-Encoding-Name"/>
+	<field name="variable_fax_timezone" as="Fax-Timezone"/>
+	<field name="variable_fax_ident" as="Fax-Identity-Number"/>
+	<field name="variable_fax_header" as="Fax-Identity-Name"/>
+	<field name="variable_fax_doc_id" as="Fax-Doc-ID"/>
+	<field name="variable_fax_doc_database" as="Fax-Doc-DB"/>
+</definition><definition name="hangup-code">
+
+	<field name="Hangup-Code" type="first-of" value="variable_last_bridge_proto_specific_hangup_cause|variable_proto_specific_hangup_cause"/>
+
+	<field name="Hangup-Code" type="static" value="sip:200">
+		<filters>
+			<filter name="Other-Leg-Source" type="include" compare="value" value="mod_loopback"/>
+			<filter name="Application" type="include" compare="contains" value="bridge"/>
+			<filter name="app_variable_app_uuid_name" type="include" compare="value" value="bridge"/>
+			<filter name="variable_last_bridge_hangup_cause" type="include" compare="value" value="NORMAL_CLEARING"/>
+			<filter name="variable_bridge_hangup_cause" type="include" compare="value" value="NORMAL_CLEARING"/>
+		</filters>
+	</field>
+
+	<field name="XFER-Hangup-Code" as="Hangup-Code"/>
+
+</definition><definition name="hangup-cause">
+
+
+	<field name="Hangup-Cause" type="first-of" value="Hangup-Cause|variable_hangup_cause">
+		<filters>
+			<filter name="Application" type="include" compare="contains" value="bridge"/>
+		</filters>
+	</field>
+
+	<field name="variable_bridge_hangup_cause" as="Hangup-Cause">
+		<filters>
+			<filter name="Application" type="include" compare="contains" value="bridge"/>
+			<filter name="variable_bridge_hangup_cause" type="exclude" value="BOWOUT"/>
+			<filter name="variable_last_bridge_hangup_cause" type="exclude" value="BOWOUT"/>
+		</filters>
+	</field>
+
+	<field name="variable_originate_failed_cause" as="Hangup-Cause">
+		<filters>
+			<filter name="Application" type="include" compare="contains" value="bridge"/>
+		</filters>
+	</field>
+	
+	<field name="Hangup-Cause" type="first-of" value="Hangup-Cause|variable_originate_failed_cause|variable_hangup_cause">
+		<filters>
+			<filter name="Application" type="exclude" compare="contains" value="bridge"/>
+		</filters>
+	</field>
+
+	<field name="Hangup-Cause" type="first-of" value="variable_hangup_cause">
+		<filters>
+			<filter name="variable_hangup_cause" type="include" compare="value" value="BOWOUT"/>
+			<filter name="variable_channel_endpoint_name" type="include" compare="value" value="loopback"/>
+		</filters>
+	</field>
+
+	<field name="Hangup-Cause" type="first-of" value="Hangup-Cause|variable_hangup_cause"/>
+
+	<field name="variable_endpoint_disposition" as="Hangup-Cause">
+		<filters>
+			<filter name="variable_endpoint_disposition" type="include" compare="value" value="BLIND_TRANSFER"/>
+		</filters>
+	</field>
+
+	<field name="variable_last_bridge_hangup_cause" as="Hangup-Cause">
+		<filters>
+			<filter name="Call-Direction" type="include" compare="value" value="outbound"/>
+			<filter name="Caller-Logical-Direction" type="exclude" compare="value" value="inbound"/>
+			<filter name="last_app" type="exclude" compare="contains" value="intercept"/>
+			<filter name="variable_bridge_hangup_cause" type="exclude" value="BOWOUT"/>
+			<filter name="variable_last_bridge_hangup_cause" type="exclude" value="BOWOUT"/>
+		</filters>
+	</field>
+
+	<field name="Hangup-Cause" type="static" value="ATTENDED_TRANSFER">
+		<filters>
+			<filter name="Channel-Flags" type="include" compare="contains" value="ORIGINATING_XFER"/>
+		</filters>
+	</field>
+
+	<field name="XFER-Hangup-Cause" as="Hangup-Cause"/>
+
+</definition><definition name="hangup-disposition">
+	<field name="Disposition" type="first-of" value="variable_originate_disposition|variable_endpoint_disposition"/>
+	<field name="SIP-Disposition" type="first-of" value="variable_sip_hangup_disposition|sip_hangup_disposition"/>
+	<field name="variable_endpoint_disposition" as="Endpoint-Disposition"/>
+</definition><definition name="hangup-phrase">
+	<field name="sip_hangup_phrase" as="Hangup-Phrase"/>
+</definition><definition name="msg-id">
+    <field name="Event-Date-Timestamp" as="Msg-ID"/>
+</definition><definition name="interaction-timestamp">
+    <field name="Call-Interaction-Timestamp" as="Timestamp" serialize-as="number"/>
+</definition><definition name="call-interaction">
+    <field name="Call-Interaction" type="static" serialize-as="object">
+    <fields>
+        <field name="Call-Interaction-ID" as="Id"/>
+        <field name="Call-Interaction-Key" as="Key"/>
+        <field name="Call-Interaction-Timestamp" as="Timestamp" serialize-as="number"/>
+        <field name="Call-Interaction-Is-Root" as="Is-Root" serialize-as="boolean"/>
+   </fields>
+</field>
+</definition><definition name="channel-state">
+	<field name="Channel-State-Name" as="Channel-State"/>
+	<field name="Channel-Call-State"/>
+	<field name="Channel-Name"/>
+	<field name="Answer-State" as="Channel-Answer-State"/>
+
+	<field name="XFER-Channel-Answer-State" as="Channel-Answer-State"/>
+
+</definition><definition name="caller-id">
+	<field name="caller-id" type="group">
+		<filters>
+			<filter name="Call-Direction" type="include" compare="value" value="inbound"/>
+			</filters>
+		<fields>
+			<field name="Caller-ID-Number" type="first-of" value="KZ-Caller-ID-Original-Number|KZ-Caller-ID-Number|variable_origination_caller_id_number|variable_effective_caller_id_number|Caller-Caller-ID-Number"/>
+			<field name="Caller-ID-Name" type="first-of" value="KZ-Caller-ID-Original-Name|KZ-Caller-ID-Name|variable_origination_caller_id_name|variable_effective_caller_id_name|Caller-Caller-ID-Name"/>
+			<field name="Callee-ID-Number" type="first-of" value="KZ-Destination-Number|KZ-Callee-ID-Number|variable_effective_callee_id_number|Caller-Callee-ID-Number|Other-Leg-Caller-ID-Number"/>
+		</fields>
+	</field>
+	<field name="caller-id" type="group">
+		<filters>
+			<filter name="Call-Direction" type="include" compare="value" value="outbound"/>
+		</filters>
+		<fields>
+			<field name="Caller-ID-Number" type="first-of" value="KZ-Origination-Caller-ID-Number|KZ-Caller-ID-Number|variable_origination_caller_id_number|variable_effective_caller_id_number|Caller-Caller-ID-Number"/>
+			<field name="Caller-ID-Name" type="first-of" value="KZ-Origination-Caller-ID-Name|KZ-Caller-ID-Name|variable_origination_caller_id_name|variable_effective_caller_id_name|Caller-Caller-ID-Name"/>
+			<field name="Callee-ID-Number" type="first-of" value="KZ-E164-Destination-Number|KZ-Callee-ID-Number|variable_origination_callee_id_number|variable_effective_callee_id_number|Caller-Callee-ID-Number|Other-Leg-Caller-ID-Number"/>
+			<field name="Callee-ID-Name" type="first-of" value="KZ-Callee-ID-Name|variable_origination_callee_id_name|variable_effective_callee_id_name|Caller-Callee-ID-Name|Other-Leg-Caller-ID-Name"/>
+		</fields>
+	</field>
+	<field name="caller-id" type="group">
+		<filters>
+			<filter name="Call-Direction" type="include" compare="value" value="outbound"/>
+			<filter name="Channel-Flags" type="include" compare="contains" value="DIALPLAN"/>
+		</filters>
+		<fields>
+			<field name="Caller-ID-Number" type="first-of" value="KZ-Caller-ID-Number|KZ-Caller-ID-Number|variable_origination_caller_id_number|variable_effective_caller_id_number|Caller-Caller-ID-Number"/>
+			<field name="Caller-ID-Name" type="first-of" value="KZ-Caller-ID-Name|KZ-Caller-ID-Name|variable_origination_caller_id_name|variable_effective_caller_id_name|Caller-Caller-ID-Name"/>
+			<field name="Callee-ID-Number" type="first-of" value="KZ-Callee-ID-Number|variable_origination_callee_id_number|variable_effective_callee_id_number|Caller-Callee-ID-Number|Other-Leg-Caller-ID-Number"/>
+			<field name="Callee-ID-Name" type="first-of" value="KZ-Callee-ID-Name|variable_origination_callee_id_name|variable_effective_callee_id_name|Caller-Callee-ID-Name|Other-Leg-Caller-ID-Name"/>
+		</fields>
+	</field>
+
+	<field name="caller-id" type="group">
+		<filters>
+			<filter name="Call-Direction" type="include" compare="value" value="inbound"/>
+			<filter name="variable_loopback_leg" type="include" compare="value" value="B"/>
+			<filter name="variable_ecallmgr_Inception-Account-ID" type="include" compare="exists"/>
+		</filters>
+		<fields>
+			<field name="Caller-ID-Number" type="first-of" value="variable_origination_caller_id_number|Caller-Caller-ID-Number"/>
+			<field name="Caller-ID-Name" type="first-of" value="variable_origination_caller_id_name|Caller-Caller-ID-Name"/>
+			</fields>
+	</field>
+</definition><definition name="caller-context">
+	<field name="variable_sofia_profile_name" as="Caller-Profile"/>
+	<field name="Caller-Context"/>
+	<field name="Caller-Dialplan"/>
+	<field name="Caller-Destination-Number"/>
+</definition><definition name="presence-id">
+	<field name="variable_presence_id" as="Presence-ID"/>
+</definition><definition name="from-to">
+	<field name="Request" type="first-of" value="variable_sip_req_uri|variable_sip_invite_req_uri|variable_sip_loopback_req_uri|variable_sip_to_uri|variable_sip_invite_to_uri|variable_cdr_uri_request"/>
+	<field name="To" type="first-of" value="variable_sip_to_uri|variable_sip_invite_to_uri|variable_sip_req_uri|variable_sip_invite_req_uri|variable_sip_loopback_req_uri|variable_cdr_uri_to"/>
+	<field name="To-URI" type="first-of" value="variable_sip_to_uri|variable_sip_invite_to_uri"/>
+	<field name="From" type="first-of" value="variable_sip_from_uri|variable_presence_id|variable_sip_invite_from_uri|variable_sip_loopback_from_uri|variable_cdr_uri_from"/>
+	<field name="From-URI" type="first-of" value="variable_sip_from_uri|variable_sip_invite_from_uri"/>
+	<field name="Caller-Destination-Number"/>
+
+</definition><definition name="from-to-verto">
+	<filters>
+		<filter name="Caller-Source" type="include" compare="value" value="mod_verto"/>
+	</filters>
+
+	<field name="Request" type="expand" value="${variable_conference_name}@${variable_ecallmgr_Realm}"/>
+	<field name="To" type="expand" value="${variable_conference_name}@${variable_ecallmgr_Realm}"/>
+	<field name="To-URI" type="expand" value="${variable_conference_name}@${variable_ecallmgr_Realm}"/>
+	<field name="Caller-Username" as="From"/>
+	<field name="Caller-Username" as="From-URI"/>
+	<field name="Caller-Destination-Number" type="static" value="conference"/>	
+
+</definition><definition name="other-leg">
+	<field name="Other-Leg-Direction"/>
+	<field name="Other-Leg-Caller-ID-Name"/>
+	<field name="Other-Leg-Caller-ID-Number"/>
+	<field name="Other-Leg-Destination-Number"/>
+	<field name="Other-Leg-Call-ID" type="first-of" value="Other-Leg-Unique-ID|Other-Leg-Call-ID|variable_origination_uuid|ent_originate_aleg_uuid|variable_ent_originate_aleg_uuid|kz_originate_aleg_uuid|variable_kz_originate_aleg_uuid"/>
+    <field name="Other-Leg" type="static" serialize-as="object">
+	    <fields>
+			<field name="Direction"/>
+			<field name="Caller-ID-Name"/>
+			<field name="Caller-ID-Number"/>
+			<field name="Destination-Number"/>
+			<field name="Call-ID" type="first-of" value="Other-Leg-Unique-ID|Other-Leg-Call-ID|variable_origination_uuid|ent_originate_aleg_uuid|variable_ent_originate_aleg_uuid|kz_originate_aleg_uuid|variable_kz_originate_aleg_uuid"/>
+	    </fields>
+	</field>
+</definition><definition name="sdp">
+	<field name="variable_switch_r_sdp" as="Remote-SDP"/>
+	<field name="variable_rtp_local_sdp_str" as="Local-SDP"/>
+</definition><definition name="call-duration">
+	<field name="variable_duration" as="Duration-Seconds" serialize-as="number"/>
+	<field name="variable_progresssec" as="Ringing-Seconds" serialize-as="number"/>
+
+    <field name="variable_billsec" as="Billing-Seconds" serialize-as="number"/>
+    <field name="variable_billmsec" as="Billing-Milli-Seconds" serialize-as="number"/>
+</definition><definition name="hangup-fields">
+	<field name="hangup-code" type="reference"/>
+	<field name="hangup-cause" type="reference"/>
+	<field name="hangup-disposition" type="reference"/>
+	<field name="hangup-phrase" type="reference"/>
+</definition><definition name="transfer-history">
+    <field name="_json_transfer_history" as="Transfer-History" serialize-as="raw"/>
+</definition><definition name="originated-legs">
+    <field name="_json_originated_legs" as="Originated-Legs" serialize-as="raw"/>
+</definition><definition name="originate-causes">
+    <field name="_json_originate_causes" as="Originate-Causes" serialize-as="raw"/>
+</definition><definition name="fax_info">
+	<filters>
+		<filter name="variable_fax_success" type="include" compare="exists"/>
+	</filters>
+	<field name="Fax-Info" type="static" serialize-as="object">
+		<fields>
+			<field name="fax_data" type="reference"/>
+		</fields>
+	</field>
+</definition><definition name="channel-endpoint-name">
+	<field name="variable_channel_endpoint_name" as="Channel-Endpoint-Name"/>
+</definition><definition name="cdr-extended-data">
+    <field name="Extended-Data" type="static" serialize-as="object">
+        <fields>
+            <field name="_json_channel_stats" as="Channel-Stats" serialize-as="raw"/>
+            <field name="_json_callflow" as="Channel-CallFlow" serialize-as="raw">
+                <filters>
+                    <filter name="Trace-Callflow" type="include" value="true"/>
+                </filters>
+            </field>
+            <field name="_json_channel_media_errors" as="Channel-Media-Errors" serialize-as="raw">
+                <filters>
+                    <filter name="Trace-Media-Errors" type="include" value="true"/>
+                </filters>
+            </field>
+            <field name="_json_application_log" as="Channel-Application-Log" serialize-as="raw">
+                <filters>
+                    <filter name="Trace-Application-Log" type="include" value="true"/>
+                </filters>
+            </field>
+        </fields>
+	</field>
+</definition><definition name="raw-application">
+	<field name="Raw-Application-Name" type="first-of" value="kazoo_application_name|Application|Event-Subclass"/>
+	<field name="Application-Data" as="Raw-Application-Data"/>
+</definition><definition name="application">
+	<field name="Application-Name" type="first-of" value="Application-UUID-Name|kazoo_application_name|Application|Event-Subclass"/>
+	<field name="Application-Response" type="first-of" value="kazoo_application_response|Application-Response"/>
+</definition><definition name="application-all">
+	<field name="raw-application" type="reference"/>
+	<field name="application" type="reference"/>
+</definition><definition name="call_event_headers">
+	<field name="Event-Category" type="static" value="call_event"/>
+	<field name="Event-Name" type="first-of" value="kazoo_event_name|Event-Subclass|Event-Name"/>
+	<field name="Event-Date-Timestamp" as="Event-Timestamp"/>
+	<field name="Event-Date-Timestamp" as="Msg-ID"/>
+	<field name="Event-Date-Timestamp-Gregorian" as="Timestamp" serialize-as="number"/>
+	<field name="variable_sip_origination_call_uuid" as="Origination-Call-ID"/>
+	<field name="Call-ID" type="first-of" value="Unique-ID|Caller-Unique-ID|caller-unique-id"/>
+	<field name="Caller-Channel-Created-Time" as="Channel-Created-Time"/>
+	<field name="Switch-Nodename" as="Node"/>
+	<field name="variable_sip_invite_domain" as="Domain-Name"/>
+	<field name="App-Name" type="static" value="freeswitch"/>
+	<field name="App-Version" type="static" value="1.0"/>
+	<field name="channel-endpoint-name" type="reference"/>
+	<field name="Time-Stream-" type="prefix" exclude-prefix="false" serialize-as="number"/>
+
+</definition><definition name="call_event">
+	<field name="call_event_headers" type="reference"/>
+	<field name="call-direction" type="reference"/>
+	<field name="channel-state" type="reference"/>
+	<field name="caller-id" type="reference"/>
+	<field name="caller-context" type="reference"/>
+	<field name="sip-tags" type="reference"/>
+	<field name="presence-id" type="reference"/>
+	<field name="loopback" type="reference"/>
+	<field name="freeswitch-url" type="reference"/>
+	<field name="other-leg" type="reference"/>
+	<field name="user-agent" type="reference"/>
+	<field name="Custom-Channel-Vars" type="reference"/>
+	<field name="Custom-Application-Vars" type="reference"/>
+	<field name="Custom-SIP-Headers" type="reference"/>
+	<field name="Control" type="reference"/>
+	<field name="debug-call" type="reference"/>
+	<field name="from-to" type="reference"/>
+</definition><definition name="application-uuid">
+	<field name="application-all" type="reference"/>
+	<field name="Application-UUID" type="first-of" value="app_uuid|variable_app_uuid|Application-UUID|variable_Application-UUID|scope_variable_Application-UUID"/>
+</definition><definition name="conference-vars">
+	<field name="Conference-Vars" type="static" serialize-as="object">
+		<fields>
+			<field name="Conference-" type="prefix" exclude-prefix="true"/>
+			<field name="Account-ID" type="first-of" value="Account-ID|Conference-Account-ID|variable_ecallmgr_Account-ID"/>
+		</fields>
+	</field>
+</definition><definition name="conference-caller-id">
+	<field name="CONF-CALLER-ID-IN" type="group">
+		<filters>
+			<filter name="Call-Direction" type="include" compare="value" value="inbound"/>
+		</filters>
+		<fields>
+			<field name="Caller-Caller-ID-Name" as="Caller-ID-Name"/>
+			<field name="Caller-Caller-ID-Number" as="Caller-ID-Number"/>
+		</fields>
+	</field>
+	<field name="CONF-CALLER-ID-OUT" type="group">
+		<filters>
+			<filter name="Call-Direction" type="include" compare="value" value="outbound"/>
+		</filters>
+		<fields>
+			<field name="Caller-ID-Name" type="first-of" value="variable_origination_callee_id_name|Caller-Callee-ID-Name"/>
+			<field name="Caller-ID-Number" type="first-of" value="variable_origination_callee_id_number|Caller-Callee-ID-Number"/>
+		</fields>
+	</field>
+	<field name="CONF-CALLER-ID-OUT-DP" type="group">
+		<filters>
+			<filter name="Call-Direction" type="include" compare="value" value="outbound"/>
+			<filter name="Channel-Flags" type="include" compare="contains" value="DIALPLAN"/>
+		</filters>
+		<fields>
+			<field name="Caller-Caller-ID-Name" as="Caller-ID-Name"/>
+			<field name="Caller-Caller-ID-Number" as="Caller-ID-Number"/>
+		</fields>
+	</field>
+</definition><definition name="conference-channel-vars">
+	<field name="Conference-Channel-Vars" type="static" serialize-as="object">
+		<fields>
+			<field name="variable_conference_moderator" as="Is-Moderator" serialize-as="boolean"/>
+			<field name="Floor" serialize-as="boolean"/>
+			<field name="Video" serialize-as="boolean"/>
+			<field name="See" serialize-as="boolean"/>
+			<field name="Speak" serialize-as="boolean"/>
+			<field name="Hear" serialize-as="boolean"/>
+			<field name="Talking" serialize-as="boolean"/>
+			<field name="Mute-Detect" serialize-as="boolean"/>
+			<field name="Energy-Level" serialize-as="number"/>
+			<field name="Current-Energy" serialize-as="number"/>
+			<field name="Member-ID" serialize-as="number"/>
+			<field name="Member-Ghost" serialize-as="boolean"/>
+		</fields>
+	</field>
+</definition><definition name="conference-bgdial">
+	<field name="Dial-Result" type="static" serialize-as="object">
+		<filters>
+			<filter name="Action" type="include" compare="value" value="bgdial-result"/>
+		</filters>
+		<fields>
+			<field name="Result"/>
+			<field name="Job-UUID"/>
+			<field name="Peer-UUID"/>
+		</fields>
+	</field>
+</definition><definition name="conference-recording-vars">
+	<field name="Recording" type="static" serialize-as="object">
+		<fields>
+            <field name="Milliseconds-Elapsed" as="File-MilliSeconds" serialize-as="number"/>
+            <field name="Path" as="File-Path"/>
+            <field name="Record-File-Size" as="File-Size" serialize-as="number"/>
+            <field name="Recording-Data" as="Data"/>
+		</fields>
+	</field>
+</definition><definition name="conference-event">
+	<field name="Event-Category" type="static" value="conference"/>
+	<field name="Event-Name" type="static" value="event"/>
+	<field name="Switch-Nodename" as="Node"/>
+	<field name="Core-UUID"/>
+	<field name="freeswitch-url" type="reference"/>
+	<field name="App-Name" type="static" value="freeswitch"/>
+	<field name="App-Version" type="static" value="1.0"/>
+	<field name="Action" as="Event"/>
+	<field name="Conference-Name" as="Conference-ID"/>
+	<field name="Conference-Unique-ID" as="Instance-ID"/>
+	<field name="Conference-Node"/>
+	<field name="Conference-Profile" as="Profile"/>
+	<field name="Unique-ID" as="Call-ID"/>
+	<field name="Account-ID" type="first-of" value="Conference-Account-ID|variable_ecallmgr_Account-ID"/>
+	<field name="conference-caller-id" type="reference"/>
+
+	<field name="Channel-Presence-ID"/>
+	<field name="Member-ID" as="Participant-ID" serialize-as="number"/>
+	<field name="Custom-Channel-Vars" type="reference">
+		<filters>
+			<filter name="ecallmgr" type="include" compare="prefixes" value="ecallmgr_|variable_ecallmgr_"/>
+		</filters>
+	</field>
+	<field name="Custom-Application-Vars" type="reference"/>
+	<field name="conference-vars" type="reference"/>
+	<field name="conference-channel-vars" type="reference">
+		<filters>
+			<filter name="Member-ID" type="include"/>
+		</filters>
+	</field>
+	<field name="conference-bgdial" type="reference"/>
+	<field name="call-interaction" type="reference">
+		<filters>
+			<filter name="Action" type="include" compare="value" value="conference-create"/>
+		</filters>
+	</field>
+
+	<field name="conference-recording-vars" type="reference"/>
+
+</definition><definition name="fax_event">
+	<field name="call_event_headers" type="reference"/>
+	<field name="Event-Name" type="static" value="CHANNEL_FAX_STATUS"/>
+	<field name="Application-Data" type="static" serialize-as="object">
+		<fields>
+			<field name="fax_data" type="reference"/>
+		</fields>
+	</field>
+	<field name="user-agent" type="reference"/>
+	<field name="Custom-Channel-Vars" type="reference"/>
+	<field name="Custom-Application-Vars" type="reference"/>
+</definition><definition name="CCVs">
+	<field name="Custom-Channel-Vars" type="static" serialize-as="object">
+		<fields>
+			<field name="ccvs" type="prefixes" exclude-prefix="true" value="X-ecallmgr_|variable_sip_h_X-ecallmgr_|variable_ecallmgr_|ecallmgr_"/>
+		</fields>
+	</field>
+</definition><definition name="recording_vars">
+	<field name="Recording" type="static" serialize-as="object">
+		<fields>
+			<field name="Recording-Variable-" type="prefix" exclude-prefix="true"/>
+			<field name="variable_record_file_size" as="File-Size" serialize-as="number"/>
+			<field name="variable_record_samples" as="File-Samples" serialize-as="number"/>
+			<field name="variable_record_seconds" as="File-Seconds" serialize-as="number"/>
+			<field name="variable_record_ms" as="File-MilliSeconds" serialize-as="number"/>
+			<field name="Record-File-Path" as="File-Path"/>
+			<field name="variable_record_completion_cause" as="Completion-Cause"/>
+		</fields>
+	</field>
+</definition><definition name="recording">
+	<field name="Application-Name" type="static" value="record"/>
+	<field name="Application-Response" type="first-of" value="Record-File-Path|kazoo_application_response"/>
+	<field name="recording_vars" type="reference"/>
+</definition><definition name="rtcp-out">
+	<field name="rtcp" type="static" serialize-as="object">
+		<fields>
+      <field name="srcIp" type="first-of" value="advertised_media_ip|local_media_ip"/>
+      <field name="local_media_ip" as="localIp"/>
+      <field name="local_media_port" as="srcPort" serialize-as="number"/>
+      <field name="rtcp_remote_ip" as="dstIp"/>
+      <field name="remote_media_port" as="dstPort" serialize-as="number"/>
+			<field name="packet" as="packet-b64"/>
+    </fields>
+  </field>
+</definition><definition name="rtcp-in">
+	<field name="rtcp" type="static" serialize-as="object">
+		<fields>
+      <field name="rtcp_remote_ip" as="srcIp"/>
+      <field name="remote_media_port" as="srcPort" serialize-as="number"/>
+      <field name="dstIp" type="first-of" value="advertised_media_ip|local_media_ip"/>
+      <field name="local_media_ip" as="localIp"/>
+      <field name="local_media_port" as="dstPort" serialize-as="number"/>
+			<field name="packet" as="packet-b64"/>
+    </fields>
+  </field>
+</definition></definitions><event-handlers><profile name="cdr" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="cdr"/>
+       <param name="amqp-profile" value="push-event"/>
+	</params>
+
+	<events><event name="KZ_CDR">
+	<fields>
+		<field name="Event-Category" type="static" value="cdr"/>
+		<field name="Event-Name" type="static" value="report"/>
+		<field name="msg-id" type="reference"/>
+		<field name="App-Name" type="static" value="freeswitch"/>
+		<field name="App-Version" type="static" value="1.0"/>
+        <field name="interaction-timestamp" type="reference"/>
+		<field name="Unique-ID" as="Call-ID"/>
+		<field name="Caller-Channel-Created-Time" as="Channel-Created-Time" serialize-as="number"/>
+		<field name="Core-UUID" as="Node"/>
+		<field name="variable_domain_name" as="Domain-Name"/>
+		<field name="variable_ecallmgr_Account-ID" as="Account-ID"/>
+		<field name="call-interaction" type="reference"/>
+		<field name="call-direction" type="reference"/>
+		<field name="channel-state" type="reference"/>
+		<field name="caller-id" type="reference"/>
+		<field name="caller-context" type="reference"/>
+		<field name="sip-tags" type="reference"/>
+		<field name="presence-id" type="reference"/>
+		<field name="loopback" type="reference"/>
+		<field name="freeswitch-url" type="reference"/>
+		<field name="user-agent" type="reference"/>
+		<field name="Custom-Channel-Vars" type="reference"/>
+		<field name="Custom-Application-Vars" type="reference"/>
+		<field name="Custom-SIP-Headers" type="reference"/>
+		<field name="Control" type="reference"/>
+		<field name="from-to" type="reference"/>
+		<field name="from-to-verto" type="reference"/>
+		<field name="other-leg" type="reference"/>
+		<field name="sdp" type="reference"/>
+		<field name="call-duration" type="reference"/>
+		<field name="hangup-fields" type="reference"/>
+		<field name="variable_Media-Recordings" as="Media-Recordings" as-array="true"/>
+		
+		<field name="transfer-history" type="reference"/>
+		<field name="originated-legs" type="reference"/>
+		<field name="originate-causes" type="reference"/>
+		<field name="fax_info" type="reference"/>
+		<field name="channel-endpoint-name" type="reference"/>
+		<field name="variable_originating_leg_uuid" as="Originating-Leg-UUID"/>
+		<field name="cdr-extended-data" type="reference"/>
+		<field name="debug-call" type="reference"/>
+	</fields>
+	<filters>
+		<filter name="variable_hangup_cause" type="exclude" compare="value" value="WRONG_CALL_STATE"/>
+		<filter name="variable_Call-Interaction-ID" type="include"/>
+	</filters>
+</event></events>
+
+	<routing-key>
+		<field name="freeswitch" type="static" value="cdr.report" encode-part="false"/>
+		<field name="variable_ecallmgr_Account-ID"/>
+		<field name="Unique-ID"/>
+	</routing-key>
+
+</profile><profile name="channel_events" profile-type="event">
+
+	<params>
+	   <param name="amqp-exchange" value="callevt"/>
+	   <param name="amqp-profile" value="push-event"/>
+	</params>
+
+	<events><event name="CHANNEL_UNBRIDGE">
+
+	<filters>
+		<filter type="exclude" name="variable_bridge_bowout"/>
+	</filters>
+
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="Bridge-A-Unique-ID"/>
+		<field name="Bridge-B-Unique-ID"/>
+		<field name="application-uuid" type="reference"/>
+		<field name="Application-Response" type="first-of" value="variable_originate_disposition|#FAIL"/>
+		<field name="Disposition" type="first-of" value="variable_originate_disposition|variable_endpoint_disposition"/>
+
+		<field name="debug-call" type="reference"/>
+	</fields>
+</event><event name="DETECTED_SPEECH">
+	<fields>
+		<field name="call_event_headers" type="reference"/>
+		<field name="Custom-Channel-Vars" type="reference"/>
+		<field name="Custom-Application-Vars" type="reference"/>
+		<field name="Custom-Application-Vars" type="reference"/>
+		<field name="conference-vars" type="reference"/>
+		<field name="_body" as="Speech" serialize-as="raw"/>
+		<field name="debug-call" type="reference"/>
+	</fields>
+    <filters>
+        <filter name="variable_ecallmgr_Is-Conference" type="exclude" compare="exists"/>
+    </filters>
+	
+</event><event name="CHANNEL_METAFLOW">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="from-to" type="reference"/>
+		<field name="user-agent" type="reference"/>
+		<field name="Metaflow-Collected-Digits"/>
+	</fields>
+</event><event name="CHANNEL_DATA">
+	<filters>
+		<filter type="exclude" compare="exists" name="API-Command"/>
+		<filter type="exclude" compare="exists" name="scope_variable_No-Channel-Data"/>
+	</filters>
+	<fields>
+		<field name="call_event" type="reference"/>
+	</fields>
+</event><event name="CHANNEL_SYNC">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="Event-Node"/>
+		<field name="Event-PID"/>
+	</fields>
+</event><event name="CHANNEL_UNHOLD">
+	<fields>
+		<field name="call_event" type="reference"/>
+	</fields>
+</event><event name="CHANNEL_HOLD">
+	<fields>
+		<field name="call_event" type="reference"/>
+	</fields>
+</event><event name="DTMF">
+	<filters>
+		<filter name="variable_conference_name" type="exclude" compare="exists"/>
+	</filters>
+	<fields>
+		<field name="call_event_headers" type="reference"/>
+		<field name="Custom-Channel-Vars" type="reference"/>
+		<field name="Custom-Application-Vars" type="reference"/>
+		<field name="DTMF-Digit"/>
+		<field name="DTMF-Duration" serialize-as="number"/>
+	</fields>
+</event></events>
+
+	<routing-key>
+		<field name="call" type="static" value="call"/>
+		<field name="event" type="first-of" value="kazoo_event_name|Event-Subclass|Event-Name"/>
+		<field name="Unique-ID"/>
+		<param name="hash-event-field" value="Unique-ID"/>
+		<param name="hash-amqp-header" value="call-id"/>		
+	</routing-key>
+
+</profile><profile name="loopback" profile-type="event">
+
+	<params>
+	   <param name="amqp-exchange" value="callevt"/>
+	   <param name="amqp-profile" value="push-event"/>
+	</params>
+
+	<events><event name="loopback::direct">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="Event-Name" type="static" value="CHANNEL_DIRECT"/>
+		<field name="Resigning-UUID" as="Call-ID"/>
+		<field name="Resigning-UUID"/>
+		<field name="Resigning-Peer-UUID"/>
+		<field name="Acquired-UUID"/>
+		<field name="Acquired-UUID" as="Replaced-By"/>
+		<field name="Connecting-Leg-A-UUID"/>
+		<field name="Connecting-Leg-B-UUID"/>
+	</fields>
+</event><event name="loopback::bowout">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="Event-Name" type="static" value="CHANNEL_REPLACED"/>
+		<field name="Resigning-UUID" as="Call-ID"/>
+		<field name="Resigning-UUID"/>
+		<field name="Resigning-Peer-UUID"/>
+		<field name="Acquired-UUID"/>
+		<field name="Acquired-UUID" as="Replaced-By"/>
+	</fields>
+</event></events>
+
+	<routing-key>
+		<field name="call" type="static" value="call"/>
+		<field name="event" type="expand" value="CHANNEL_${toupper(${Event-Subclass:10})}"/>
+		<field name="Unique-ID"/>
+		<param name="hash-event-field" value="Unique-ID"/>
+		<param name="hash-amqp-header" value="call-id"/>		
+	</routing-key>
+
+</profile><profile name="conference" profile-type="event">
+
+	<params>
+		<param name="amqp-exchange" value="conference"/>
+		<param name="amqp-profile" value="push-event"/>
+	</params>
+
+	<events><event name="conference::maintenance">
+	<fields>
+		<field name="conference-event" type="reference"/>
+	</fields>
+</event></events>
+
+	<routing-key>
+		<field name="conference" type="static" value="conference.event" encode-part="false"/>
+		<field name="Action"/>
+		<field name="Account-ID" type="first-of" value="Account-ID|Conference-Account-ID|variable_ecallmgr_Account-ID"/>
+		<field name="Conference-Name"/>
+		<field name="Conference-ID" type="first-of" value="Unique-ID|Conference-Unique-ID"/>
+		<param name="hash-event-field" value="Unique-ID|Conference-Unique-ID"/>
+		<param name="hash-amqp-header" value="call-id"/>
+	</routing-key>
+
+</profile><profile name="dialog" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="dialog"/>
+       <param name="amqp-profile" value="dialog"/>
+       <param name="event-channel-mode" value="broadcast"/>
+	</params>
+
+	<events><event name="KZ_DIALOG_EVENT">
+	<fields>
+	    <field name="Event-Category" type="static" value="dialog"/>
+	    <field name="Event-Name" type="static" value="event"/>
+	    <field name="App-Name" type="static" value="freeswitch"/>
+	    <field name="App-Version" type="static" value="1.0"/>
+		<field name="Core-UUID"/>
+	    <field name="Action" as="Event-Type"/>
+	    <field name="Account-ID" type="first-of" value="Account-ID|variable_ecallmgr_Account-ID"/>
+	    <field name="Dialog-ID" type="first-of" value="Dialog-ID|variable_ecallmgr_Dialog-ID"/>
+	    <field name="Unique-ID" as="Call-ID"/>
+	    <field name="_json_dialog_event_data" as="Event-Data" serialize-as="raw"/>
+	</fields>
+<routing-key>
+		        <field name="dialog" type="static" value="dialog"/>
+		        <field name="event" type="static" value="event"/>
+		        <field name="variable_ecallmgr_Account-ID"/>
+		        <field name="variable_ecallmgr_Authorizing-ID"/>
+		        <field name="Unique-ID"/>
+		    </routing-key></event></events>
+
+</profile><profile name="execute_complete" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="callevt"/>
+       <param name="amqp-profile" value="priority"/>
+	</params>
+
+	<routing-key>
+		<field name="call" type="static" value="call" encode-part="false"/>
+		<field name="event" type="static" value="CHANNEL_EXECUTE_COMPLETE" encode-part="false"/>
+		<field name="Unique-ID"/>
+        <param name="hash-event-field" value="Unique-ID"/>
+        <param name="hash-amqp-header" value="call-id"/>
+	</routing-key>
+
+	<events><event name="CHANNEL_APP_EXECUTE_COMPLETE">
+
+	<filters>
+		<filter type="exclude" name="Application" compare="contains" value="bridge">
+			<filters scope="any">
+				<filter name="Channel-Flags" type="exclude" compare="contains" value="XFER_ZOMBIE"/>
+				<filter name="Channel-Flags" type="exclude" compare="contains" value="TRANSFER">
+					<filters scope="any">
+						<filter name="Channel-Flags" type="include" compare="contains" value="ORIGINATING_XFER"/>
+					</filters>
+				</filter>
+				<filter name="Channel-Flags" type="exclude" compare="contains" value="REDIRECT"/>
+				<filter name="Channel-Flags" type="exclude" compare="contains" value="INTERCEPTED"/>
+				<filter name="Application-Response" type="exclude" value="NONE"/>
+			</filters>
+		</filter>
+	</filters>
+
+
+	<fields>
+
+		<field name="origination-xfer-setup" type="group">
+			<filters>
+				<filter type="include" name="Application" compare="contains" value="bridge"/>
+				<filter type="include" name="Channel-Flags" compare="contains" value="ORIGINATING_XFER"/>
+			</filters>
+			<fields>
+				<field name="variable_satt_uuid" as="Unique-ID" target="input"/>
+				<field name="XFER-Hangup-Code" type="first-of" value="variable_last_bridge_proto_specific_hangup_cause|#sip:480" target="input"/>
+				<field name="XFER-Hangup-Cause" type="first-of" value="variable_last_bridge_hangup_cause|#NO_ANSWER" target="input"/>
+				<field name="XFER-Channel-Answer-State" type="expand" value="${kz_uuid_answer_state(${variable_satt_uuid})}" target="input"/>
+			</fields>
+		</field>
+
+		<field name="call_event_headers" type="reference"/>
+		<field name="Event-Name" type="static" value="CHANNEL_EXECUTE_COMPLETE"/>
+		<field name="application-uuid" type="reference"/>
+		<field name="Application-Error-Code"/>
+		<field name="Application-Error-Msg"/>
+		<field name="Channel-Flags"/>
+
+		<field name="Application-Response" type="first-of" value="Application-Response|variable_originate_disposition|variable_endpoint_disposition|#NONE"/>
+
+        <field name="Bridge-Hangup-Cause" type="first-of" value="variable_bridge_hangup_cause|variable_last_bridge_hangup_cause"/>
+		<field name="variable_endpoint_disposition" as="Endpoint-Disposition"/> <field name="variable_transfer_disposition" as="Transfer-Disposition"/>
+		<field name="hangup-cause" type="reference"/>
+		<field name="hangup-code" type="reference"/>
+		<field name="hangup-phrase" type="reference"/>
+		<field name="Disposition" type="first-of" value="variable_endpoint_disposition|variable_originate_disposition"/>
+		<field name="channel-state" type="reference"/>
+
+		<field name="Custom-Channel-Vars" type="reference"/>
+		<field name="Custom-Application-Vars" type="reference"/>
+		<field name="Custom-SIP-Headers" type="reference"/>
+		<field name="variable_playback_terminator_used" as="DTMF-Digit"/>
+		<field name="variable_media_group_id" as="Group-ID"/>
+
+		<field name="debug-call" type="reference"/>
+	</fields>
+
+</event></events>
+
+	<filters>
+		<filter name="app_variable_controller_app_name" type="exclude" value="wiretap"/>
+	</filters>
+
+</profile><profile name="fax" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="callevt"/>
+       <param name="amqp-profile" value="push-event"/>
+	</params>
+
+	<events><event name="spandsp::rxfaxresult">
+	<fields>
+		<field name="fax_event" type="reference"/>
+		<field name="Application-Name" type="static" value="receive_fax"/>
+		<field name="Application-Event" type="static" value="result"/>
+	</fields>
+</event><event name="spandsp::rxfaxpageresult">
+	<fields>
+		<field name="fax_event" type="reference"/>
+		<field name="Application-Name" type="static" value="receive_fax"/>
+		<field name="Application-Event" type="static" value="pageresult"/>
+	</fields>
+</event><event name="spandsp::rxfaxnegociateresult">
+	<fields>
+		<field name="fax_event" type="reference"/>
+		<field name="Application-Name" type="static" value="receive_fax"/>
+		<field name="Application-Event" type="static" value="negociateresult"/>
+	</fields>
+</event><event name="spandsp::txfaxresult">
+	<fields>
+		<field name="fax_event" type="reference"/>
+		<field name="Application-Name" type="static" value="send_fax"/>
+		<field name="Application-Event" type="static" value="result"/>
+	</fields>
+</event><event name="spandsp::txfaxpageresult">
+	<fields>
+		<field name="fax_event" type="reference"/>
+		<field name="Application-Name" type="static" value="send_fax"/>
+		<field name="Application-Event" type="static" value="pageresult"/>
+	</fields>
+</event><event name="spandsp::txfaxnegociateresult">
+	<fields>
+		<field name="fax_event" type="reference"/>
+		<field name="Application-Name" type="static" value="send_fax"/>
+		<field name="Application-Event" type="static" value="negociateresult"/>
+	</fields>
+</event></events>
+
+	<routing-key>
+		<field name="fax" type="static" value="call.CHANNEL_FAX_STATUS" encode-part="false"/>
+        <field name="Unique-ID"/>
+        <param name="hash-event-field" value="Unique-ID"/>
+        <param name="hash-amqp-header" value="call-id"/>
+	</routing-key>
+
+</profile><profile name="kazoo" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="callevt"/>
+       <param name="amqp-profile" value="push-event"/>
+	</params>
+
+	<routing-key>
+		<field name="call" type="static" value="call" encode-part="false"/>
+		<field name="event" type="first-of" value="kazoo_event_name|Event-Subclass|Event-Name"/>
+		<field name="Unique-ID"/>
+        <param name="hash-event-field" value="Unique-ID"/>
+        <param name="hash-amqp-header" value="call-id"/>
+	</routing-key>
+
+	<events><event name="kazoo::masquerade">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="application-uuid" type="reference"/>
+		<field name="Application-Response" type="first-of" value="variable_bridge_hangup_cause|variable_originate_disposition|variable_endpoint_disposition|variable_originate_disposition|#FAIL"/>
+		<field name="Disposition" type="first-of" value="variable_bridge_hangup_cause|variable_originate_disposition|variable_endpoint_disposition"/>
+		<field name="Bridge-Hangup-Cause" type="first-of" value="variable_bridge_hangup_cause|variable_last_bridge_hangup_cause"/>
+		<field name="variable_endpoint_disposition" as="Endpoint-Disposition"/>
+		<field name="variable_transfer_disposition" as="Transfer-Disposition"/>
+		<field name="hangup-fields" type="reference"/>
+	</fields>
+</event><event name="kazoo::noop">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="application-uuid" type="reference"/>
+		<field name="Application-Name" type="static" value="noop"/>
+		<field name="kazoo_application_response" as="Application-Response"/>
+		<field name="debug-call" type="reference"/>
+	</fields>
+</event></events>
+
+</profile><profile name="live-events" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="live"/>
+       <param name="amqp-profile" value="live-event"/>
+	</params>
+
+	<events><event name="RELAY_EVENT_CHANNEL">
+	<fields>
+	    <field name="Event-Category" type="static" value="relay"/>
+		<field name="Event-Name" type="expand" value="${Relay-Category}.${Relay-Event}"/>
+	    <field name="App-Name" type="static" value="freeswitch"/>
+	    <field name="App-Version" type="static" value="1.0"/>
+	    <field name="Relay-Msg-ID" as="Msg-ID"/>
+		<field name="Event-Channel"/>
+		<field name="Event-Channel-Event"/>
+		<field name="Event-Channel-ID"/>
+		<field name="Event-Channel-Key"/>
+	    <field name="Relay-ID"/>
+		<field name="Relay-Event"/>
+	    <field name="Conference-Name" as="Conference-ID"/>
+	    <field name="Conference-Unique-ID" as="Instance-ID"/>
+	    <field name="Account-ID" type="first-of" value="Account-ID|Conference-Account-ID|variable_ecallmgr_Account-ID"/>
+	    <field name="_json_event_channel_data" as="Event-Data" serialize-as="raw"/>
+		<field name="_json_event_channel_payload" as="Event-Payload" serialize-as="raw"/>
+	</fields>
+<routing-key>
+		        <field name="relay" type="static" value="relay"/>
+		        <field name="Account-ID" type="first-of" value="Account-ID|Conference-Account-ID|variable_ecallmgr_Account-ID"/>
+		        <field name="Relay-Category"/>
+		        <field name="Relay-ID"/>
+		    </routing-key></event><event name="CONFERENCE_EVENT_CHANNEL">
+	<fields>
+	    <field name="Event-Category" type="static" value="live"/>
+		<field name="Event-Name" type="expand" value="conference.${Live-Event}"/>
+	    <field name="App-Name" type="static" value="freeswitch"/>
+	    <field name="App-Version" type="static" value="1.0"/>
+		<field name="Event-Channel"/>
+		<field name="Event-Channel-Event"/>
+		<field name="Event-Channel-ID"/>
+		<field name="Event-Channel-Key"/>
+	    <field name="Live-ID"/>
+		<field name="Live-Event"/>
+	    <field name="Conference-Name" as="Conference-ID"/>
+	    <field name="Conference-Unique-ID" as="Instance-ID"/>
+	    <field name="Account-ID" type="first-of" value="Account-ID|Conference-Account-ID|variable_ecallmgr_Account-ID"/>
+	    <field name="_json_event_channel_data" as="Event-Data" serialize-as="raw"/>
+		<field name="_json_event_channel_payload" as="Event-Payload" serialize-as="raw"/>
+	</fields>
+<routing-key>
+				<field name="live" type="static" value="live"/>
+				<field name="conference" type="static" value="conference"/>
+		        <field name="Account-ID" type="first-of" value="Account-ID|Conference-Account-ID|variable_ecallmgr_Account-ID"/>
+		        <field name="Live-Event"/>
+		        <field name="Live-ID"/>
+		    </routing-key></event></events>
+
+</profile><profile name="presence" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="presence"/>
+       <param name="amqp-profile" value="presence"/>
+	</params>
+
+	<events><event name="KZ_PRESENCE_DIALOG">
+	<fields>
+		<field name="Event-Category" type="static" value="presence"/>
+		<field name="Event-Name" type="static" value="dialog_update"/>
+		<field name="Presence-Dialog-Presence-ID" as="Presence-ID"/>
+
+		<field name="Presence-Dialog-From" as="From"/>
+		<field name="Presence-Dialog-From-User" as="From-User"/>
+		<field name="Presence-Dialog-Realm" as="From-Realm"/>
+		<field name="Presence-Dialog-From-Display-Name" as="From-Display-Name"/>
+
+		<field name="Presence-Dialog-To" as="To"/>
+		<field name="Presence-Dialog-To-User" as="To-User"/>
+		<field name="Presence-Dialog-Realm" as="To-Realm"/>
+		<field name="Presence-Dialog-To-Display-Name" as="To-Display-Name"/>
+
+		<field name="Presence-Dialog-From-Tag" as="From-Tag"/>
+		<field name="Presence-Dialog-To-Tag" as="To-Tag"/>
+
+		<field name="Presence-Dialog-Presence-URI" as="To-URI"/>
+		<field name="Presence-Dialog-Realm-Hash"/>
+
+		<field name="Presence-Dialog-Direction" as="Direction"/>
+		<field name="Presence-Dialog-Expires" as="Expires"/>
+		<field name="Presence-Dialog-State" as="State"/>
+		<field name="Unique-ID" as="Call-ID"/>
+
+		<field name="CCVs" type="reference"/>
+		<field name="interaction-id" type="reference"/>
+
+		<field name="Call-Info" type="static" serialize-as="object">
+			<filters>
+				<filter name="Presence-Dialog-Call-Info-Enabled" type="include" value="true"/>
+			</filters>
+			<fields>
+				<field name="Presence-Dialog-Call-Info-State" as="State"/>
+				<field name="Presence-Dialog-Call-Info-Is-Barging" as="Is-Barging" serialize-as="boolean"/>
+			</fields>
+		</field>
+
+		<field name="Presence-Dialog-Aliases" as="Presence-Publishing-Aliases" serialize-as="array"/>
+
+		<field name="Presence-Dialog-Switch-URI" as="Switch-URI"/>
+		<field name="Event-Package" type="static" value="dialog"/>
+		<field name="App-Name" type="static" value="mod_presence"/>
+		<field name="App-Version" type="static" value="1.0"/>
+	</fields>
+</event></events>
+
+	<routing-key>
+		<param name="hash-event-field" value="Unique-ID"/>
+		<field name="dialog" type="static" value="dialog"/>
+
+		<field name="Presence-Dialog-Realm"/>
+		<field name="Unique-ID"/>
+	</routing-key>
+
+	<logging>
+		<log name="producer" value="SWITCH_LOG_CONSOLE"/>
+    </logging>
+
+</profile><profile name="priority_events" profile-type="event">
+
+	<params>
+	   <param name="amqp-exchange" value="callevt"/>
+	   <param name="amqp-profile" value="priority"/>
+	</params>
+
+	<events><event name="CHANNEL_DESTROY">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="from-to" type="reference"/>
+		<field name="from-to-verto" type="reference"/>
+		<field name="sdp" type="reference"/>
+		<field name="call-duration" type="reference"/>
+		<field name="hangup-fields" type="reference"/>
+		<field name="hangup-disposition" type="reference"/>
+		<field name="variable_Media-Recordings" as="Media-Recordings" as-array="true"/>
+		<field name="debug-call" type="reference"/>
+		<field name="transfer-history" type="reference"/>
+		<field name="originated-legs" type="reference"/>
+		<field name="fax_info" type="reference"/>
+		<field name="call-interaction" type="reference"/>
+	</fields>
+	<filters>
+		<filter name="variable_hangup_cause" type="exclude" compare="value" value="WRONG_CALL_STATE"/>
+		<filter name="variable_Call-Interaction-ID" type="include"/>
+	</filters>
+
+</event><event name="CHANNEL_BRIDGE">
+
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="Bridge-A-Unique-ID"/>
+		<field name="Bridge-B-Unique-ID"/>
+		<field name="debug-call" type="reference"/>
+	</fields>
+</event><event name="CHANNEL_ANSWER">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="from-to" type="reference"/>
+	</fields>
+</event><event name="CHANNEL_CREATE">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="Custom-AUTH-Headers" type="reference"/>
+		<field name="to-did" type="reference"/>
+		<field name="destination-number" type="reference"/>
+		<field name="debug-call" type="reference"/>
+	</fields>
+</event></events>
+
+	<routing-key>
+		<field name="call" type="static" value="call"/>
+		<field name="event" type="first-of" value="kazoo_event_name|Event-Subclass|Event-Name"/>
+		<field name="Unique-ID"/>
+		<param name="hash-event-field" value="Unique-ID"/>
+		<param name="hash-amqp-header" value="call-id"/>
+	</routing-key>
+
+</profile><profile name="recording_events" profile-type="event">
+
+	<params>
+	   <param name="amqp-exchange" value="callevt"/>
+	   <param name="amqp-profile" value="push-event"/>
+	</params>
+
+	<events><event name="RECORD_UNMASK">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="recording" type="reference"/>
+
+		<field name="debug-call" type="reference"/>
+	</fields>
+</event><event name="RECORD_MASK">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="recording" type="reference"/>
+
+		<field name="debug-call" type="reference"/>
+	</fields>
+</event><event name="RECORD_RESUME">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="recording" type="reference"/>
+
+		<field name="debug-call" type="reference"/>
+	</fields>
+</event><event name="RECORD_PAUSE">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="recording" type="reference"/>
+
+		<field name="debug-call" type="reference"/>
+	</fields>
+</event><event name="RECORD_STOP">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="recording" type="reference"/>
+		<field name="variable_playback_terminator_used" as="Terminator"/>
+		<field name="variable_record_ms" as="Length"/>
+		<field name="from-to" type="reference"/>
+		<field name="variable_silence_hits_exhausted" as="Silence-Terminated" serialize-as="boolean"/>
+		<field name="Silence-Terminated" type="expand" value="${cond(${variable_record_silence_hits} == 0 ? true : false)}" serialize-as="boolean">
+			<filters>
+				<filter name="variable_silence_hits_exhausted" type="exclude" compare="exists"/>
+			</filters>
+		</field>
+
+		<field name="debug-call" type="reference"/>
+
+	</fields>
+</event><event name="RECORD_START">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="recording" type="reference"/>
+
+		<field name="debug-call" type="reference"/>
+	</fields>
+</event></events>
+
+	<filters>
+		<filter name="Recording-Variable-Wiretap-Account-ID" type="exclude" compare="exists"/>
+	</filters>
+
+	<routing-key>
+		<field name="call" type="static" value="call"/>
+		<field name="event" type="first-of" value="kazoo_event_name|Event-Subclass|Event-Name"/>
+		<field name="Unique-ID"/>
+		<param name="hash-event-field" value="Unique-ID"/>
+		<param name="hash-amqp-header" value="call-id"/>		
+	</routing-key>
+
+</profile><profile name="route_win" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="targeted"/>
+       <param name="amqp-profile" value="priority"/>
+	</params>
+
+	<events><event name="ROUTE_WINNER">
+	<fields>
+		<field name="Event-Category" type="static" value="dialplan"/>
+		<field name="Event-Subclass" as="Event-Name"/>
+		<field name="Unique-ID" as="Call-ID"/>
+		<field name="Event-Date-Timestamp" as="Timestamp-Unix" serialize-as="number"/>
+		<field name="Event-Date-Timestamp-Gregorian" as="Timestamp" serialize-as="number"/>
+		<field name="Fetch-UUID"/>
+		<field name="Fetch-Winning-PID"/>
+		<field name="Controller-Queue"/>
+		<field name="Controller-PID"/>
+		<field name="Request-From-PID" as="Reply-To-PID"/>
+		<field name="App-Name" type="static" value="mod_kazoo"/>
+		<field name="App-Version" type="static" value="1.0"/>
+		<field name="Custom-Channel-Vars" type="static" serialize-as="object">
+			<fields>
+				<field name="variable_ecallmgr_" type="prefix" exclude-prefix="true"/>
+			</fields>
+		</field>
+		<field name="Time-Stream-" type="prefix" exclude-prefix="false" serialize-as="number"/>
+
+	</fields>
+</event></events>
+
+	<routing-key>
+	    <field name="Routing-Queue" encode-part="false"/>
+	</routing-key>
+
+	<logging>
+		<log name="producer" value="SWITCH_LOG_CONSOLE"/>
+    </logging>
+
+</profile><profile name="rtcp" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="rtcp"/>
+       <param name="amqp-profile" value="rtcp"/>
+	   <param name="producer-use-dispatcher" value="true"/>
+	   <param name="producer-dispatcher-workers" value="5"/>
+	</params>
+
+	<events><event name="RTCP_SEND_PACKET">
+	<fields>
+		<field name="Event-Category" type="static" value="rtcp"/>
+		<field name="Event-Name" type="static" value="sent"/>
+		<field name="Event-Date-Timestamp" as="Msg-ID"/>
+		<field name="Unique-ID" as="Call-ID"/>
+		<field name="Channel-Created-Time"/>
+		<field name="Switch-Nodename" as="Node"/>
+		<field name="Account-ID"/>
+		<field name="rtcp-out" type="reference"/>
+	</fields>
+<routing-key>
+		        <field name="rtcp" type="static" value="rtcp"/>
+		        <field name="direction" type="static" value="sent"/>
+		        <field name="Account-ID"/>
+		        <field name="Call-Interaction-Key"/>
+		        <field name="Unique-ID"/>
+		    </routing-key></event><event name="RTCP_RECV_PACKET">
+	<fields>
+		<field name="Event-Category" type="static" value="rtcp"/>
+		<field name="Event-Name" type="static" value="received"/>
+		<field name="Event-Date-Timestamp" as="Msg-ID"/>
+		<field name="Unique-ID" as="Call-ID"/>
+		<field name="Channel-Created-Time"/>
+		<field name="Switch-Nodename" as="Node"/>
+		<field name="Account-ID"/>
+		<field name="rtcp-in" type="reference"/>
+	</fields>
+<routing-key>
+		        <field name="rtcp" type="static" value="rtcp"/>
+		        <field name="direction" type="static" value="received"/>
+		        <field name="Account-ID"/>
+		        <field name="Call-Interaction-Key"/>
+		        <field name="Unique-ID"/>
+		    </routing-key></event></events>
+
+</profile><profile name="sofia_transfer" profile-type="event">
+
+	<params>
+       <param name="amqp-exchange" value="callevt"/>
+       <param name="amqp-profile" value="push-event"/>
+	</params>
+
+	<events><event name="sofia::transferee">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="Event-Name" type="static" value="CHANNEL_TRANSFEREE"/>
+		<field name="att_xfer_replaced_call_id" as="Replaced-Call-ID"/>
+		<field name="att_xfer_originating_session" as="Transfer-Is-Semi-Attended" serialize-as="boolean"/>
+	</fields>
+</event><event name="sofia::transferor">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="Event-Name" type="static" value="CHANNEL_TRANSFEROR"/>
+		<field name="variable_transfer_disposition" as="Transfer-Disposition"/>
+		<field name="Transfer-Type" type="expand" value="${regex(${variable_transfer_to}|([^:]*):(.*)|%1)}"/>
+		<field name="Transfer-Leg" type="expand" value="${regex(${variable_transfer_to}|([^:]*):(.*)|%2)}"/>
+		<field name="Transfer-Destination" type="expand" value="${regex(${variable_transfer_destination}|([^:]*):(.*)|%2)}"/>
+		<field name="att_xfer_destination_call_id" as="Transfer-Destination"/>
+		<field name="att_xfer_original_call_id" as="Transfer-Original-Call-ID"/>
+		<field name="att_xfer_destination_peer_uuid" as="Transfer-Destination-Peer-UUID"/>
+		<field name="att_xfer_originating_session" as="Transfer-Is-Semi-Attended" serialize-as="boolean"/>
+	</fields>
+</event><event name="sofia::replaced">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="Event-Name" type="static" value="CHANNEL_REPLACED"/>
+		<field name="att_xfer_replaced_by" type="first-of" as="Replaced-By" value="variable_att_xfer_replaced_by|att_xfer_replaced_by"/>
+		<field name="att_xfer_originating_session" as="Transfer-Is-Semi-Attended" serialize-as="boolean"/>
+	</fields>
+</event><event name="sofia::intercepted">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="Event-Name" type="static" value="CHANNEL_INTERCEPTED"/>
+		<field name="Intercepted-By" type="first-of" value="variable_intercepted_by|intercepted_by"/>
+	</fields>
+</event></events>
+
+	<routing-key>
+		<field name="call" type="static" value="call"/>
+        <field name="event" type="expand" value="CHANNEL_${toupper(${Event-Subclass:7})}"/>
+		<field name="Unique-ID"/>
+        <param name="hash-event-field" value="Unique-ID"/>
+        <param name="hash-amqp-header" value="call-id"/>       
+	</routing-key>
+
+</profile><profile name="wiretap_events" profile-type="event">
+
+	<params>
+	   <param name="amqp-exchange" value="wiretap"/>
+	   <param name="amqp-profile" value="push-event"/>
+	</params>
+
+	<events><event name="RECORD_STOP">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="recording" type="reference"/>
+		<field name="variable_playback_terminator_used" as="Terminator"/>
+		<field name="variable_record_ms" as="Length"/>
+		<field name="from-to" type="reference"/>
+		<field name="variable_silence_hits_exhausted" as="Silence-Terminated" serialize-as="boolean"/>
+		<field name="Silence-Terminated" type="expand" value="${cond(${variable_record_silence_hits} == 0 ? true : false)}" serialize-as="boolean">
+			<filters>
+				<filter name="variable_silence_hits_exhausted" type="exclude" compare="exists"/>
+			</filters>
+		</field>
+
+		<field name="debug-call" type="reference"/>
+
+	</fields>
+</event><event name="RECORD_START">
+	<fields>
+		<field name="call_event" type="reference"/>
+		<field name="recording" type="reference"/>
+
+		<field name="debug-call" type="reference"/>
+	</fields>
+</event></events>
+
+	<override-fields>
+		<field name="Event-Category" type="static" value="wiretap_event"/>
+	</override-fields>
+
+	<filters>
+		<filter name="Recording-Variable-Wiretap-Account-ID" type="include" compare="exists"/>
+	</filters>
+
+	<routing-key>
+		<field name="wiretap" type="static" value="wiretap"/>
+		<field name="Recording-Variable-Wiretap-Account-ID"/>
+		<field name="event" type="first-of" value="kazoo_event_name|Event-Subclass|Event-Name"/>
+		<param name="hash-event-field" value="Unique-ID"/>
+		<param name="hash-amqp-header" value="call-id"/>		
+	</routing-key>
+
+</profile></event-handlers><fetch-handlers><profile name="channels" profile-type="fetch">
+
+    <fields>
+        <field name="fetch-channels" type="reference"/>
+    </fields>
+
+    <connection name="primary"/>
+
+    <params>
+        <param name="fetch-section" value="channels"/>
+        <param name="fetch-timeout" value="3500000"/>
+        <param name="amqp-exchange" value="freeswitch"/>
+        <param name="amqp-profile" value="fetch"/>
+    </params>
+
+    <routing-key>
+        <field name="freeswitch" type="static" value="freeswitch.channels.fetch" encode-part="false"/>
+        <field name="Core-UUID"/>
+        <field name="Fetch-UUID"/>
+    </routing-key>
+
+</profile><profile name="configuration" profile-type="fetch">
+
+	<fields>
+		<field name="fetch-info" type="reference"/>
+		<field name="hunt-context" type="reference"/>
+	</fields>
+
+	<connection name="primary"/>
+
+	<cache expires_ms="3600000">
+		<field name="Fetch-Section"/>
+		<field name="Fetch-Tag"/>
+		<field name="Fetch-Key-Name"/>
+		<field name="Fetch-Key-Value"/>
+		<field name="Conference-Name" type="first-of" value="Conf-Name|conference_name"/>
+		<field name="Conference-Profile" type="first-of" value="Conf-Profile|profile_name"/>
+		<field name="Controls"/>
+	</cache>
+
+	<params>
+		<param name="fetch-timeout" value="3500000"/>
+		<param name="fetch-section" value="configuration"/>
+        <param name="amqp-exchange" value="freeswitch"/>
+        <param name="amqp-profile" value="fetch"/>
+	</params>
+
+	<routing-key>
+		<field name="freeswitch" type="static" value="freeswitch.configuration.fetch" encode-part="false"/>
+		<field name="Core-UUID"/>
+		<field name="Fetch-UUID"/>
+	</routing-key>
+
+</profile><profile name="dialplan" profile-type="fetch">
+
+	<fields>
+		<field name="fetch-dialplan" type="reference"/>
+	</fields>
+
+	<connection name="primary"/>
+
+	<params>
+		<param name="fetch-timeout" value="5000000"/>
+		<param name="fetch-section" value="dialplan"/>
+        <param name="amqp-exchange" value="freeswitch"/>
+        <param name="amqp-profile" value="fetch"/>
+	</params>
+
+	<routing-key>
+		<field name="freeswitch" type="static" value="freeswitch.dialplan.fetch" encode-part="false"/>
+		<field name="Core-UUID"/>
+		<field name="Fetch-UUID"/>
+		<param name="hash-event-field" value="Unique-ID"/>
+		<param name="hash-amqp-header" value="call-id"/>
+	</routing-key>
+
+	<logging>
+		<log name="debug" value="SWITCH_LOG_CONSOLE"/>
+    </logging>
+
+</profile><profile name="directory" profile-type="fetch">
+
+	<fields>
+		<field name="fetch-directory" type="reference"/>
+	</fields>
+
+	<params>
+		<param name="fetch-section" value="directory"/>
+		<param name="fetch-timeout" value="5000000"/>
+		<param name="amqp-exchange" value="freeswitch"/>
+		<param name="amqp-profile" value="fetch"/>
+	</params>
+
+	<routing-key>
+		<field name="freeswitch" type="static" value="freeswitch.directory.fetch" encode-part="false"/>
+		<field name="Core-UUID"/>
+		<field name="Fetch-UUID"/>
+	</routing-key>
+
+	<logging>
+		<log name="debug" value="SWITCH_LOG_CONSOLE"/>
+    </logging>
+
+ 
+</profile><profile name="languages" profile-type="fetch">
+
+	<cache expires_ms="120000">
+		<field name="Fetch-Section"/>
+		<field name="Fetch-Tag"/>
+		<field name="Fetch-Key-Name"/>
+		<field name="Fetch-Key-Value"/>
+	</cache>
+
+	<fields>
+		<field name="fetch-info" type="reference"/>
+		<field name="Event-Category" type="static" value="languages"/>
+		<field name="Event-Name" type="static" value="language_req"/>
+		<field name="macro_name"/>
+		<field name="lang"/>
+	</fields>
+
+	<params>
+        <param name="fetch-section" value="languages"/>
+		<param name="fetch-timeout" value="3500000"/>
+        <param name="amqp-exchange" value="freeswitch"/>
+        <param name="amqp-profile" value="fetch"/>
+	</params>
+
+	<routing-key>
+		<field name="freeswitch" type="static" value="freeswitch.languages.fetch" encode-part="false"/>
+		<field name="Core-UUID"/>
+		<field name="Fetch-UUID"/>
+	</routing-key>
+
+
+</profile></fetch-handlers><command-handlers><profile name="command_handler" profile-type="api">
+
+	<logging>
+		<log name="debug" value="SWITCH_LOG_NOTICE"/>
+		<log name="info" value="SWITCH_LOG_DEBUG1"/>
+		<log name="success" value="SWITCH_LOG_DEBUG1"/>
+		<log name="time" value="SWITCH_LOG_DEBUG1"/>
+		<log name="filtered-event" value="SWITCH_LOG_DEBUG1"/>
+		<log name="filtered-field" value="SWITCH_LOG_DEBUG1"/>
+		<log name="trace" value="SWITCH_LOG_DEBUG1"/>
+	</logging>
+
+</profile></command-handlers><amqp-profiles><profile name="cache" profile-type="worker">
+
+    <connection-ref>
+       <property name="is-local" value="true"/>
+    </connection-ref>
+    <connection-ref workers="1" channels="1">
+       <property name="is-federated" value="true"/>
+    </connection-ref>
+
+	<declare-exchanges>
+		<exchange>
+			<param name="name" value="directory"/>
+			<param name="type" value="topic"/>
+		</exchange>
+	</declare-exchanges>
+
+	<queue>
+		<param name="name" value="freeswitch.cache.${Core-UUID}"/>
+
+		<binding>
+			<param name="exchange" value="directory"/>
+			<param name="routing-key" value="cache.*"/>
+		</binding>
+
+		<param name="exclusive" value="false"/>
+		<param name="consume-exclusive" value="false"/>
+		<param name="consume-qos" value="10"/>
+		<param name="consume-qos-global" value="false"/>
+		<param name="consume-spawn" value="false"/>
+
+	</queue>
+
+	<params>
+		<param name="query-timeout-ms" value="2500"/>
+		<param name="cache-expires-ms" value="120000"/>
+	</params>
+
+</profile><profile name="commands" profile-type="worker">
+
+    <connection-ref>
+       <property name="is-local" value="true"/>
+    </connection-ref>
+
+	<declare-exchanges>
+		<exchange>
+			<param name="name" value="freeswitch"/>
+			<param name="type" value="topic"/>
+		</exchange>
+		<exchange>
+			<param name="name" value="targeted"/>
+			<param name="type" value="direct"/>
+		</exchange>
+	</declare-exchanges>
+
+	<queue>
+		<param name="name" value="freeswitch.cmds.${Core-UUID}"/>
+		<param name="exclusive" value="false"/>
+		<param name="consume-exclusive" value="false"/>
+		<param name="consume-qos" value="10"/>
+		<param name="consume-qos-global" value="false"/>
+		<param name="consume-spawn" value="false"/>
+
+		<binding>
+			<param name="exchange" value="freeswitch"/>
+			<param name="routing-key" value="freeswitch.commands.${Core-UUID}"/>
+			<param name="federated" value="true"/>
+		</binding>
+
+	</queue>
+
+
+	<params>
+		<param name="receiver-use-dispatcher" value="true"/>
+		<param name="receiver-dispatcher-cpu-yield" value="true"/>
+		<param name="receiver-dispatcher-use-all-cpus" value="true"/>
+		<param name="channels" value="5"/>
+		<param name="query-timeout-ms" value="2500"/>
+		<param name="cache-expires-ms" value="120000"/>
+	</params>
+
+	<publisher>
+		<params>
+			<param name="delivery-mode" value="0"/>
+		</params>
+		<fields>
+			<field name="Server-ID" value="freeswitch.cmds.${Core-UUID}"/>
+		</fields>
+	</publisher>
+
+	<logging>
+		<log name="debug" value="SWITCH_LOG_NOTICE"/>
+		<log name="info" value="SWITCH_LOG_DEBUG"/>
+		<log name="success" value="SWITCH_LOG_DEBUG1"/>
+		<log name="time" value="SWITCH_LOG_DEBUG1"/>
+		<log name="filtered-event" value="SWITCH_LOG_DEBUG1"/>
+		<log name="filtered-field" value="SWITCH_LOG_DEBUG1"/>
+		<log name="trace" value="SWITCH_LOG_DEBUG"/>
+	</logging>
+
+</profile><profile name="dialog" profile-type="worker">
+
+	<connection-ref>
+	   <property name="is-local" value="true"/>
+	</connection-ref>
+
+	<declare-exchanges>
+		<exchange>
+			<param name="name" value="dialog"/>
+			<param name="type" value="topic"/>
+		</exchange>
+		<exchange>
+			<param name="name" value="targeted"/>
+			<param name="type" value="direct"/>
+		</exchange>
+	</declare-exchanges>
+
+	<queue>
+	<param name="name" value="${Core-UUID}-dialog-${AMQP-Profile-Name}&lt;0.${AMQP-Worker-PID}.${AMQP-Channel-ID}>"/>
+
+		<binding>
+			<param name="exchange" value="targeted"/>
+			<param name="routing-key" value="${Core-UUID}-dialog-${AMQP-Profile-Name}&lt;0.${AMQP-Worker-PID}.${AMQP-Channel-ID}>"/>
+		</binding>
+
+		<param name="exclusive" value="true"/>
+		<param name="consume-exclusive" value="true"/>
+		<param name="consume-qos" value="10"/>
+		<param name="consume-qos-global" value="false"/>
+		<param name="consume-spawn" value="false"/>
+
+	</queue>
+
+
+	<params>
+		<param name="reconnect_interval_ms" value="10000"/>
+	</params>
+
+	<publisher>
+		<params>
+			<param name="delivery-mode" value="0"/>
+		</params>
+		<fields>
+			<field name="Server-ID" value="${Core-UUID}-dialog-${AMQP-Profile-Name}&lt;0.${AMQP-Worker-PID}.${AMQP-Channel-ID}>"/>
+		</fields>
+	</publisher>
+
+</profile><profile name="fetch" profile-type="worker">
+
+    <connection-ref>
+       <property name="is-local" value="true"/>
+    </connection-ref>
+
+	<declare-exchanges>
+        <exchange>
+            <param name="name" value="freeswitch"/>
+            <param name="type" value="topic"/>
+            <param name="durable" value="0"/>
+        </exchange>
+        <exchange>
+            <param name="name" value="directory"/>
+            <param name="type" value="topic"/>
+            <param name="durable" value="0"/>
+        </exchange>
+        <exchange>
+            <param name="name" value="kapps"/>
+            <param name="type" value="topic"/>
+            <param name="durable" value="0"/>
+        </exchange>
+        <exchange>
+            <param name="name" value="targeted"/>
+            <param name="type" value="direct"/>
+            <param name="durable" value="0"/>
+        </exchange>
+	</declare-exchanges>
+
+
+	<queue>
+		<param name="name" value="${Core-UUID}-targeted-${AMQP-Profile-Name}&lt;0.${AMQP-Worker-PID}.${AMQP-Channel-ID}>"/>
+		<binding>
+			<param name="exchange" value="targeted"/>
+			<param name="routing-key" value="${Core-UUID}-targeted-${AMQP-Profile-Name}&lt;0.${AMQP-Worker-PID}.${AMQP-Channel-ID}>"/>
+			</binding>
+
+		<param name="exclusive" value="false"/>
+		<param name="consume-exclusive" value="false"/>
+		<param name="consume-qos" value="10"/>
+		<param name="consume-qos-global" value="false"/>
+		<param name="consume-spawn" value="false"/>
+	</queue>
+
+
+	<params>
+		<param name="receiver-dispatcher-workers" value="25"/>
+		<param name="channels" value="5"/>
+		<param name="query-timeout-ms" value="3500"/>
+		<param name="cache-expires-ms" value="300000000"/>
+	</params>
+
+	<publisher>
+		<params>
+			<param name="delivery-mode" value="0"/>
+		</params>
+		<fields>
+			<field name="Server-ID" value="${Core-UUID}-targeted-${AMQP-Profile-Name}&lt;0.${AMQP-Worker-PID}.${AMQP-Channel-ID}>"/>
+			</fields>
+	</publisher>
+
+	<logging>
+		<log name="debug" value="SWITCH_LOG_DEBUG"/>
+    </logging>
+
+</profile><profile name="live-event" profile-type="worker">
+
+	<connection-ref>
+	   <property name="is-local" value="true"/>
+	</connection-ref>
+    <connection-ref>
+       <property name="is-federated" value="true"/>
+    </connection-ref>
+
+	<declare-exchanges>
+		<exchange>
+			<param name="name" value="live"/>
+			<param name="type" value="topic"/>
+		</exchange>
+		<exchange>
+			<param name="name" value="targeted"/>
+			<param name="type" value="direct"/>
+		</exchange>
+	</declare-exchanges>
+
+	<queue>
+		<param name="name" value="freeswitch.live.${Core-UUID}"/>
+
+		<binding>
+			<param name="exchange" value="targeted"/>
+			<param name="routing-key" value="freeswitch.live.${Core-UUID}"/>
+		</binding>
+
+		<param name="exclusive" value="false"/>
+		<param name="consume-exclusive" value="false"/>
+		<param name="consume-qos" value="10"/>
+		<param name="consume-qos-global" value="false"/>
+		<param name="consume-spawn" value="false"/>
+
+	</queue>
+
+	<params>
+		<param name="reconnect_interval_ms" value="10000"/>
+	</params>
+
+</profile><profile name="nodes" profile-type="worker">
+
+    <connection-ref>
+       <property name="is-local" value="true"/>
+    </connection-ref>
+    <connection-ref>
+       <property name="is-federated" value="true"/>
+    </connection-ref>
+
+	<declare-exchanges>
+		<exchange>
+			<param name="name" value="nodes"/>
+			<param name="type" value="fanout"/>
+		</exchange>
+		<exchange>
+			<param name="name" value="targeted"/>
+			<param name="type" value="direct"/>
+		</exchange>
+	</declare-exchanges>
+
+	<queue>
+		<param name="name" value="freeswitch.nodes.${Core-UUID}"/>
+
+		<binding>
+			<param name="exchange" value="nodes"/>
+			<param name="federated" value="true"/>
+			<param name="routing-key" value="freeswitch.nodes.${Core-UUID}"/>
+		</binding>
+
+		<binding>
+			<param name="exchange" value="targeted"/>
+			<param name="routing-key" value="freeswitch.nodes.${Core-UUID}"/>
+		</binding>
+
+		<param name="exclusive" value="false"/>
+		<param name="consume-exclusive" value="false"/>
+		<param name="consume-qos" value="10"/>
+		<param name="consume-qos-global" value="false"/>
+		<param name="consume-spawn" value="false"/>
+	</queue>
+
+	<params>
+		<param name="query-timeout-ms" value="2500"/>
+		<param name="cache-expires-ms" value="120000"/>
+	</params>
+
+</profile><profile name="presence" profile-type="worker">
+
+	<connection-ref>
+	   <property name="is-local" value="true"/>
+	</connection-ref>
+
+	<declare-exchanges>
+		<exchange>
+			<param name="name" value="presence"/>
+			<param name="type" value="topic"/>
+		</exchange>
+	</declare-exchanges>
+
+	<params>
+		<param name="channels" value="5"/>
+		<param name="workers" value="5"/>
+		<param name="reconnect_interval_ms" value="10000"/>
+	</params>
+
+	<publisher>
+		<params>
+			<param name="delivery-mode" value="0"/>
+		</params>
+		<fields>
+			<field name="Server-ID" value="${Core-UUID}-targeted-${AMQP-Profile-Name}&lt;${AMQP-Worker-PID}.${AMQP-Channel-ID}>"/>
+		</fields>
+	</publisher>
+
+</profile><profile name="priority" profile-type="worker">
+
+	<connection-ref>
+	   <property name="is-local" value="true"/>
+	</connection-ref>
+
+	<declare-exchanges>
+		<exchange>
+			<param name="name" value="freeswitch"/>
+			<param name="type" value="topic"/>
+		</exchange>
+		<exchange>
+			<param name="name" value="callevt"/>
+			<param name="type" value="topic"/>
+		</exchange>
+		<exchange>
+			<param name="name" value="targeted"/>
+			<param name="type" value="direct"/>
+		</exchange>
+	</declare-exchanges>
+
+	<params>
+		<param name="workers" value="5"/>
+		<param name="channels" value="25"/>
+		<param name="reconnect_interval_ms" value="10000"/>
+		<param name="client-side-hash-pipeline" value="false"/>
+		<param name="worker-interval-ms" value="0"/>
+		<param name="worker-cpu-yield-on-publish" value="false"/>
+	</params>
+
+	<publisher>
+		<params>
+			<param name="delivery-mode" value="0"/>
+		</params>
+		<fields>
+			<field name="Server-ID" value="${Core-UUID}-targeted-${AMQP-Profile-Name}&lt;${AMQP-Worker-PID}.${AMQP-Channel-ID}>"/>
+		</fields>
+	</publisher>
+
+</profile><profile name="push-event" profile-type="worker">
+
+	<connection-ref>
+	   <property name="is-local" value="true"/>
+	</connection-ref>
+
+	<declare-exchanges>
+		<exchange>
+			<param name="name" value="freeswitch"/>
+			<param name="type" value="topic"/>
+		</exchange>
+		<exchange>
+			<param name="name" value="callevt"/>
+			<param name="type" value="topic"/>
+		</exchange>
+		<exchange>
+			<param name="name" value="conference"/>
+			<param name="type" value="topic"/>
+		</exchange>
+		<exchange>
+			<param name="name" value="presence"/>
+			<param name="type" value="topic"/>
+		</exchange>
+		<exchange>
+			<param name="name" value="cdr"/>
+			<param name="type" value="topic"/>
+		</exchange>
+		<exchange>
+			<param name="name" value="targeted"/>
+			<param name="type" value="direct"/>
+		</exchange>
+		<exchange>
+			<param name="name" value="wiretap"/>
+			<param name="type" value="topic"/>
+		</exchange>
+	</declare-exchanges>
+
+	<params>
+		<param name="channels" value="25"/>
+		<param name="reconnect_interval_ms" value="10000"/>
+		<param name="worker-interval-ms" value="0"/>
+		<param name="worker-cpu-yield-on-publish" value="false"/>
+	</params>
+
+	<publisher>
+		<params>
+			<param name="delivery-mode" value="0"/>
+		</params>
+		<fields>
+			<field name="Server-ID" value="${Core-UUID}-targeted-${AMQP-Profile-Name}&lt;${AMQP-Worker-PID}.${AMQP-Channel-ID}>"/>
+		</fields>
+	</publisher>
+
+</profile><profile name="rtcp" profile-type="worker">
+
+	<connection-ref>
+	   <property name="is-local" value="true"/>
+	</connection-ref>
+
+	<declare-exchanges>
+		<exchange>
+			<param name="name" value="rtcp"/>
+			<param name="type" value="topic"/>
+		</exchange>
+	</declare-exchanges>
+
+	<params>
+		<param name="channels" value="25"/>
+		<param name="reconnect_interval_ms" value="10000"/>
+		<param name="worker-interval-ms" value="0"/>
+		<param name="worker-cpu-yield-on-publish" value="true"/>
+	</params>
+
+	<publisher>
+		<params>
+			<param name="delivery-mode" value="0"/>
+		</params>
+		<fields>
+			<field name="Server-ID" value="${Core-UUID}-targeted-${AMQP-Profile-Name}&lt;${AMQP-Worker-PID}.${AMQP-Channel-ID}>"/>
+		</fields>
+	</publisher>
+
+</profile></amqp-profiles><connections local-zone="local"><connection name="rabbitmq.example.com-local"><param name="hostname" value="rabbitmq.example.com"/><param name="port" value="5672"/><param name="virtualhost" value="/"/><param name="username" value="kazoo"/><param name="password" value="change_me"/><param name="zone" value="local"/><property name="zone" value="local"/><property name="primary" value="true"/><property name="is-federated" value="false"/><property name="is-local" value="true"/></connection></connections><event-dispatcher>
+
+    <param name="workers" value="0"/>
+    <param name="use-all-cpus" value="false"/>
+    <param name="cpu-yield" value="true"/>
+    <param name="sleep-us" value="0"/>
+
+</event-dispatcher><event-producer>
+
+    <param name="workers" value="0"/>
+    <param name="use-all-cpus" value="false"/>
+    <param name="cpu-yield" value="true"/>
+    <param name="sleep-us" value="0"/>
+
+</event-producer><variables><variable name="origination_nested_vars" value="true"/><variable name="sofia-profile-override-apply-inbound-acl-x-token" value="X-FS-Auth-Token"/><variable name="sofia-profile-override-apply-proxy-acl-x-token" value="X-AUTH-Token"/><variable name="sofia-profile-override-user-x-token-jwt-header" value="X-AUTH-JWT-Token"/><variable name="sofia-profile-override-enable-uuid-acl-check" value="true"/><variable name="sofia-profile-override-apply-proxy-acl-uuid-x-header" value="X-Proxy-Core-UUID"/><variable name="sofia-profile-override-apply-inbound-acl-uuid-x-header" value="X-FS-Core-UUID"/><variable name="sofia-profile-override-enable-core-uuid-header" value="true"/><variable name="sofia-profile-override-auth-calls" value="true"/><variable name="sofia-profile-override-auth-calls-acl-only" value="true"/><variable name="sofia-profile-override-auth-require-user" value="true"/><variable name="sofia-profile-override-disable-register" value="true"/><variable name="sofia-profile-override-accept-blind-auth" value="false"/><variable name="sofia-profile-override-accept-blind-reg" value="false"/><variable name="sofia-profile-override-manage-presence" value="false"/><variable name="sofia-profile-override-manage-shared-appearance" value="false"/><variable name="sofia-profile-override-channel-xml-fetch-on-nightmare-transfer" value="true"/><variable name="sofia-profile-override-fire-transfer-events" value="true"/><variable name="sofia-profile-override-keep-auth-caller-id" value="true"/><variable name="sofia-profile-override-enable-dynamic-outbound-proxy" value="true"/></variables><caches/></configuration></section></document>

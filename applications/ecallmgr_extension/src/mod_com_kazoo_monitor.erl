@@ -229,42 +229,25 @@ maybe_node_sync(#{is_node := 'true'
                  } = Context) ->
     case node_instance_uuid(Server) of
         CoreUUID -> Context;
-        OtherUUID -> node_sync(Context#{node_core_uuid => OtherUUID})
+        OtherUUID -> node_restarted(Context#{node_core_uuid => OtherUUID})
     end;
 maybe_node_sync(Context) -> Context.
 
-node_sync(#{core_uuid := CoreUUID
-           ,node_core_uuid := NodeCoreUUID
-           ,nodename := Nodename
-           } = Context) ->
-    lager:info("running node sync routines for node ~s uuid from ~s to ~s", [Nodename, NodeCoreUUID, CoreUUID]),
-    Routines = [fun sync_info/1
-               ,fun sync_fetch/1
-               ],
-    kz_maps:exec(Routines, Context).
-
-sync_info(#{core_uuid := CoreUUID
-           ,node_core_uuid := NodeCoreUUID
-           ,nodename := Nodename
-           } = Context) ->
-    lager:info("synchronizing node ~s uuid from ~s to ~s", [Nodename, NodeCoreUUID, CoreUUID]),
-    ecallmgr_fs_node:sync_info(Nodename),
+%% The switch came back with a new Core-UUID faster than kz_nodes expires
+%% its advertise (a service restart or a reboot inside the 30 s window), so
+%% ecallmgr never saw it leave. Everything keyed by the old UUID is stale:
+%% the fetch bindings, the command queue, channel and conference state, the
+%% node commands. Take the node down exactly as an expired advertise would
+%% (the node supervisor tree goes away) and let the next heartbeat bring it
+%% up through the normal path: maybe_node_up -> ecallmgr_fs_nodes:nodeup ->
+%% a fresh tree initialized against the new instance.
+node_restarted(#{core_uuid := CoreUUID
+                ,node_core_uuid := NodeCoreUUID
+                ,nodename := Nodename
+                } = Context) ->
+    lager:notice("node ~s restarted (core uuid ~s -> ~s), re-initializing it", [Nodename, NodeCoreUUID, CoreUUID]),
+    _ = ecallmgr_fs_nodes:nodedown(Nodename),
     Context.
-
-sync_fetch(#{core_uuid := CoreUUID
-            ,node_core_uuid := NodeCoreUUID
-            ,nodename := Nodename
-            ,node_supervisor := Supervisor
-            } = Context) ->
-    lager:info("synchronizing node ~s fetch bindings from ~s to ~s", [Nodename, NodeCoreUUID, CoreUUID]),
-    case ecallmgr_fs_node_sup:node_server(Supervisor, <<"amqp_fetch_dialplan_sup">>) of
-        undefined ->
-            lager:warning("failed to get amqp fetch dialplan sup from ~s", [Nodename]),
-            Context;
-        Pid ->
-            _ = gen:stop(Pid, {shutdown, core_uuid_changed}, infinity),
-            Context
-    end.
 
 node_instance_uuid(Nodename) ->
     kz_term:to_atom(ecallmgr_fs_node:instance_uuid(Nodename), 'true').

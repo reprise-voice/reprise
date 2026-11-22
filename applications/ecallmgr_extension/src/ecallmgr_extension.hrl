@@ -27,6 +27,11 @@
                                      ,{'cdr', ['KZ_CDR']}
                                      ,{'callflow', ['ROUTE_WINNER', 'CHANNEL_EXECUTE_COMPLETE', 'CHANNEL_APP_EXECUTE_COMPLETE', 'CHANNEL_METAFLOW']}
                                      ,{'channel', ['CHANNEL_CREATE', 'CHANNEL_ANSWER', 'CHANNEL_DESTROY']}
+                                      %% Matched by stream name. loopback::bowout is published as
+                                      %% CHANNEL_REPLACED and arrives on the transfer stream's binding; a
+                                      %% second CHANNEL_REPLACED binding would handle every replaced event
+                                      %% twice, so the loopback stream is re-included below without it.
+                                     ,{'loopback', ['loopback::bowout', 'loopback::direct']}
                                      ]).
 
 -define(FS_EXTENSION_INCLUDE_EVENTS, [{'create', ['CHANNEL_CREATE']}
@@ -35,6 +40,7 @@
                                      ,{'route', ['ROUTE_WINNER']}
                                      ,{'execute', ['CHANNEL_EXECUTE_COMPLETE']}
                                      ,{'metaflow', ['CHANNEL_METAFLOW']}
+                                     ,{'loopback', ['loopback::direct']}
                                      ]).
 
 -define(ECALLMGR_EXTENSION_HRL, 'true').

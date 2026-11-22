@@ -24,7 +24,7 @@
 		<field name="Presence-Dialog-Realm-Hash" />
 
 		<field name="Presence-Dialog-Direction" as="Direction" />
-		<field name="Presence-Dialog-Expires" as="Expires" />
+		<field name="Presence-Dialog-Expires" as="Expires" serialize-as="number" />
 		<field name="Presence-Dialog-State" as="State" />
 		<field name="Unique-ID" as="Call-ID" />
 

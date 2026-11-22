@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<!-- empty configuration: the unit tests run libfreeswitch's minimal core -->
+<document type="freeswitch/xml">
+  <section name="configuration"/>
+</document>

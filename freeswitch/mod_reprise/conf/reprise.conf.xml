@@ -1,0 +1,29 @@
+<configuration name="reprise.conf" description="mod_reprise AMQP bootstrap">
+  <settings>
+    <!-- node name kz_nodes will know us by; defaults to freeswitch@<hostname -f> -->
+    <!-- <param name="node-name" value="freeswitch@fs-1.example.internal"/> -->
+    <param name="reconnect-interval-ms" value="2000"/>
+    <param name="fetch-timeout-ms" value="3500"/>
+    <!-- kz_nodes heartbeat period; the advertise expires after 30s -->
+    <param name="advertise-interval-ms" value="5000"/>
+    <!-- log every fetch document and its reply at INFO (contract debugging) -->
+    <param name="trace-fetch" value="false"/>
+    <!-- BLF: KZ_PRESENCE_DIALOG from the core's PRESENCE_IN (the served
+         presence profile publishes it for Kamailio's presence role) -->
+    <param name="presence-dialog" value="true"/>
+    <!-- the served rtcp profile publishes an event per leg per RTCP
+         interval that nothing in Kazoo consumes; leave off unless needed -->
+    <param name="rtcp-events" value="false"/>
+  </settings>
+  <!-- tried in order until one connects (multi-broker failover) -->
+  <connections>
+    <connection name="primary">
+      <param name="hostname" value="rabbitmq.example.com"/>
+      <param name="port" value="5672"/>
+      <param name="username" value="kazoo"/>
+      <param name="password" value="change_me"/>
+      <param name="virtualhost" value="/"/>
+      <param name="heartbeat" value="30"/>
+    </connection>
+  </connections>
+</configuration>

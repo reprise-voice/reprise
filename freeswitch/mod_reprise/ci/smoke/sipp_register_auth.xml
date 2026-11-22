@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+<!-- REGISTER device reprisesipp2 through Kamailio (digest answered); the
+     Contact is this sipp's own address, so a UAS started on the same
+     ip:port afterwards receives the device's calls.
+     sipp -sf sipp_register_auth.xml -i $IP -p 5091 -key contact_port 5090 -m 1 192.0.2.3:5060  (the UAS holds 5090) -->
+<scenario name="kazoo register with digest auth">
+  <send retrans="500">
+    <![CDATA[
+      REGISTER sip:example.com SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: <sip:reprisesipp2@example.com>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:reprisesipp2@example.com>
+      Call-ID: [call_id]
+      CSeq: 1 REGISTER
+      Contact: <sip:reprisesipp2@[local_ip]:[contact_port]>
+      Max-Forwards: 70
+      Expires: 300
+      User-Agent: reprise-sipp
+      Content-Length: 0
+    ]]>
+  </send>
+  <recv response="100" optional="true"/>
+  <recv response="401" auth="true" optional="true" next="auth"/>
+  <recv response="407" auth="true" next="auth"/>
+  <label id="auth"/>
+  <send retrans="500">
+    <![CDATA[
+      REGISTER sip:example.com SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: <sip:reprisesipp2@example.com>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:reprisesipp2@example.com>
+      Call-ID: [call_id]
+      CSeq: 2 REGISTER
+      Contact: <sip:reprisesipp2@[local_ip]:[contact_port]>
+      Max-Forwards: 70
+      Expires: 300
+      User-Agent: reprise-sipp
+      [authentication username=reprisesipp2 password=reprisesipp2-test-pw]
+      Content-Length: 0
+    ]]>
+  </send>
+  <recv response="100" optional="true"/>
+  <recv response="200"/>
+</scenario>

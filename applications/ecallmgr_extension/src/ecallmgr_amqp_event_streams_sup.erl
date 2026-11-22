@@ -29,7 +29,11 @@
 -spec start_link() -> kz_types:startlink_ret().
 start_link() ->
     {'ok', Pid} = supervisor:start_link({local, ?SERVER}, ?MODULE, []),
-    Streams = (?FS_EVENTS -- ?FS_EXTENSION_EXCLUDE_EVENTS) ++ ?FS_EXTENSION_INCLUDE_EVENTS,
+    %% Excluded by stream name so a native entry can change shape without
+    %% silently reviving the stream here.
+    Excluded = [Name || {Name, _} <- ?FS_EXTENSION_EXCLUDE_EVENTS],
+    Streams = [Stream || {Name, _} = Stream <- ?FS_EVENTS, not lists:member(Name, Excluded)]
+        ++ ?FS_EXTENSION_INCLUDE_EVENTS,
     kz_process:spawn(fun() -> [supervisor:start_child(Pid, [Stream]) || Stream <- Streams] end),
     {'ok', Pid}.
 

@@ -10,7 +10,7 @@
 		<filter type="exclude" name="Application" compare="contains" value="bridge">
 			<filters scope="any">
 				<filter name="Channel-Flags" type="exclude" compare="contains" value="XFER_ZOMBIE" />
-				<filter name="Channel-Flags" type="exclude" compare="contains" value="TRANSFER">
+				<filter name="Channel-Flags" type="exclude" compare="token" value="TRANSFER">
 					<filters scope="any">
 						<filter name="Channel-Flags" type="include" compare="contains" value="ORIGINATING_XFER" />
 					</filters>

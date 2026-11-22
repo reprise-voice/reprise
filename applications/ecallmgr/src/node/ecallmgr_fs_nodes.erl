@@ -968,6 +968,10 @@ print_summary([{_, Node}|Nodes], Count) ->
 
 -spec print_version(kz_term:ne_binary()) -> kz_term:ne_binary().
 print_version(<<"mod_kazoo ", Version/binary>>) -> Version;
+%% the AMQP transport module, under its name and under the name it had
+%% before it was renamed (a cluster mid-upgrade reports both)
+print_version(<<"mod_reprise ", Version/binary>>) -> Version;
+print_version(<<"mod_com_kazoo ", Version/binary>>) -> Version;
 print_version(Version) -> Version.
 
 -spec nodedown(atom()) -> 'ok'.

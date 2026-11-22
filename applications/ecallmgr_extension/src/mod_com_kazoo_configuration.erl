@@ -190,7 +190,9 @@ fs_defs(XmlEl, Acc) ->
 
 -spec fs_xml(file:filename_all()) -> kz_types:xml_el().
 fs_xml(File) ->
-    case xmerl_scan:file(re:replace(File, "::", "-", ['global'])) of
+    %% OTP 27+ keeps comment nodes in the parsed tree by default; the
+    %% config builder has no use for them, so drop them at parse time
+    case xmerl_scan:file(re:replace(File, "::", "-", ['global']), [{'comments', 'false'}]) of
         {error, _Err} -> throw({invalid_configuration, lists:flatten(io_lib:format("error reading file : ~s : ~p", [File, _Err]))});
         {Xml, _} -> Xml
     end.

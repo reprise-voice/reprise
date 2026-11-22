@@ -18,7 +18,8 @@
 
 -export(['#root#'/4,
          '#element#'/5,
-         '#text#'/1
+         '#text#'/1,
+         '#comment#'/1
         ]).
 
 -include_lib("xmerl/include/xmerl.hrl").
@@ -32,6 +33,13 @@
 -spec '#text#'(any()) -> iolist().
 '#text#'(Text) ->
     xmerl_lib:export_text(Text).
+
+%% xmerl on OTP 27+ dispatches comment nodes to '#comment#'; without this
+%% callback export crashes with {unknown_tag,{'#comment#',...}}. Comments
+%% carry no configuration, so drop them from the output.
+-spec '#comment#'(any()) -> iolist().
+'#comment#'(_Text) ->
+    [].
 
 %% The '#root#' tag is called when the entire structure has been
 %% exported. It does not appear in the structure itself.

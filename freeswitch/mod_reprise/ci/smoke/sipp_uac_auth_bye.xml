@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+<scenario name="kazoo uac with digest auth, caller hangs up after -d ms">
+  <!-- no retransmissions at all: a retransmitted INVITE draws late 407s whose To tag
+       overwrites sipp's peer tag, and the later BYE then gets 481 from the switch -->
+  <send>
+    <![CDATA[
+      INVITE sip:[service]@[remote_ip] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: reprisesipp <sip:reprisesipp@example.com>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@example.com>
+      Call-ID: [call_id]
+      CSeq: 1 INVITE
+      Contact: <sip:reprisesipp@[local_ip]:[local_port]>
+      Max-Forwards: 70
+      User-Agent: reprise-sipp
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=user1 53655765 2353687637 IN IP[local_ip_type] [local_ip]
+      s=-
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [auto_media_port] RTP/AVP 0 8 101
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:8 PCMA/8000
+      a=rtpmap:101 telephone-event/8000
+      a=fmtp:101 0-15
+    ]]>
+  </send>
+  <recv response="100" optional="true"/>
+  <recv response="401" auth="true" optional="true" next="auth"/>
+  <recv response="407" auth="true" next="auth"/>
+  <label id="auth"/>
+  <send>
+    <![CDATA[
+      ACK sip:[service]@[remote_ip] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=z9hG4bK-[pid]-[call_number]-0
+      From: reprisesipp <sip:reprisesipp@example.com>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@example.com>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 1 ACK
+      Max-Forwards: 70
+      Content-Length: 0
+    ]]>
+  </send>
+  <send>
+    <![CDATA[
+      INVITE sip:[service]@[remote_ip] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: reprisesipp <sip:reprisesipp@example.com>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@example.com>
+      Call-ID: [call_id]
+      CSeq: 2 INVITE
+      Contact: <sip:reprisesipp@[local_ip]:[local_port]>
+      Max-Forwards: 70
+      User-Agent: reprise-sipp
+      [authentication username=reprisesipp password=reprisesipp-test-pw]
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=user1 53655765 2353687637 IN IP[local_ip_type] [local_ip]
+      s=-
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [auto_media_port] RTP/AVP 0 8 101
+      a=rtpmap:0 PCMU/8000
+      a=rtpmap:8 PCMA/8000
+      a=rtpmap:101 telephone-event/8000
+      a=fmtp:101 0-15
+    ]]>
+  </send>
+  <recv response="100" optional="true"/>
+  <recv response="180" optional="true"/>
+  <recv response="183" optional="true"/>
+  <recv response="200" rtd="true" rrs="true"/>
+  <send>
+    <![CDATA[
+      ACK [next_url] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      [routes]
+      From: reprisesipp <sip:reprisesipp@example.com>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@example.com>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 2 ACK
+      Contact: <sip:reprisesipp@[local_ip]:[local_port]>
+      Max-Forwards: 70
+      Content-Length: 0
+    ]]>
+  </send>
+  <nop>
+    <action><exec play_pcap_audio="/sipp/g711a.pcap"/></action>
+  </nop>
+  <pause milliseconds="4000"/>
+  <nop>
+    <action><exec play_pcap_audio="/sipp/dtmf_2833_1.pcap"/></action>
+  </nop>
+  <pause milliseconds="1000"/>
+  <pause/>
+  <send>
+    <![CDATA[
+      BYE [next_url] SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      [routes]
+      From: reprisesipp <sip:reprisesipp@example.com>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@example.com>[peer_tag_param]
+      Call-ID: [call_id]
+      CSeq: 3 BYE
+      Max-Forwards: 70
+      Content-Length: 0
+    ]]>
+  </send>
+  <recv response="200"/>
+  <ResponseTimeRepartition value="10, 20, 30, 40, 50, 100, 150, 200"/>
+  <CallLengthRepartition value="10, 50, 100, 500, 1000, 5000, 10000"/>
+</scenario>

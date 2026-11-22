@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+<!-- BLF watcher: SUBSCRIBE (Event: dialog) through Kamailio, as device
+     reprisesipp, to the presentity given with -s (reprisesipp2), then sit and
+     answer every NOTIFY for -d ms. Kamailio's presence role turns the
+     module's KZ_PRESENCE_DIALOG publishes (presence exchange,
+     dialog.<realm>.<call-id>) into dialog-info NOTIFYs to this watcher.
+     Run with -trace_msg to keep the NOTIFY bodies (early / confirmed /
+     terminated). The first NOTIFY is Kamailio's own (empty dialog-info);
+     the rest arrive while the presentity is called; the watcher stays
+     for 60 s after the last one.
+     sipp -sf sipp_subscribe_dialog.xml -s reprisesipp2 -i $IP -p 5070 -m 1 -trace_msg 192.0.2.3:5060 -->
+<scenario name="kazoo dialog subscribe with digest auth">
+  <send retrans="500">
+    <![CDATA[
+      SUBSCRIBE sip:[service]@example.com SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: <sip:reprisesipp@example.com>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@example.com>
+      Call-ID: [call_id]
+      CSeq: 1 SUBSCRIBE
+      Contact: <sip:reprisesipp@[local_ip]:[local_port]>
+      Max-Forwards: 70
+      Event: dialog
+      Accept: application/dialog-info+xml
+      Expires: 300
+      User-Agent: reprise-sipp
+      Content-Length: 0
+    ]]>
+  </send>
+  <recv response="100" optional="true"/>
+  <recv response="401" auth="true" optional="true" next="auth"/>
+  <recv response="407" auth="true" next="auth"/>
+  <label id="auth"/>
+  <send retrans="500">
+    <![CDATA[
+      SUBSCRIBE sip:[service]@example.com SIP/2.0
+      Via: SIP/2.0/[transport] [local_ip]:[local_port];branch=[branch]
+      From: <sip:reprisesipp@example.com>;tag=[pid]SIPpTag00[call_number]
+      To: <sip:[service]@example.com>
+      Call-ID: [call_id]
+      CSeq: 2 SUBSCRIBE
+      Contact: <sip:reprisesipp@[local_ip]:[local_port]>
+      Max-Forwards: 70
+      Event: dialog
+      Accept: application/dialog-info+xml
+      Expires: 300
+      User-Agent: reprise-sipp
+      [authentication username=reprisesipp password=reprisesipp-test-pw]
+      Content-Length: 0
+    ]]>
+  </send>
+  <recv response="100" optional="true"/>
+  <recv response="200" rrs="true"/>
+  <!-- every NOTIFY (the initial one and each dialog change) is answered
+       here; the scenario ends after 60 s without one -->
+  <label id="notify"/>
+  <recv request="NOTIFY" crlf="true" timeout="60000" ontimeout="end"/>
+  <send>
+    <![CDATA[
+      SIP/2.0 200 OK
+      [last_Via:]
+      [last_From:]
+      [last_To:]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Contact: <sip:reprisesipp@[local_ip]:[local_port]>
+      Content-Length: 0
+    ]]>
+  </send>
+  <nop next="notify"/>
+  <label id="end"/>
+  <ResponseTimeRepartition value="10, 20, 30, 40, 50, 100, 150, 200"/>
+  <CallLengthRepartition value="10, 50, 100, 500, 1000, 5000, 10000"/>
+</scenario>
