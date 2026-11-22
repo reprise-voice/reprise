@@ -348,7 +348,7 @@ basic_contraints(CA) ->
                 }.
 
 key_usage(Bits) ->
-    {'ok', Value} = 'OTP-PUB-KEY':encode('KeyUsage', Bits),
+    Value = public_key:der_encode('KeyUsage', Bits),
     #'Extension'{extnID = ?'id-ce-keyUsage'
                 ,extnValue = Value
                 ,critical = 'false'
@@ -362,7 +362,7 @@ authority_key_identifier(PK) ->
 
 subject_key_identifier(PK) ->
     {_, Key} = fingerprints(PK),
-    {'ok', Value} = 'OTP-PUB-KEY':encode('SubjectKeyIdentifier', Key),
+    Value = public_key:der_encode('SubjectKeyIdentifier', Key),
     #'Extension'{extnID = ?'id-ce-subjectKeyIdentifier'
                 ,extnValue = Value
                 }.
@@ -373,6 +373,6 @@ encode_extensions(Extensions) ->
 encode_extension(#'Extension'{extnValue=Value0} = Extension)
   when is_tuple(Value0)->
     Type = element(1, Value0),
-    {'ok', Value} = 'OTP-PUB-KEY':encode(Type, Value0),
+    Value = public_key:der_encode(Type, Value0),
     Extension#'Extension'{extnValue=Value};
 encode_extension(#'Extension'{} = Extension) -> Extension.

@@ -1,28 +1,53 @@
 %%%-----------------------------------------------------------------------------
 %%% @copyright (C) 2023-2025, 2600Hz
-%%% @doc Implements KAZOO style as an elvis rules module. This is used by the
-%%% elvis config to check some styles that are not build in by default.
+%%% @doc Implements KAZOO style as an elvis rules module (elvis_core 4.x rule
+%%% API). This is used by the elvis config to check some styles that are not
+%%% built in by default.
 %%% @end
 %%%-----------------------------------------------------------------------------
 -module(kz_style).
 
--export([no_unenclosed_atoms/3]).
+-export([no_unenclosed_atoms/2
+        ,default/1
+        ]).
 
--type no_unenclosed_atoms_config() :: any().
--export_type([no_unenclosed_atoms_config/0]).
+%% This module only runs inside elvis (`make elvis`, the kazoo_stdlib tests),
+%% and elvis is a test-only dependency of kazoo_stdlib since the OTP 28 port:
+%% in a plain build these callees are not in deps/, so xref is told they are
+%% expected.
+-ignore_xref([{elvis_file, parse_tree, 2}
+             ,{elvis_file, path, 1}
+             ,{elvis_result, new_item, 3}
+             ,{elvis_rule, defmap, 1}
+             ,{ktn_code, attr, 2}
+             ,{ktn_code, content, 1}
+             ,{ktn_code, node_attr, 2}
+             ,{ktn_code, type, 1}
+             ,{zipper, is_end, 1}
+             ,{zipper, new, 4}
+             ,{zipper, next, 1}
+             ,{zipper, node, 1}
+             ]).
+
+%%------------------------------------------------------------------------------
+%% @doc The rule's default options (elvis_rule callback): it has none.
+%% @end
+%%------------------------------------------------------------------------------
+-spec default(atom()) -> elvis_rule:def().
+default('no_unenclosed_atoms') -> elvis_rule:defmap(#{}).
 
 %%------------------------------------------------------------------------------
 %% @doc Ensure that all atoms are 'tickied', that is enclosed in single quotes.
 %% @end
 %%------------------------------------------------------------------------------
--spec no_unenclosed_atoms(elvis_config:config(), elvis_file:file(), no_unenclosed_atoms_config()) ->
+-spec no_unenclosed_atoms(elvis_rule:t(), elvis_config:t() | [elvis_config:t()]) ->
           [elvis_result:item()].
-no_unenclosed_atoms(Config, Target, RuleConfig) ->
-    {Root, File} = elvis_file:parse_tree(Config, Target, RuleConfig),
+no_unenclosed_atoms(Rule, ElvisConfig) ->
+    {Root, File} = elvis_file:parse_tree(Rule, ElvisConfig),
 
-    Path = get_path([Config, Root, File]),
+    Path = elvis_file:path(File),
 
-    Zipper = elvis_code:code_zipper(Root, 'all'),
+    Zipper = all_nodes_zipper(Root),
     AtomNodes = seek_atoms(Zipper),
 
     lists:foldr(fun(AtomNode, Acc) ->
@@ -31,11 +56,6 @@ no_unenclosed_atoms(Config, Target, RuleConfig) ->
                ,[]
                ,AtomNodes
                ).
-
-get_path([]) -> "";
-get_path([#{path:=Path}=_From|_]) -> Path;
-get_path([_|T]) ->
-    get_path(T).
 
 %%------------------------------------------------------------------------------
 %% @doc The meaty potatoes. This takes an atom node, checks for tickies, and if
@@ -54,16 +74,38 @@ fold_unenclosed_atom(Node, Acc, Path) ->
     case {FirstCharacter, LastCharacter} of
         {$', $'} -> Acc;
         _NotTickies ->
-            [elvis_result:new('item'
-                             ,"unenclosed atom at ~s:~p"
-                             ,[Path, LineNumber]
-                             ,LineNumber
-                             )
+            [elvis_result:new_item("unenclosed atom at ~s:~p"
+                                  ,[Path, LineNumber]
+                                  ,#{'node' => Node}
+                                  )
             | Acc
             ]
     end.
 
 -type code_zip() :: zipper:zipper(ktn_code:tree_node()).
+
+%%------------------------------------------------------------------------------
+%% @doc A zipper over every node of the tree, node attributes included (record
+%% field names, map keys, remote module/function atoms live there, not in the
+%% content). elvis_core 4.x only exports its content-only zipper; this is its
+%% all-nodes one.
+%% @end
+%%------------------------------------------------------------------------------
+-spec all_nodes_zipper(ktn_code:tree_node()) -> code_zip().
+all_nodes_zipper(Root) ->
+    IsBranch = fun(#{} = Node) ->
+                       ktn_code:content(Node) =/= []
+                           orelse maps:is_key('node_attrs', Node)
+               end,
+    Children = fun(#{'content' := Content, 'node_attrs' := NodeAttrs}) ->
+                       Content ++ lists:flatten(maps:values(NodeAttrs));
+                  (#{'node_attrs' := NodeAttrs}) ->
+                       lists:flatten(maps:values(NodeAttrs));
+                  (#{'content' := Content}) ->
+                       Content
+               end,
+    MakeNode = fun(Node, _Children) -> Node end,
+    zipper:new(IsBranch, Children, MakeNode, Root).
 
 -spec seek_atoms(code_zip()) -> [ktn_code:tree_node()].
 seek_atoms(Zipper) ->

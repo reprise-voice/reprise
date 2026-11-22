@@ -93,16 +93,21 @@ map_atom_keys_one_atom_tickied_in_function_clause_test_() ->
 self_test_() ->
     {'ok', Bin} = file:read_file(filename:join([code:lib_dir('kazoo_stdlib'), "test", ?MODULE_STRING".erl"])),
     ElvisFile = #{path => "kz_style_tests.erl", content => Bin},
-    ?_assertEqual([], kz_style:no_unenclosed_atoms(#{}, ElvisFile, #{})).
+    ?_assertEqual([], run(ElvisFile)).
 
 implementation_test_() ->
     {'ok', Bin} = file:read_file(filename:join([code:lib_dir('kazoo_stdlib'), "src", "kz_style.erl"])),
     ElvisFile = #{path => "kz_style.erl", content => Bin},
-    ?_assertEqual([], kz_style:no_unenclosed_atoms(#{}, ElvisFile, #{})).
+    ?_assertEqual([], run(ElvisFile)).
 
 call_it(Code) ->
     ElvisFile = fake_elvis_file(Code),
-    kz_style:no_unenclosed_atoms(#{}, ElvisFile, #{}).
+    run(ElvisFile).
 
 fake_elvis_file(Code) ->
     #{path => "does-not-exist.erl", content => Code}.
+
+%% the rule as elvis_core 4.x invokes it: the file rides in the rule
+run(ElvisFile) ->
+    Rule = elvis_rule:new('kz_style', 'no_unenclosed_atoms', elvis_rule:defmap(#{})),
+    kz_style:no_unenclosed_atoms(elvis_rule:file(Rule, ElvisFile), elvis_config:default()).

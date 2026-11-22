@@ -120,7 +120,7 @@ maybe_use_app_connection(#{options := Options}=Server, DbName) ->
 set_app_connection(#{options := Options}=Server, AppName) ->
     Path = case maps:get('test_db_subdir', Options, 'undefined') of
                'undefined' -> code:priv_dir(AppName);
-               P -> code:lib_dir(AppName, kz_term:to_atom(P, 'true'))
+               P -> lib_subdir(AppName, P)
            end,
     case Path of
         {'error', 'bad_name'} ->
@@ -128,4 +128,12 @@ set_app_connection(#{options := Options}=Server, AppName) ->
             Server;
         _ ->
             Server#{url => Path}
+    end.
+
+%% code:lib_dir/2 is deprecated since OTP 27
+-spec lib_subdir(atom(), any()) -> file:filename_all() | {'error', 'bad_name'}.
+lib_subdir(AppName, SubDir) ->
+    case code:lib_dir(AppName) of
+        {'error', 'bad_name'}=Error -> Error;
+        LibDir -> filename:join(LibDir, kz_term:to_list(SubDir))
     end.

@@ -30,6 +30,8 @@
 -define(HEARTBEAT_PERIOD, parameter(heartbeat_period_ms)).
 -define(HEARTBEAT_TIMEOUT, parameter(heartbeat_timeout_ms)).
 -define(RECONNECT_AFTER, parameter(pause_before_reconnect_ms)).
+%% rabbit_common >= 4.x headers also define GEN_SERVER_CALL_TIMEOUT
+-undef(GEN_SERVER_CALL_TIMEOUT).
 -define(GEN_SERVER_CALL_TIMEOUT, parameter(server_call_timeout_ms)).
 
 -define(milliseconds_in_second, 1000).

@@ -1,7 +1,7 @@
 ### amqp erlang protocol distributor implementation
 
 ### compile
-./rebar 3
+rebar3 compile (rebar3 is not bundled; inside the Reprise tree erlang.mk builds it as a dependency, see make/deps.mk)
 
 ### run
 

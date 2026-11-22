@@ -1,0 +1,20 @@
+amqp_dist: Erlang distribution over AMQP
+
+Provenance
+
+This directory is 2600Hz's erlang-amqp_dist
+(https://github.com/2600hz/erlang-amqp_dist, commit b26715d73873) with one
+change on top, which builds it against current OTP and rabbit_common 4.x
+(GEN_SERVER_CALL_TIMEOUT is no longer defined there). It is vendored in
+this tree; make/deps.mk copies it into deps/ like any other
+dependency.
+
+Licence
+
+The upstream repository has no licence file, and its source files carry no
+copyright or licence headers. 2600Hz distributes this application as part
+of its Kazoo release packages, which are published under the Mozilla Public
+License 2.0. No separate licence statement from 2600Hz for this code has
+been found, and none is made here: this note records where the code came
+from, not the terms it is offered under. Its licensing has not been
+confirmed with 2600Hz.

@@ -1,12 +1,10 @@
 DEPS = elvis
 
-dep_elvis = git $(FETCH_AS)2600hz/erlang-elvis a482801f953523d6678a550a184079e2818e5c68
+dep_elvis = git $(REPRISE_GIT_BASE)/erlang-elvis b99eeed9b9a94eb028a1923ca3c41fbd5694bf69
 # used by all to check formatting
 
 ELVIS_DEP_DIR = $(DEPS_DIR)/elvis
 ELVIS = $(ROOT)/elvis
-
-FETCH_AS ?= https://github.com/
 
 $(ELVIS_DEP_DIR):
 	@echo creating elvis dir $(ELVIS_DEP_DIR)
@@ -23,7 +21,7 @@ $(ELVIS): $(ELVIS_DEP_DIR)
 .PHONY: elvis
 elvis: $(ELVIS)
 # need $(CHANGED_ERL) absolute paths to be relative to $(ROOT)
-	@ERL_LIBS=$(DEPS_DIR):$(CORE_DIR) $(ELVIS) --config $(ROOT)/make/elvis.config --verbose -k --parallel auto rock $(subst $(ROOT)/,,$(filter %.erl,$(CHANGED_ERL)))
+	@ERL_LIBS=$(DEPS_DIR):$(CORE_DIR) $(ELVIS) --config $(ROOT)/make/elvis.config --verbose --parallel auto rock $(subst $(ROOT)/,,$(filter %.erl,$(CHANGED_ERL)))
 
 .PHONY: clean-elvis
 clean-elvis:
