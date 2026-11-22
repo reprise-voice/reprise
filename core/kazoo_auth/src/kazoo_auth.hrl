@@ -32,6 +32,13 @@
 -define(KAZOO_SIGNATURE_ID, <<"secret_for_user_signature">>).
 -define(KAZOO_SIGNATURE_SECRET, kapps_config:get_ne_binary(?CONFIG_CAT, ?KAZOO_SIGNATURE_ID, ?KAZOO_GEN_SIGNATURE_SECRET)).
 
+%% a token without an `exp' claim is rejected unless this is on
+-define(ALLOW_TOKENS_WITHOUT_EXPIRY, kapps_config:get_is_true(?CONFIG_CAT, <<"allow_tokens_without_expiry">>, 'false')).
+
+%% a kazoo token without an `identity_sig' claim is rejected, and one that
+%% cannot be signed is not minted, unless this is off
+-define(REQUIRE_IDENTITY_SIGNATURE, kapps_config:get_is_true(?CONFIG_CAT, <<"require_identity_signature">>, 'true')).
+
 -define(RSA_KEY_SIZE, 2048).
 
 %% https://security.stackexchange.com/questions/2335/should-rsa-public-exponent-be-only-in-3-5-17-257-or-65537-due-to-security-c

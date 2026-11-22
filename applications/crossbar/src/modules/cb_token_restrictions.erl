@@ -30,7 +30,9 @@
         ]).
 
 -ifdef(TEST).
--export([maybe_deny_access/1]).
+-export([maybe_deny_access/1
+        ,auth_module/1, auth_module/2
+        ]).
 
 -include_lib("eunit/include/eunit.hrl").
 -include("test/cb_token_restrictions_test.hrl").
@@ -170,11 +172,42 @@ get_auth_restrictions(AuthDoc) ->
 
 -spec get_auth_restrictions(kz_term:api_object(), kz_term:api_binary()) -> kz_term:api_object().
 get_auth_restrictions(AuthDoc, Scopes) ->
-    AuthModule = kz_json:get_atom_value(<<"method">>, AuthDoc),
+    AuthModule = auth_module(kz_json:get_ne_binary_value(<<"method">>, AuthDoc)),
     AccountId = kz_json:get_ne_binary_value(<<"account_id">>, AuthDoc),
     OwnerId = kz_json:get_ne_binary_value(<<"owner_id">>, AuthDoc),
     merge_auth_restrictions(AuthModule, AccountId, OwnerId, Scopes).
 -endif.
+
+%%------------------------------------------------------------------------------
+%% @doc The auth module a token's `method' claim names, as the atom the
+%% restriction lookup keys on. The claim is part of the token, so it is
+%% only matched against atoms that already exist (the loaded cb_*_auth
+%% modules) or the methods listed in crossbar.auth's `external_auth_methods'
+%% (see crossbar_auth:external_auth_methods/0), which have no module;
+%% anything else is `undefined', which the lookup resolves to the catch-all
+%% ruleset, and no atom is created for it.
+%% @end
+%%------------------------------------------------------------------------------
+-spec auth_module(kz_term:api_ne_binary()) -> atom().
+auth_module('undefined') -> 'undefined';
+auth_module(Method) ->
+    auth_module(Method, crossbar_auth:external_auth_methods()).
+
+-spec auth_module(kz_term:ne_binary(), kz_term:ne_binaries()) -> atom().
+auth_module(Method, ExternalMethods) ->
+    case lists:member(Method, ExternalMethods) of
+        'true' -> kz_term:to_atom(Method, 'true');
+        'false' -> loaded_auth_module(Method)
+    end.
+
+-spec loaded_auth_module(kz_term:ne_binary()) -> atom().
+loaded_auth_module(Method) ->
+    try kz_term:to_atom(Method)
+    catch
+        'error':'badarg' ->
+            lager:info("token method ~s is not an auth module, applying the catch-all restrictions", [Method]),
+            'undefined'
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc

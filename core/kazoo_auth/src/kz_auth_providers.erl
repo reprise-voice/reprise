@@ -18,17 +18,24 @@
 -export([provider_by_issuer/1
         ,get_auth_provider/1
         ,kazoo_auth_provider/0
+        ,gce_metadata_provider/0
         ]).
 
 -export_type([auth_provider/0]).
 
 -define(PROVIDER_ISSUER, <<"auth/issuer_domain">>).
 
+-define(GCE_METADATA_PROVIDER, <<"gce_metadata">>).
+-define(DEFAULT_GCE_METADATA_URL
+       ,<<"http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token">>
+       ).
+
 -type auth_provider() :: #{'_id' => kz_term:ne_binary()
                           ,access_code_url => kz_term:ne_binary()
+                          ,auth_url => kz_term:ne_binary()
                           ,discovery => kz_term:ne_binary() %% discovery URL
-                          ,jwt_identity_signature_secret := kz_term:ne_binary()
-                          ,jwt_user_id_signature_hash := kz_term:ne_binary()
+                          ,jwt_identity_signature_secret => kz_term:ne_binary()
+                          ,jwt_user_id_signature_hash => kz_term:ne_binary()
                           ,name := kz_term:ne_binary()
                           ,profile_cache_timer => timeout()
                           ,profile_displayName_field => kz_json:key()
@@ -44,6 +51,20 @@ kazoo_auth_provider() ->
     #{name => <<"kazoo">>
      ,jwt_identity_signature_secret => ?KAZOO_SIGNATURE_SECRET
      ,jwt_user_id_signature_hash => <<"sha256">>
+     }.
+
+%%------------------------------------------------------------------------------
+%% @doc The GCE metadata server as a token source. An app registered with
+%% this provider (see `kazoo_auth_maintenance:register_gce_metadata_app/1')
+%% carries no key: `kz_auth_client' asks the metadata server for an access
+%% token of the service account the instance runs as. The URL is a
+%% `system_config' setting so a test can point it at a stub.
+%% @end
+%%------------------------------------------------------------------------------
+-spec gce_metadata_provider() -> auth_provider().
+gce_metadata_provider() ->
+    #{name => ?GCE_METADATA_PROVIDER
+     ,auth_url => kapps_config:get_ne_binary(?CONFIG_CAT, <<"gce_metadata_url">>, ?DEFAULT_GCE_METADATA_URL)
      }.
 
 -spec provider_by_issuer(kz_term:ne_binary()) -> auth_provider() | {'error', any()}.
@@ -69,6 +90,8 @@ provider_by_issuer(Issuer) ->
 -spec get_auth_provider(kz_term:ne_binary()) -> auth_provider() | {'error', any()}.
 get_auth_provider(<<"kazoo">>) ->
     kazoo_auth_provider();
+get_auth_provider(?GCE_METADATA_PROVIDER) ->
+    gce_metadata_provider();
 get_auth_provider(ProviderId) ->
     case kz_datamgr:open_cache_doc(?KZ_AUTH_DB, ProviderId) of
         {'ok', JObj} -> provider_from_json(JObj);

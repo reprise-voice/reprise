@@ -2,6 +2,39 @@
 
 A Crossbar Authentication module for public conferences.
 
+## Not loaded by default in Reprise
+
+`cb_conference_auth` is left out of Crossbar's default module list, so both
+routes below answer 404 until an operator adds the module to
+`system_config/crossbar.autoload_modules` or starts it with
+`sup crossbar_maintenance start_module cb_conference_auth`. Two reasons,
+both of which need fixing before the module is used again:
+
+1. **The token it mints is not confined to the conference.** The claims
+   carry `conference_id`, `pin_number` and `scope: crossbar:conference_join`,
+   but nothing in Crossbar reads them: no module binds an `allowed_scopes`
+   event, so scope enforcement in `api_util` always sees an empty
+   requirement; `cb_conferences` never compares the token's `conference_id`
+   with the requested one; and there is no `token_restrictions` ruleset for
+   the `cb_conference_auth` method, so a token with no `owner_id` lands in
+   the unrestricted `admin` bucket. What is left is `cb_simple_authz`, which
+   scopes the token to the account tree. An invite link therefore carried a
+   token with full Crossbar access to the account, and until the expiry
+   change in kazoo_auth the method's default `"infinity"` lifetime made that
+   permanent.
+2. **Nothing in this fork consumes it.** The public conference join app
+   that read the bridge details with this token was a 2600hz web
+   application, and nothing in this tree offers a shareable link or a public
+   join page.
+
+To bring it back: add a `token_restrictions` template for the
+`cb_conference_auth` method that allows `conferences` reads only (the
+system template lives in `system_config/crossbar.token_restrictions`), make
+`cb_conferences` refuse a `cb_conference_auth` token whose `conference_id`
+claim is not the conference being read, give the method a short
+`token_auth_expiry_s` in `crossbar.auth` instead of `"infinity"`, and only
+then add the module back to `?DEFAULT_MODULES` in `src/crossbar.hrl`.
+
 ## About Conference Authentication
 
 This module module provide an authentication for public conferences or can if there is a valid JWT, create an invite link to the public including a JWT token.

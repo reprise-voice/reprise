@@ -26,9 +26,12 @@
 
 -spec create_token(kz_term:proplist()) ->
           {'ok', kz_term:ne_binary()} |
-          {'error', 'algorithm_not_supported'}.
+          {'error', 'algorithm_not_supported' | 'identity_signing_failed' | any()}.
 create_token(Claims) ->
-    kz_auth_jwt:encode(include_claims(Claims)).
+    case include_claims(Claims) of
+        {'error', _}=Error -> Error;
+        Signed -> kz_auth_jwt:encode(Signed)
+    end.
 
 -spec validate_token(kz_term:ne_binary() | map()) ->
           {'ok', kz_json:object()} |
@@ -179,22 +182,35 @@ ensure_claims(#{payload := Payload}) ->
     Claims = kz_json:from_map(Payload),
     {'ok', Claims}.
 
--spec include_claims(kz_term:proplist()) -> kz_term:proplist().
+-spec include_claims(kz_term:proplist()) -> kz_term:proplist() | {'error', any()}.
 include_claims(Claims) ->
     Routines = [fun include_identity_sign/1
                ,fun ensure_issuer/1
                ],
-    lists:foldl(fun(Fun, Acc) -> Fun(Acc) end, Claims, Routines).
+    lists:foldl(fun(_Fun, {'error', _}=Error) -> Error;
+                   (Fun, Acc) -> Fun(Acc)
+                end
+               ,Claims
+               ,Routines
+               ).
 
--spec include_identity_sign(kz_term:proplist()) -> kz_term:proplist().
+-spec include_identity_sign(kz_term:proplist()) -> kz_term:proplist() | {'error', 'identity_signing_failed'}.
 include_identity_sign(Claims) ->
     case kz_auth_identity:sign(Claims) of
         {'ok', Signature} ->
             props:set_value(<<"identity_sig">>, kz_base64url:encode(Signature), Claims);
         _Else ->
-            lager:debug("identity signing json token failed : ~p", [_Else]),
-            props:delete(<<"identity_sig">>, Claims)
+            lager:info("identity signing json token failed : ~p", [_Else]),
+            unsigned_claims(Claims, ?REQUIRE_IDENTITY_SIGNATURE)
     end.
+
+%% Verification rejects a kazoo token without identity_sig while
+%% auth.require_identity_signature is on (kz_auth_identity:token/1), so a
+%% token whose identity cannot be signed is not minted: it would only fail at
+%% every request that presented it, with less to say about why.
+-spec unsigned_claims(kz_term:proplist(), boolean()) -> kz_term:proplist() | {'error', 'identity_signing_failed'}.
+unsigned_claims(_Claims, 'true') -> {'error', 'identity_signing_failed'};
+unsigned_claims(Claims, 'false') -> props:delete(<<"identity_sig">>, Claims).
 
 -spec ensure_issuer(kz_term:proplist()) -> kz_term:proplist().
 ensure_issuer(Claims) ->

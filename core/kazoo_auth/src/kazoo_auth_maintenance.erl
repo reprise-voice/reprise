@@ -16,6 +16,7 @@
 %%==============================================================================
 
 -export([register_auth_app/4]).
+-export([register_gce_metadata_app/1]).
 -export([register_common_providers/0]).
 -export([register_common_scopes/0]).
 -export([register_auth_app_key/2]).
@@ -55,6 +56,26 @@ register_auth_app(AccountId, OAuthId, Secret, Provider) ->
                             ,{<<"pvt_type">>, <<"app">>}
                             ]),
     case kz_datamgr:open_doc(?KZ_AUTH_DB, OAuthId) of
+        {'ok', _JObj} -> {'error', <<"already registered">>};
+        {'error', _} -> kz_datamgr:save_doc(?KZ_AUTH_DB, Doc)
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Register an app whose tokens come from the GCE metadata server
+%% (`kz_auth_client:token_for_app/1,2' with this id). The document carries
+%% no key or secret: the instance's service account is the credential.
+%% @end
+%%------------------------------------------------------------------------------
+-spec register_gce_metadata_app(kz_term:ne_binary()) ->
+          {'ok', kz_json:object()} |
+          {'error', any()}.
+register_gce_metadata_app(AppId) ->
+    Doc = kz_json:from_list([{<<"_id">>, AppId}
+                            ,{<<"name">>, AppId}
+                            ,{<<"pvt_auth_provider">>, <<"gce_metadata">>}
+                            ,{<<"pvt_type">>, <<"app">>}
+                            ]),
+    case kz_datamgr:open_doc(?KZ_AUTH_DB, AppId) of
         {'ok', _JObj} -> {'error', <<"already registered">>};
         {'error', _} -> kz_datamgr:save_doc(?KZ_AUTH_DB, Doc)
     end.

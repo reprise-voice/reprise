@@ -17,6 +17,52 @@
 -define(DENY_REQ, 'true').
 -define(ALLOW_REQ, 'false').
 
+%% The method claim is client-influenced: a value that is not an existing
+%% atom must not become one.
+auth_module_test_() ->
+    Bogus = <<"cb_no_such_auth_", (kz_binary:rand_hex(4))/binary>>,
+    External = <<"cb_external_", (kz_binary:rand_hex(4))/binary>>,
+    Configured = <<"cb_configured_", (kz_binary:rand_hex(4))/binary>>,
+    [{"a loaded auth module resolves to its atom"
+     ,?_assertEqual('cb_api_auth', cb_token_restrictions:auth_module(<<"cb_api_auth">>, []))
+     }
+    ,{"a missing method is undefined"
+     ,?_assertEqual('undefined', cb_token_restrictions:auth_module('undefined'))
+     }
+    ,{"a listed external method resolves although no module of that name exists"
+     ,?_test(begin
+                 ?assertError('badarg', binary_to_existing_atom(External, 'utf8')),
+                 ?assertEqual(binary_to_atom(External, 'utf8')
+                             ,cb_token_restrictions:auth_module(External, [External])
+                             )
+             end)
+     }
+    ,{"an unknown method is undefined and creates no atom"
+     ,?_test(begin
+                 ?assertEqual('undefined', cb_token_restrictions:auth_module(Bogus, [External])),
+                 ?assertError('badarg', binary_to_existing_atom(Bogus, 'utf8'))
+             end)
+     }
+    ,{"the external methods come from crossbar.auth"
+     ,{'setup'
+      ,fun() ->
+               _ = meck:new('kapps_config', []),
+               meck:expect('kapps_config', 'get_ne_binaries'
+                          ,fun(<<"crossbar.auth">>, <<"external_auth_methods">>, _Default) ->
+                                   [Configured]
+                           end
+                          )
+       end
+      ,fun(_) -> meck:unload('kapps_config') end
+      ,?_test(begin
+                  ?assertError('badarg', binary_to_existing_atom(Configured, 'utf8')),
+                  Resolved = cb_token_restrictions:auth_module(Configured),
+                  ?assertEqual(Configured, atom_to_binary(Resolved, 'utf8'))
+              end)
+      }
+     }
+    ].
+
 allow_all_rule_test_() ->
     Context =
         cb_context:setters(cb_context:new()

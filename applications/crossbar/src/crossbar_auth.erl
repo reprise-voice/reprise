@@ -16,6 +16,7 @@
         ,log_success_auth/4, log_success_auth/5, log_success_auth/6
         ,log_failed_auth/4, log_failed_auth/5, log_failed_auth/6
         ,get_inherited_config/1
+        ,external_auth_methods/0
         ,available_scopes/1
         ,scopes/2
         ,validate_refresh_token/1, refresh_token/1
@@ -43,21 +44,62 @@
          )
        ).
 
--define(DEFAULT_AUTH_CONFIG,
-        kz_json:from_list(
-          [{<<"cb_user_auth">>, ?DEFAULT_METHOD_CONFIG('true')}
-          ,{<<"cb_api_auth">>, ?DEFAULT_METHOD_CONFIG('false')}
-          ,{<<"cb_desktop_auth">>, ?DEFAULT_METHOD_CONFIG('false')}
-          ,{<<"cb_auth">>, ?DEFAULT_METHOD_CONFIG('false')}
-          ,{<<"cb_ip_auth">>, ?DEFAULT_METHOD_CONFIG('false')}
-          ,{<<"cb_conference_auth">>, ?DEFAULT_METHOD_CONFIG('false', <<"infinity">>)}
-          ]
-         )
+-define(BUILTIN_AUTH_CONFIG,
+        [{<<"cb_user_auth">>, ?DEFAULT_METHOD_CONFIG('true')}
+        ,{<<"cb_api_auth">>, ?DEFAULT_METHOD_CONFIG('false')}
+        ,{<<"cb_desktop_auth">>, ?DEFAULT_METHOD_CONFIG('false')}
+        ,{<<"cb_auth">>, ?DEFAULT_METHOD_CONFIG('false')}
+        ,{<<"cb_ip_auth">>, ?DEFAULT_METHOD_CONFIG('false')}
+        ,{<<"cb_conference_auth">>, ?DEFAULT_METHOD_CONFIG('false', <<"infinity">>)}
+        ]
        ).
 
+-define(DEFAULT_AUTH_CONFIG, default_auth_config(external_auth_methods())).
+
 -define(DEFAULT_AUTH_EXPIRY, kapps_config:get_integer(?AUTH_CONFIG_CAT, <<"token_auth_expiry_s">>, ?SECONDS_IN_HOUR)).
+-define(MAX_TOKEN_LIFETIME, kapps_config:get_integer(?AUTH_CONFIG_CAT, <<"max_token_lifetime_s">>, ?SECONDS_IN_YEAR)).
 -define(SHOULD_LOG_SUCCESS, kapps_config:get_is_true(?AUTH_CONFIG_CAT, <<"log_successful_attempts">>, 'true')).
 -define(AUTH_MODULE_SCOPES_KEY(AuthModule), [<<"auth_modules">>, AuthModule, <<"scopes">>]).
+
+-ifdef(TEST).
+-export([token_auth_expiry/3
+        ,default_auth_config/1
+        ]).
+-endif.
+
+%%------------------------------------------------------------------------------
+%% @doc Token methods minted outside crossbar, by an application that calls
+%% `kz_auth:create_token/1' with a `method' claim of its own and has no
+%% crossbar module of that name. None ship in this tree. A deployment that
+%% adds such an application lists its methods in `system_config/crossbar.auth',
+%% key `external_auth_methods' (default `[]'). A listed method gets a default
+%% `auth_modules' entry (enabled, an hour's expiry) unless one is configured,
+%% joins cb_security's default `available_auth_methods', and resolves in
+%% cb_token_restrictions, so a token restrictions ruleset can be keyed on it.
+%% @end
+%%------------------------------------------------------------------------------
+-spec external_auth_methods() -> kz_term:ne_binaries().
+external_auth_methods() ->
+    %% a single method set as a plain string reads back as one binary
+    case kapps_config:get_ne_binaries(?AUTH_CONFIG_CAT, ?EXTERNAL_AUTH_METHODS_KEY, []) of
+        <<Method/binary>> -> [Method];
+        Methods when is_list(Methods) -> Methods;
+        _Else -> []
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc The default `auth_modules' configuration: crossbar's own auth
+%% modules, plus an entry for each external method that is not one of them.
+%% @end
+%%------------------------------------------------------------------------------
+-spec default_auth_config(kz_term:ne_binaries()) -> kz_json:object().
+default_auth_config(ExternalMethods) ->
+    Builtin = ?BUILTIN_AUTH_CONFIG,
+    External = [{Method, ?DEFAULT_METHOD_CONFIG('false')}
+                || Method <- lists:usort(ExternalMethods),
+                   not lists:keymember(Method, 1, Builtin)
+               ],
+    kz_json:from_list(Builtin ++ External).
 
 -spec create_auth_token(cb_context:context(), atom()) ->
           cb_context:context().
@@ -292,27 +334,36 @@ method_config_path(Method, Key) -> [Method, Key].
 -spec method_mfa_path(kz_term:ne_binary(), kz_term:ne_binary()) -> kz_json:path().
 method_mfa_path(Method, Key) -> [Method, <<"multi_factor">>, Key].
 
--spec token_auth_expiry(kz_term:ne_binary(), token_options(), kz_json:object()) -> non_neg_integer() | 'null'.
+-spec token_auth_expiry(kz_term:ne_binary(), token_options(), kz_json:object()) -> pos_integer().
 token_auth_expiry(Method, TokenOptions, AuthConfig) ->
     token_auth_expiry(Method, TokenOptions, AuthConfig, props:get_integer_value('expiration', TokenOptions)).
 
 token_auth_expiry(Method, _TokenOptions, AuthConfig, 'undefined') ->
     Path = method_config_path(Method, <<"token_auth_expiry_s">>),
-    case kz_json:get_integer_value(Path, AuthConfig, 'undefined') of
-        'undefined' ->
-            case ?DEFAULT_AUTH_EXPIRY of
-                TokenExp when TokenExp > 0 ->
-                    kz_time:current_unix_tstamp() + TokenExp;
-                _ -> 'null'
-            end;
-        TokenExp when TokenExp > 0 ->
-            kz_time:current_unix_tstamp() + TokenExp;
-        _Else ->
-            'null'
-    end;
+    Configured = case kz_json:get_value(Path, AuthConfig) of
+                     'undefined' -> ?DEFAULT_AUTH_EXPIRY;
+                     Lifetime -> Lifetime
+                 end,
+    kz_time:current_unix_tstamp() + token_lifetime(Configured);
 token_auth_expiry(_Method, _TokenOptions, _AuthConfig, Expiration) ->
-    lager:info("using options-supplied exipration ~p", [Expiration]),
+    lager:info("using options-supplied expiration ~p", [Expiration]),
     Expiration.
+
+%%------------------------------------------------------------------------------
+%% @doc A token always carries `exp': kazoo_auth rejects one without it.
+%% The settings that used to leave the claim out and mint a token that never
+%% expired ("infinity", cb_conference_auth's default, and anything that is
+%% not a positive number of seconds) get the configured maximum lifetime,
+%% which also caps an explicit setting.
+%% @end
+%%------------------------------------------------------------------------------
+-spec token_lifetime(any()) -> pos_integer().
+token_lifetime(Configured) ->
+    Max = ?MAX_TOKEN_LIFETIME,
+    case kz_term:safe_cast(Configured, 'undefined', fun kz_term:to_integer/1) of
+        Seconds when is_integer(Seconds), Seconds > 0, Seconds < Max -> Seconds;
+        _Else -> Max
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc Check if is authenticator module is enabled or not.

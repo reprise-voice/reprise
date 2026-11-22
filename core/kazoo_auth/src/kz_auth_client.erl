@@ -225,8 +225,37 @@ request_token(#{subject := #{pvt_static_token := JObj}}=Map) ->
 request_token(#{from_cache := 'true'}=Map) -> Map;
 request_token(#{subject := #{pvt_refresh_token := Token}}=Map) ->
     refresh_token_flow(Map#{refresh_token => Token});
+request_token(#{auth_provider := #{name := <<"gce_metadata">>}}=Map) ->
+    metadata_token_flow(Map);
 request_token(Map) ->
     jwt_flow(Map).
+
+%% The GCE metadata server hands out an access token for the service account
+%% the instance runs as: there is no assertion to sign, and the scopes a caller
+%% passes in its options are ignored (the account's IAM roles decide). The
+%% claim routines that run before this are no-ops for the provider, which
+%% carries no `jwt_flow'; the `claims' they leave in the map are unused. The
+%% response is shaped like `jwt_request/1''s so `authorization_header/1' and
+%% `cache_token/1' work unchanged.
+metadata_token_flow(#{auth_provider := #{auth_url := URL}}=Map) ->
+    Headers = [{"Metadata-Flavor", "Google"}],
+    case kz_http:get(kz_term:to_list(URL), Headers) of
+        {'ok', 200, RespHeaders, RespBody} ->
+            JObj = kz_json:decode(RespBody),
+            M = kz_maps:keys_to_atoms(kz_json:to_map(JObj)),
+            Map#{token => M#{json => JObj
+                            ,headers => RespHeaders
+                            }
+                };
+        {'ok', _Code, _RespHeaders, RespBody} ->
+            lager:info("metadata server answered ~p : ~p", [_Code, RespBody]),
+            Map#{error => kz_term:to_binary(io_lib:format("unable to request metadata token: ~p", [RespBody]))};
+        {'error', Reason} ->
+            lager:info("unable to reach metadata server ~s : ~p", [URL, Reason]),
+            Map#{error => kz_term:to_binary(io_lib:format("unable to reach metadata server: ~p", [Reason]))}
+    end;
+metadata_token_flow(Map) ->
+    {'error', Map#{error => <<"no auth_url">>}}.
 
 jwt_flow(Map) ->
     Routines = [fun jwt_url/1

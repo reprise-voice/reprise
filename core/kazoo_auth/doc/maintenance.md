@@ -11,4 +11,5 @@
 | `register_auth_app/4` | `(AccountId,OAuthId,Secret,Provider)` | |
 | `register_auth_app_key/2` | `(AppId,PemFile)` | |
 | `register_common_providers/0` |  | |
+| `register_gce_metadata_app/1` | `(AppId)` | Register an app whose tokens come from the GCE metadata server (`pvt_auth_provider: gce_metadata`, no key) |
 | `register_views/0` |  | |

@@ -49,6 +49,16 @@
         ,{?KZ_ACCOUNTS_DB, [_AccountId]}
         ]).
 
+%% Token `method' claims minted by another application (one that calls
+%% kz_auth:create_token/1 itself) with no crossbar module of that name behind
+%% them. None ship in this tree; a deployment that adds such an application
+%% lists its methods under this key of system_config/crossbar.auth (default
+%% `[]'). cb_token_restrictions resolves the listed methods to atoms
+%% explicitly (every other method has to be a loaded module), and
+%% crossbar_auth and cb_security add them to their default `auth_modules'
+%% and `available_auth_methods'. See crossbar_auth:external_auth_methods/0.
+-define(EXTERNAL_AUTH_METHODS_KEY, <<"external_auth_methods">>).
+
 -define(DEFAULT_MODULES, ['cb_about'
                          ,'cb_accounts'
                          ,'cb_alerts'
@@ -62,7 +72,12 @@
                          ,'cb_channels'
                          ,'cb_clicktocall'
                          ,'cb_comments'
-                         ,'cb_conference_auth'
+                         %% cb_conference_auth is deliberately not here: the
+                         %% token it mints for a public conference invite is
+                         %% an account-wide token in practice (nothing enforces
+                         %% its conference_id, pin_number or scope claims) and
+                         %% no client of this fork uses the routes. See
+                         %% doc/conference_auth.md before adding it back.
                          ,'cb_conferences'
                          ,'cb_configs'
                          ,'cb_connectivity'
@@ -94,13 +109,19 @@
                          ,'cb_resources'
                          ,'cb_schemas'
                          ,'cb_scopes'
-                         ,'cb_scope_retrictions'
+                         ,'cb_scope_restrictions'
                          ,'cb_screenpops'
                          ,'cb_search'
                          ,'cb_security'
                          ,'cb_services'
                          ,'cb_simple_authz'
                          ,'cb_sms'
+                         %% cb_storage is not autoloaded upstream. Reprise
+                         %% installs a system storage plan at bootstrap and
+                         %% the console reads and edits it through this
+                         %% module; an account admin can also give an
+                         %% account a plan of its own.
+                         ,'cb_storage'
                          ,'cb_system_configs'
                          ,'cb_tasks'
                          ,'cb_temporal_rules'

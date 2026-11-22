@@ -47,14 +47,8 @@ add_discovery(#{auth_provider := #{discovery := DiscoveryUrl}}=Token) ->
         {'ok', JObj} -> Token#{discovery => JObj};
         _ -> Token
     end;
-add_discovery(#{auth_provider := #{name := <<"kazoo">>}}=Token) ->
-    Token;
-add_discovery(#{payload := #{<<"iss">> := <<"http", _/binary>> = Issuer}}=Token) ->
-    DiscoveryUrl = <<Issuer/binary, "/.well-known/openid-configuration">>,
-    case kz_auth_util:get_json_from_url(DiscoveryUrl) of
-        {'ok', JObj} -> Token#{discovery => JObj};
-        _ -> Token
-    end;
+%% no discovery for an issuer without a registered provider: see
+%% kz_auth_keys:maybe_discovery/1
 add_discovery(#{}=Token) -> Token.
 
 -spec access_code(kz_auth_jwt:parsed_token()) ->

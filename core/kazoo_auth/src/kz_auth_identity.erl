@@ -335,6 +335,19 @@ token(#{auth_provider := #{name := <<"kazoo">>
                   };
         Token1 -> verify_identity_signature(Token1, Secret, Hash, IdentitySig)
     end;
+%% kazoo signs the identity of every token it mints (kz_auth:create_token/1);
+%% one without the claim is accepted only where the deployment says so
+token(#{auth_provider := #{name := <<"kazoo">>}}=Token) ->
+    case ?REQUIRE_IDENTITY_SIGNATURE of
+        'true' ->
+            lager:info("kazoo token carries no identity signature"),
+            Token#{identify_verified => 'false'
+                  ,identity_error => 'missing_identity_signature'
+                  };
+        'false' ->
+            lager:info("kazoo token carries no identity signature, accepted by configuration"),
+            Token#{identify_verified => 'true'}
+    end;
 token(#{payload := Payload
        ,auth_provider := #{jwt_user_id_signature_hash := Hash
                           ,jwt_user_id_signature_secret := Secret
@@ -383,7 +396,19 @@ token(#{auth_provider := #{jwt_service_account := 'true'}
                             };
         _Other -> Token
     end;
-token(#{}=Token) -> Token#{identify_verified => 'true'}.
+token(#{auth_provider := #{}}=Token) -> Token#{identify_verified => 'true'};
+%% set_provider/1 leaves an error tuple when the issuer has no registered
+%% provider; such a token has nobody to vouch for its claims
+token(#{auth_provider := {'error', _Reason}}=Token) ->
+    lager:info("token issuer has no registered provider: ~p", [_Reason]),
+    Token#{identify_verified => 'false'
+          ,identity_error => 'issuer_not_registered'
+          };
+token(#{}=Token) ->
+    lager:info("token names no issuer"),
+    Token#{identify_verified => 'false'
+          ,identity_error => 'issuer_not_registered'
+          }.
 
 -spec verify_identity_signature(map(), kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binary()) -> map().
 verify_identity_signature(#{identity_secret := IdentitySecret

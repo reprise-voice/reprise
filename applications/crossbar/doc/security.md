@@ -23,6 +23,20 @@ Only a parent Account or the same Account can set `configuration_id` and `accoun
 
 See [Multi Factor Authentication API documentation](./multi_factor.md).
 
+### Auth methods minted outside Crossbar
+
+An application can mint Crossbar tokens itself, with `kz_auth:create_token/1` and a `method` claim of its own that names no Crossbar module. None does in a stock install. A deployment that adds such an application lists its methods in the system config, so that Crossbar knows them without a code change:
+
+```bash
+sup kapps_config set_default crossbar.auth external_auth_methods cb_example_auth
+```
+
+A single method can be set as a plain string, as above; set several as a list of strings in the `default` section of `system_configs/crossbar.auth`. The list is empty by default. Each method in it:
+
+* gets a default `auth_modules` entry (enabled, an hour's `token_auth_expiry_s`) unless one is configured, and can be configured per account like the built-in modules;
+* joins the default of `available_auth_methods`, so `GET /v2/security` lists it (a configured `available_auth_methods` replaces that default, so add it there too if you set one);
+* resolves in the token restrictions lookup, so a `token_restrictions` ruleset can be keyed on it (see [Token Restrictions](./token_restrictions.md)). A method that is neither listed nor a loaded Crossbar module gets the catch-all ruleset.
+
 ### Lock account on multiple login failure
 
 For security compliance, it is required to lock the user if it tries to login and it

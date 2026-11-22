@@ -239,6 +239,10 @@ maybe_cached(#{key_id := KeyId}=Token) ->
     end;
 maybe_cached(#{}=Token) -> Token#{cached => 'false'}.
 
+%% A discovery document is fetched only for a registered provider that names
+%% one. The issuer claim is the token's own word: following it to
+%% <iss>/.well-known/openid-configuration would let anyone with a discovery
+%% document supply the key their token is checked against.
 -spec maybe_discovery(map()) -> map().
 maybe_discovery(#{key_id := _KeyId
                  ,auth_provider := #{discovery := DiscoveryUrl}
@@ -254,14 +258,6 @@ maybe_discovery(#{key_id := KeyId
                  ,auth_provider := #{name := <<"kazoo">>}
                  }=Token) ->
     Token#{key => public_key(KeyId)};
-maybe_discovery(#{payload := #{<<"iss">> := <<"http", _/binary>> = Issuer}}=Token) ->
-    DiscoveryUrl = <<Issuer/binary, "/.well-known/openid-configuration">>,
-    case kz_auth_util:get_json_from_url(DiscoveryUrl) of
-        {'ok', JObj} ->
-            lager:debug_unsafe("obtained discovery document : ~s", [kz_json:encode(JObj)]),
-            Token#{discovery => JObj};
-        _ -> Token
-    end;
 maybe_discovery(#{}=Token) ->
     Token.
 

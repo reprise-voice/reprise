@@ -3,9 +3,19 @@
     "_id": "system_config.auth",
     "description": "Schema for auth system_config",
     "properties": {
+        "allow_tokens_without_expiry": {
+            "default": false,
+            "description": "Accept a JWT that carries no exp claim; off, such a token is rejected",
+            "type": "boolean"
+        },
         "default_multi_factor_provider": {
             "default": "duo",
             "description": "Default multi factor authentication provider name",
+            "type": "string"
+        },
+        "gce_metadata_url": {
+            "default": "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+            "description": "URL the gce_metadata auth provider fetches service-account access tokens from",
             "type": "string"
         },
         "qrcode_initial_counter": {
@@ -22,6 +32,11 @@
             "default": "totp",
             "description": "auth qrcode_key_type",
             "type": "string"
+        },
+        "require_identity_signature": {
+            "default": true,
+            "description": "Reject a kazoo-issued JWT that carries no identity_sig claim, and refuse to mint one whose identity cannot be signed",
+            "type": "boolean"
         },
         "secret_for_user_signature": {
             "description": "auth secret for user signature",

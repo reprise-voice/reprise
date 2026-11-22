@@ -129,14 +129,27 @@ verify_signature(Token) ->
     Token#{verify_result => 'false', verify_error => 'invalid_jwt'}.
 
 -spec verify_expiration(map()) -> map().
-verify_expiration(#{payload := #{<<"exp">> := Expiration}}=Token) ->
+verify_expiration(#{payload := #{<<"exp">> := Expiration}}=Token)
+  when is_integer(Expiration) ->
     case Expiration - epoch() of
         Elapsed when Elapsed > 0 -> Token;
         _Elapsed ->
             lager:info("jwt exp ~p has elapsed ~ps ago", [Expiration, _Elapsed]),
             Token#{verify_result => 'false', verify_error => 'token_expired'}
     end;
-verify_expiration(Token) -> Token.
+verify_expiration(#{payload := #{<<"exp">> := _Expiration}}=Token) ->
+    lager:info("jwt exp ~p is not a timestamp", [_Expiration]),
+    Token#{verify_result => 'false', verify_error => 'invalid_expiration'};
+%% a token with no exp never expired; kazoo always mints one with the claim
+%% (crossbar_auth:token_auth_expiry/3), so only a deployment that has to
+%% accept such tokens from elsewhere turns this on
+verify_expiration(Token) ->
+    case ?ALLOW_TOKENS_WITHOUT_EXPIRY of
+        'true' -> Token;
+        'false' ->
+            lager:info("jwt has no exp claim"),
+            Token#{verify_result => 'false', verify_error => 'no_expiration'}
+    end.
 
 -spec verify_identity(map()) -> map().
 verify_identity(Token) ->
@@ -355,7 +368,9 @@ parse(<<JWTToken/binary>>) ->
 
                           %% do_verify/1
                          ,verify_result => boolean()
-                         ,verify_error => 'algorithm_not_supported' | 'token_expired' | 'invalid_jwt' | 'invalid_jwt_signature'
+                         ,verify_error => 'algorithm_not_supported' | 'invalid_jwt' | 'invalid_jwt_signature' |
+                                          'token_expired' | 'no_expiration' | 'invalid_expiration' |
+                                          atom() %% kz_auth_identity:token/1's identity_error
 
                           %% kz_auth_token_util additions
                          ,auth_app => kz_auth_apps:auth_app()

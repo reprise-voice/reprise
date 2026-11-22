@@ -4,7 +4,9 @@
     "description": "Schema for crossbar.auth system_config",
     "properties": {
         "auth_modules": {
-            "additionalProperties": false,
+            "additionalProperties": {
+                "$ref": "auth_module_config"
+            },
             "default": {
                 "cb_api_auth": {
                     "enabled": true,
@@ -107,6 +109,14 @@
             ],
             "type": "string"
         },
+        "external_auth_methods": {
+            "default": [],
+            "description": "Token methods minted by another application (with kz_auth:create_token/1) rather than by a crossbar auth module; each gets a default auth_modules entry, joins the available_auth_methods default and can key token restrictions",
+            "items": {
+                "type": "string"
+            },
+            "type": "array"
+        },
         "lock_account_on_failed_attempts": {
             "default": false,
             "description": "crossbar auth lock_account_on_failed_attempts",
@@ -126,6 +136,11 @@
             "default": false,
             "description": "Should log successful login attempts",
             "type": "boolean"
+        },
+        "max_token_lifetime_s": {
+            "default": 31540000,
+            "description": "Longest lifetime of an auth token in seconds; the exp claim of a token whose method is configured with \"infinity\" or a non-positive expiry, and the cap on any configured expiry",
+            "type": "integer"
         },
         "token_auth_expiry_s": {
             "default": 3600,

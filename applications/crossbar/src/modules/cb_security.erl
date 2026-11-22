@@ -30,7 +30,7 @@
                               ]).
 
 -define(SYSTEM_AUTH_METHODS
-       ,kapps_config:get_ne_binaries(?AUTH_CONFIG_CAT, <<"available_auth_methods">>, ?DEFAULT_AUTH_METHODS)
+       ,kapps_config:get_ne_binaries(?AUTH_CONFIG_CAT, <<"available_auth_methods">>, default_auth_methods())
        ).
 
 -define(AVAILABLE_AUTH_METHODS
@@ -291,6 +291,19 @@ summary_available(Context) ->
               ,{fun cb_context:set_resp_data/2, ?AVAILABLE_AUTH_METHODS}
               ],
     cb_context:setters(Context, Setters).
+
+%%------------------------------------------------------------------------------
+%% @doc The `available_auth_methods' default: crossbar's own methods, then
+%% the configured external ones (crossbar_auth:external_auth_methods/0) that
+%% are not among them.
+%% @end
+%%------------------------------------------------------------------------------
+-spec default_auth_methods() -> kz_term:ne_binaries().
+default_auth_methods() ->
+    ?DEFAULT_AUTH_METHODS
+        ++ [Method || Method <- crossbar_auth:external_auth_methods(),
+                      not lists:member(Method, ?DEFAULT_AUTH_METHODS)
+           ].
 
 %%------------------------------------------------------------------------------
 %% @doc Load an instance from the database

@@ -218,16 +218,14 @@ identity_keys() ->
     end.
 
 -spec identity_payload(kz_json:object()) -> kz_auth_keys:search_result_row().
-identity_payload(JObj) ->    lager:error("got here => ~p", [JObj]),
-                             KeyId = kz_doc:id(JObj),
-                             {'ok', PrivateKey} = kz_auth_keys:private_key(KeyId),
-                             Metadata = kz_json:get_json_value(<<"metadata">>, JObj),
-
-                             Payload = [{<<"key">>, kz_auth_keys:to_pem(PrivateKey, 'export')}
-                                       ,{<<"alg">>, kz_json:get_value_type(<<"alg">>, fun is_valid_alg/1, Metadata)}
-                                       ],
-
-                             {KeyId, kz_json:from_list(Payload)}.
+identity_payload(JObj) ->
+    KeyId = kz_doc:id(JObj),
+    {'ok', PrivateKey} = kz_auth_keys:private_key(KeyId),
+    Metadata = kz_json:get_json_value(<<"metadata">>, JObj),
+    Payload = [{<<"key">>, kz_auth_keys:to_pem(PrivateKey, 'export')}
+              ,{<<"alg">>, kz_json:get_value_type(<<"alg">>, fun is_valid_alg/1, Metadata)}
+              ],
+    {KeyId, kz_json:from_list(Payload)}.
 
 is_valid_alg(Value) ->
     lists:member(Value, ?IDENTITY_SUPPORTED_ALG).

@@ -4,7 +4,9 @@
     "description": "Schema for crossbar.auth account_config",
     "properties": {
         "auth_modules": {
-            "additionalProperties": false,
+            "additionalProperties": {
+                "$ref": "auth_module_config"
+            },
             "default": {
                 "cb_api_auth": {
                     "enabled": true,
