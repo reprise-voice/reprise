@@ -31,7 +31,7 @@
 
 `images.sh tags` prints what a pipeline publishes:
 
-| Trigger | Published to `ghcr.io/reprise-voice/<image>` |
+| Trigger | Published to `ghcr.io/<owner>/<image>` |
 |---|---|
 | push to `main` | `edge`, `sha-<short>` |
 | tag `vX.Y.Z` | `X.Y.Z`, `X.Y`, `latest`, `sha-<short>` (a pre-release `vX.Y.Z-rc.N` gets only its own tag and `sha-<short>`) |
@@ -40,6 +40,11 @@ The tag must equal `v` + the `VERSION` file, or every image job fails before
 building. Candidates (`sha-<short>-amd64`) and the `buildcache-*`
 tags also live in the packages; prune them with GHCR's retention settings if
 they pile up.
+
+`<owner>` is the owner of the repository the pipeline builds, so here the
+images go to `ghcr.io/reprise-voice`, and a fork's pipeline pushes to the
+fork owner's packages, never to these. `REGISTRY` (a project or context
+variable) overrides it; `images.sh registry` prints the result.
 
 The images are `reprise`, `reprise-freeswitch`, `reprise-kamailio` and
 `reprise-monster-ui`. Their `org.opencontainers.image.source` label links each
@@ -52,7 +57,8 @@ package to this repository.
 2. **Context `ghcr`** (Organization Settings > Contexts) with two variables:
    - `GHCR_USER`: the GitHub user (or bot account) that owns the token
    - `GHCR_TOKEN`: a classic personal access token with `write:packages`
-     (and `read:packages`), authorised for the `reprise-voice` organisation;
+     (and `read:packages`), authorised for the organisation that owns the
+     repository (`reprise-voice` here);
      or a fine-grained token with package write access to the organisation.
 
    Restrict the context to the project, and with an expression restriction to

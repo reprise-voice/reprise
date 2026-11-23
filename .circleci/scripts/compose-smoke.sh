@@ -14,7 +14,8 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 ROOT=$PWD
 SHA=${CIRCLE_SHA1:-$(git rev-parse HEAD)}
-REGISTRY=${REGISTRY:-ghcr.io/reprise-voice}
+# the namespace the image jobs pushed to (images.sh registry)
+REGISTRY=$(.circleci/scripts/images.sh registry)
 TAG=${REPRISE_TAG:-sha-${SHA:0:7}-amd64}
 
 host_ip() {
