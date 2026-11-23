@@ -1,0 +1,77 @@
+Reprise
+https://github.com/reprise-voice/reprise
+
+Reprise is a fork of the Kazoo telephony platform. It is distributed under
+the Mozilla Public License, version 2.0; the full text is in LICENSE. A copy
+of the license is also at https://mozilla.org/MPL/2.0/.
+
+
+Copyright holders
+-----------------
+
+Code imported from upstream Kazoo (core/, the applications imported from
+the 2600Hz kazoo-* repositories, and their documentation):
+    Copyright (C) 2600Hz Inc and the Kazoo contributors.
+
+Code written for Reprise and the changes made to the imported code since
+its import:
+    Copyright (C) 2026 Vonix LLC.
+
+Individual files carry their own copyright and license headers; where a
+header names other holders, it applies to that file.
+
+
+Imported trees
+--------------
+
+doc/provenance.md lists every imported directory with its upstream
+repository and the revision it was taken at.
+In summary:
+
+  * core/ and applications/* imported from the 2600Hz kazoo-* repositories:
+    Mozilla Public License 2.0, as published by 2600Hz.
+
+  * configs/freeswitch and configs/kamailio, from 2600Hz's
+    kazoo-configs-freeswitch and kazoo-configs-kamailio repositories. These
+    repositories carry no license file; their RPM packaging declares them as
+    Mozilla Public License 1.1.
+
+  * vendor/amqp_dist, from 2600Hz's erlang-amqp_dist. The upstream
+    repository carries no license file and its source files no license
+    headers. vendor/amqp_dist/NOTICE records where the code came from; no
+    license grant is stated for it here.
+
+
+Third-party material
+--------------------
+
+  * freeswitch/mod_reprise: files ported from FreeSWITCH's mod_kazoo keep
+    their original Mozilla Public License 1.1 notices (Anthony Minessale II
+    and the mod_kazoo contributors). Files that carry portions of mod_kazoo
+    or of Kazoo's ecallmgr say so in their headers. See
+    freeswitch/mod_reprise/README.md, section "License".
+
+  * docker/freeswitch/patches: patches to FreeSWITCH, applied when the
+    FreeSWITCH image is built. See docker/freeswitch/patches/README.md.
+
+Third-party Erlang dependencies are not part of this tree; the build fetches
+them into deps/ (make/deps.mk) and each carries its own license.
+
+
+Container images
+----------------
+
+The container images built from this tree (docker/) also contain software
+that is not part of this repository, under its own licenses: among others
+Erlang/OTP, FreeSWITCH, Kamailio, Monster UI and its applications, nginx,
+the Kazoo sounds, and the Debian packages each image installs. Their
+licenses are those of the respective projects.
+
+
+Trademarks
+----------
+
+Kazoo and 2600Hz are trademarks of their owner. Reprise is an independent
+fork and is not affiliated with, sponsored by or endorsed by 2600Hz.
+FreeSWITCH, Kamailio and the other names mentioned are trademarks of their
+respective owners. This notice grants no rights to use any trademark.

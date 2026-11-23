@@ -1,6 +1,43 @@
-# Code Development Guidelines
+# Contributing to Reprise
 
-Expectations for 2600Hz engineers as well as folks contributing to the platform.
+Reprise is developed at
+[github.com/reprise-voice/reprise](https://github.com/reprise-voice/reprise).
+Report bugs and propose features in its
+[issues](https://github.com/reprise-voice/reprise/issues); send changes as
+pull requests against `main`. Report security problems privately, as
+[SECURITY.md](SECURITY.md) describes, not in an issue. Everyone taking part
+is expected to follow the [code of conduct](CODE_OF_CONDUCT.md).
+
+Reprise is one tree: `core/`, `applications/`, the FreeSWITCH module and the
+configurations are committed here, not fetched. Branch from `main`, keep
+a change to the directories it concerns, and run the checks below before
+opening a pull request. Releases are `v*` tags on `main`.
+
+The tree is distributed under the Mozilla Public License 2.0, and
+contributions are accepted under the same license. Keep the license header
+on files that have one, and add it to new Erlang files.
+
+## Before you open a pull request
+
+* `make changed` lists what the branch touches against the base branch
+  named in `.base_branch`.
+* Erlang: `make fmt` (formats the changed files), `make code_checks`,
+  `make eunit` (or `make -C applications/<app> eunit` for one
+  application), `make elvis`, and [dialyzer](doc/engineering/dialyzer.md)
+  on the modules you changed (`make dialyze-changed`).
+* Gleam (`core/kazoo_gleam` and the Gleam applications): `make gleam-check`
+  runs the manifest check, `gleam format --check` and `gleam test` in every
+  Gleam package.
+* The FreeSWITCH module: `make test` (and `make test-call-paths` for
+  changes to call handling) in the `reprise-freeswitch-dev` image; see
+  [doc/building.md](doc/building.md#the-freeswitch-module).
+* Documentation: update the application's `doc/` or README with the
+  behaviour you changed; `make apis` regenerates schemas and reference docs
+  after a schema change.
+
+The coding guidelines below come from upstream Kazoo and still apply to the
+Erlang code. Gleam code follows `gleam format` and the conventions in
+`core/kazoo_gleam/README.md`.
 
 ## Coding Standards
 
@@ -66,7 +103,7 @@ Some of the highlights:
 * Simple unit tests
   * Single responsibility applies to tests as well. When writing unit tests, keep them short and don't put more than 1 or 2 asserts per test
 
-Some 2600Hz specifics:
+Kazoo conventions:
 
 * Tickie all atoms
   * Use `'foo'` not `foo`
@@ -75,7 +112,7 @@ Some 2600Hz specifics:
   ```erlang
   -spec foo(any()) -> any(). % is of no use to anyone!
   ```
-  * Run [dialyzer](/doc/engineering/dialyzer.md) on any modules you make changes to, plus any modules your new code makes calls to.
+  * Run [dialyzer](doc/engineering/dialyzer.md) on any modules you make changes to, plus any modules your new code makes calls to.
 * When creating lists or binaries, drop the comma and next element to a new line
   * This includes `-export([...])` directives.
   * No:
@@ -122,7 +159,7 @@ Some 2600Hz specifics:
       lists:foldl(fun(F, Acc) -> F(Acc) end, lookup(), [fun do_y/1, do_z/1]).
   ```
 * No [magic numbers](https://en.wikipedia.org/wiki/Magic_number_(programming)#Unnamed_numerical_constants) please
-  * If you are doing timeouts and similar, there are [macros](https://github.com/2600hz/kazoo/blob/master/core/kazoo_stdlib/include/kz_types.hrl#L4-L15) that can help make it more apparent what the unit of time is, for instance:
+  * If you are doing timeouts and similar, there are [macros](core/kazoo_stdlib/include/kz_types.hrl) that can help make it more apparent what the unit of time is, for instance:
   ```erlang
   receive
       X -> do_something_with(X)
@@ -136,15 +173,20 @@ Some additional guidance can be found:
 * http://www.erlang.se/doc/programming_rules.shtml
 * https://www.youtube.com/watch?v=CQyt9Vlkbis
 
-Some in-progress work is using [Elvis](https://github.com/inaka/elvis) to enforce style requirements so you can get feedback automatically for where your code has lost its way. This will eventually be added to Travis as well.
+[Elvis](https://github.com/inaka/elvis) enforces part of this style: `make elvis` lints the files changed against the base branch.
 
 ## Testing Your Code
 
 **DONT JUST PROVE IT WORKS, PROVE YOU CANT BREAK IT!**
 
+Erlang tests are EUnit (and PropEr where it helps) under each application's
+`test/`; Gleam tests are gleeunit under each package's `test/`, mirroring
+`src/`, and run against the in-memory fake in `kazoo/testing/fake` rather
+than a live datastore or broker.
+
 ## Commits and Commit Messages
 
-Please have git setup with consistent user information for each commit in a pull requests. Preferably with your real name and a working email address (such as the one you use on the [2600hz-dev mailing list](https://groups.google.com/forum/#!forum/2600hz-dev)).
+Please have git set up with consistent user information for each commit in a pull request, preferably with your real name and a working email address.
 
 For quick reference, here are the relevant git commands:
 
@@ -155,6 +197,11 @@ git config --global user.email you@yourdomain.example.com
 
 Make separate commits for separate changes. If you cannot describe what the commit does in one sentence, it is probably a mix of changes and should be separated into several commits.
 
+The subject line names the area in lower case, then says what is now true as
+a declarative sentence, for example
+`konami: a transfer is cancelled by the key that started it` or
+`callcenter: an exit key pressed while an agent rings is heard at once`.
+
 A well-crafted git commit message is the best way to communicate context about a change to fellow developers (and indeed to their future selves). A diff will tell you what changed, but only the commit message can properly tell you why.
 
 ### General Guidelines
@@ -164,30 +211,18 @@ Here are some general guidelines for submitting new code.
 * Follow the guidelines for writing good commit messages.
 * Do not commit commented-out code or files that are no longer needed.
 * Check for unnecessary whitespace before committing with git diff --check.
-* Use `make ci` to run the continuous integration suite to provide feedback without having to wait for Travis.
-  * When you issue a pull request against Kazoo, a job on Travis will be queued up to run the various automated checks we use to catch issues.
-  * 2600Hz won't review a pull request until Travis green lights it as passing the bare minimum.
-  * Any failed Travis job will result in you needing to address the issues and updating the PR.
-  * Avoid these delays in acceptance by running the CI suite yourself prior to submitting
-* All pull requests should be issued to resolve a Jira ticket. The branch name of the submission should be Jira ticket ID, such as KAZOO-42.
-  * See [commit guidelines](doc/engineering/commits.md) for more
-* Ensure that each pull request addresses only the work related to the ticket it is resolving.
+* Run the checks in "Before you open a pull request" yourself; a pull request is reviewed once they pass.
+* See [commit guidelines](doc/engineering/commits.md) for more.
+* Ensure that each pull request addresses one piece of work.
 * Keep the changes in a pull request as concise as possible. If the pull request is a bug fix it should be the simplest possible approach with minimal code changes.
-* All work should be rebased to the originating branch prior to pull request submission.
+* Rebase the work onto `main` before submitting the pull request.
 
 ### Bug Fix Guidelines
 
 Bug fixes must never introduce new features.
 
-Bug fix branches must have originated from an updated version branch in the project which matches the `Affects` version of the bug ticket. The pull request should be made against the version branch and all subsequent version branches including master. For instance:
-
-* Ticket `KAZOO-0001` is a bug found affecting v4.0. You wish to fix the bug
-  1. Create a branch off the 4.0 branch: `git checkout -b KAZOO-0001 4.0`
-  2. Make the appropriate change(s) and commit: `git commit -m "KAZOO-0001: fixed X to do Y"`
-  3. Push `KAZOO-0001` to your Github repo and issue a PR against 2600hz/kazoo's 4.0 branch
-  4. Create appropriate pull requests for any version branches greater than your target, including the master branch. If 4.1 and 4.2 exist, create separate PRs for 4.1, 4.2, and master as well.
-
-All non-bug fix work branches must have originated from an updated master branch in the project and the pull request must be issued against the master branch.
+Branch from an up-to-date `main` and open the pull request against
+`main`.
 
 An appropriate test (unit, quickcheck, shell script) should also be submitted to ensure that the bug is not accidentally reintroduced in the future.
 
@@ -200,14 +235,6 @@ If you are implementing a new feature, also update the documentation to describe
 Make sure the patch does not break backward compatibility. In general, we only break backward compatibility in major releases and only for a very good reason and usually after first deprecating the feature one or two releases beforehand.
 
 If you must submit an incompatible change we prefer that the incompatible behaviour require an admin to enable the new functionality via a configuration parameter.
-
-### New Applications Guidelines
-
-TODO
-
-### Core Updates/Modules Guidelines
-
-TODO
 
 ## Be Ego-less
 
@@ -255,6 +282,6 @@ As much as possible, make all of your comments positive and oriented to improvin
 
 MR: Always think about security; think twice when deciding to hard-code something that can be different in other regions/countries;
 
-### Hold 2600Hz Accountable
+### Hold Us Accountable
 
 These are the standards that we set to ourselves as well as our partners. As we push and the demands grow it is easy to forget some of these points in favor of speed or agility. Occasional slips are marginally acceptable but we need to hold all those involved to the same standard. If you see us not adhering to these guidelines call us out on it!  We welcome productive criticism!

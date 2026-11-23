@@ -28,11 +28,13 @@ Configuring recording at the device level starts recording for any calls to/from
 
 #### Precedence of settings
 
-Precedence of settings is: Device > User
+Precedence of settings is: Device > User > the account's endpoint defaults (`call_recording.endpoint` on the account document)
 
 If a user turns on call recording but a device has explicitly disabled it, the device will not be recorded when the user makes a call with it. If the device's settings are left undefined, the user's settings will be applied.
 
-The account's settings are considered independently of the endpoint's. So a user who has disabled recording, within an account that has enabled recording, will still have calls recorded according to the account's settings.
+Precedence applies per direction and network. A user or device that sets only some of them (for example only `inbound.onnet`) still gets the next level's settings for the rest, unless it sets an `any` to cover them. A setting left undefined at every level means no recording.
+
+The account's own settings (`call_recording.account`) are considered independently of the endpoint's. So a user who has disabled recording, within an account that records its own calls, will still have calls recorded according to the account's settings.
 
 #### Recording settings matrix
 

@@ -1,4 +1,58 @@
-site_name: Dev Reference
+site_name: Reprise
+site_description: 'Documentation for Reprise, a fork of the Kazoo 5.4 telephony platform'
+repo_url: https://github.com/reprise-voice/reprise
 
 nav:
   - 'index.md'
+  - 'Getting started':
+    - 'Documentation index': 'doc/README.md'
+    - 'Quick start (Docker Compose)': 'deploy/compose/README.md'
+    - 'Architecture': 'doc/architecture.md'
+    - 'Configuration reference': 'doc/configuration.md'
+    - 'Installation': 'doc/installation.md'
+    - 'Building from source': 'doc/building.md'
+    - 'Coming from Kazoo 5.x': 'doc/upgrading-from-kazoo.md'
+    - 'Container images and security': 'docker/README.md'
+  - 'Feature guides':
+    - 'Call center': 'doc/guides/callcenter.md'
+    - 'In-call metaflows': 'doc/guides/metaflows.md'
+    - 'Metaflow actions (konami)':
+      - 'applications/konami/doc/README.md'
+      - 'applications/konami/doc/audio_level.md'
+      - 'applications/konami/doc/break.md'
+      - 'applications/konami/doc/callflow.md'
+      - 'applications/konami/doc/hangup.md'
+      - 'applications/konami/doc/hold.md'
+      - 'applications/konami/doc/hold_control.md'
+      - 'applications/konami/doc/intercept.md'
+      - 'applications/konami/doc/maintenance.md'
+      - 'applications/konami/doc/move.md'
+      - 'applications/konami/doc/play.md'
+      - 'applications/konami/doc/record_call.md'
+      - 'applications/konami/doc/resume.md'
+      - 'applications/konami/doc/say.md'
+      - 'applications/konami/doc/sound_touch.md'
+      - 'applications/konami/doc/transfer.md'
+      - 'applications/konami/doc/tts.md'
+    - 'STIR/SHAKEN': 'doc/guides/stir-shaken.md'
+    - 'STIR/SHAKEN API': 'applications/crossbar/doc/stir.md'
+  - 'Media server and SBC':
+    - 'FreeSWITCH module (mod_reprise)': 'freeswitch/mod_reprise/README.md'
+    - 'FreeSWITCH patches': 'docker/freeswitch/patches/README.md'
+    - 'FreeSWITCH configuration': 'configs/freeswitch/README.md'
+    - 'Kamailio configuration': 'configs/kamailio/README.md'
+    - 'Wire-contract probe': 'tools/fs-contract-probe/README.md'
+    - 'ecallmgr extension':
+      - 'applications/ecallmgr_extension/README.md'
+      - 'applications/ecallmgr_extension/doc/README.md'
+      - 'applications/ecallmgr_extension/doc/config.md'
+      - 'applications/ecallmgr_extension/doc/maintenance.md'
+  - 'Gleam applications':
+    - 'Gleam bindings (kazoo_gleam)': 'core/kazoo_gleam/README.md'
+    - 'Call center design': 'applications/callcenter/README.md'
+    - 'STIR/SHAKEN application': 'applications/stir/README.md'
+  - 'Project':
+    - 'Changelog': 'CHANGELOG.md'
+    - 'Contributing': 'CONTRIBUTING.md'
+    - 'Security policy': 'SECURITY.md'
+    - 'Code of conduct': 'CODE_OF_CONDUCT.md'

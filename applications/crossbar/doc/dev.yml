@@ -96,7 +96,6 @@
     - 'applications/crossbar/doc/sms.md'
     - 'applications/crossbar/doc/storage.http.md'
     - 'applications/crossbar/doc/storage.md'
-    - 'applications/crossbar/doc/storage.s3.md'
     - 'applications/crossbar/doc/sup.md'
     - 'applications/crossbar/doc/system_configs.md'
     - 'applications/crossbar/doc/system_status.md'
