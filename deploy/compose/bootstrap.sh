@@ -8,15 +8,20 @@
 # in its own container (Erlang distribution is bound to loopback there).
 #
 #  1. waits until both Kazoo nodes run every application they are meant to
-#  2. creates the master account and its admin user, unless an account exists
-#  3. imports the en-us system prompts, unless they are there
-#  4. registers the Monster UI apps with crossbar (copied out of the
+#  2. creates the master account and its admin user, unless an account exists;
+#     when one does, runs the database migration instead, for a cluster that
+#     has come back up on newer images
+#  3. has FreeSWITCH fetch media through the media proxy, not from CouchDB
+#  4. imports the system prompts of PROMPT_LANGUAGES (en-us unless set),
+#     unless they are there
+#  5. registers the Monster UI apps with crossbar (copied out of the
 #     monster-ui container)
-#  5. waits until ecallmgr has adopted FreeSWITCH
-#  6. allows Kamailio as the SBC in ecallmgr's ACLs and reloads them
-#  7. prints where to log in and how to register two phones
+#  6. waits until ecallmgr has adopted FreeSWITCH
+#  7. allows Kamailio as the SBC in ecallmgr's ACLs and reloads them
+#  8. prints where to log in and how to register two phones
 #
 # BOOTSTRAP_TIMEOUT (seconds, default 900) bounds each wait.
+# PROMPT_LANGUAGES, here or in .env: en-us,fr-ca or `all`.
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -25,6 +30,9 @@ if [ ! -f .env ]; then
   echo "no .env here: run ./init-env.sh first" >&2
   exit 1
 fi
+# .env sets PROMPT_LANGUAGES too; one given on the command line wins, so
+# `PROMPT_LANGUAGES=all ./bootstrap.sh` imports more without editing .env
+languages_given=${PROMPT_LANGUAGES:-}
 set -a
 # shellcheck disable=SC1091
 . ./.env
@@ -42,6 +50,7 @@ ADMIN_USER=${ADMIN_USER:-admin}
 ADMIN_PASSWORD=${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
 COUCHDB_USER=${COUCHDB_USER:-admin}
 COUCHDB_PASSWORD=${COUCHDB_PASSWORD:?set COUCHDB_PASSWORD in .env}
+PROMPT_LANGUAGES=${languages_given:-${PROMPT_LANGUAGES:-en-us}}
 REPRISE_SUBNET=${REPRISE_SUBNET:-172.30.10}
 UI_PORT=${UI_PORT:-8080}
 TIMEOUT=${BOOTSTRAP_TIMEOUT:-900}
@@ -70,6 +79,21 @@ wait_for() {
 
 node_ready() { dc exec -T "$1" sup kapps_controller ready 2>/dev/null | grep -qx true; }
 fs_adopted() { sup_ecm ecallmgr_maintenance list_fs_nodes 2>/dev/null | grep -q '^freeswitch@'; }
+# shipped_languages: the languages the image has prompts for, one per line.
+# It ships them as /opt/kazoo/sounds/<lang>/<region>, and the language they
+# are imported under is <lang>-<region>.
+shipped_languages() {
+  # shellcheck disable=SC2016  # expanded by the shell in the container
+  dc exec -T kazoo-apps sh -c \
+    'cd /opt/kazoo/sounds && for d in */*/; do echo "${d%/}"; done' | tr '/' '-'
+}
+# prompts_imported <language>: prompt documents are named <language>/<prompt>
+# in system_media ("0" is the character after "/")
+prompts_imported() {
+  dc exec -T couchdb curl -fsS -u "$COUCHDB_USER:$COUCHDB_PASSWORD" \
+    "http://127.0.0.1:5984/system_media/_all_docs?start_key=%22$1%2F%22&end_key=%22${1}0%22&limit=1" \
+    2>/dev/null | grep -q "\"id\":\"$1/"
+}
 
 for svc in couchdb broker kazoo-apps ecallmgr freeswitch kamailio monster-ui; do
   if [ -z "$(dc ps -q "$svc" 2>/dev/null)" ]; then
@@ -93,6 +117,11 @@ master=$(sup_apps kapps_util get_master_account_id 2>&1 || true)
 if printf '%s' "$master" | grep -q '^{ok,'; then
   echo "an account already exists (master: $master); not creating one"
   CREATED=no
+  # This is a re-run, perhaps on newer images than the ones that created the
+  # databases: bring the databases and their views up to this release. A
+  # node only does that for the system databases when it starts.
+  step "database migration"
+  sup_apps kapps_maintenance migrate
 else
   echo "creating account '$ACCOUNT_NAME' (realm $ACCOUNT_REALM) with admin user '$ADMIN_USER'"
   sup_apps crossbar_maintenance create_account \
@@ -100,16 +129,43 @@ else
   CREATED=yes
 fi
 
+step "media through the media proxy"
+# By default Kazoo hands FreeSWITCH the CouchDB URL of a prompt or of other
+# stored media, with the CouchDB password in it, and FreeSWITCH has to reach
+# CouchDB by the name the Kazoo nodes use. With this off, the URL is one on
+# the media proxy (media_mgr on kazoo-apps, port 24517), which is all
+# FreeSWITCH needs to reach, on either network layout. The setting is read
+# on every request, so nothing restarts.
+sup_apps kapps_config set_boolean kazoo_couch use_bigcouch_direct false
+
 step "system prompts"
-# prompt documents are named <lang>/<prompt> in system_media
-prompts=$(dc exec -T couchdb curl -fsS -u "$COUCHDB_USER:$COUCHDB_PASSWORD" \
-  'http://127.0.0.1:5984/system_media/_all_docs?start_key=%22en-us%2F%22&end_key=%22en-us0%22&limit=1' \
-  2>/dev/null || true)
-if printf '%s' "$prompts" | grep -q '"id":"en-us/'; then
-  echo "en-us prompts already imported"
+if [ "$PROMPT_LANGUAGES" = all ]; then
+  languages=$(shipped_languages)
 else
-  sup_apps kazoo_media_maintenance import_prompts /opt/kazoo/sounds/en/us en-us
+  languages=$(printf '%s' "$PROMPT_LANGUAGES" | tr ',' ' ')
 fi
+for language in $languages; do
+  # <lang>-<region>, lower case: it becomes a path and part of a URL
+  case "$language" in
+    *[!a-z-]*|-*|*-|*-*-*) valid=no ;;
+    *-*) valid=yes ;;
+    *) valid=no ;;
+  esac
+  if [ "$valid" = no ]; then
+    echo "PROMPT_LANGUAGES: '$language' is not a language like en-us" >&2
+    exit 1
+  fi
+  dir=/opt/kazoo/sounds/${language%-*}/${language#*-}
+  if ! dc exec -T kazoo-apps test -d "$dir"; then
+    echo "the image has no $language prompts; it has: $(shipped_languages | tr '\n' ' ')" >&2
+    exit 1
+  fi
+  if prompts_imported "$language"; then
+    echo "$language prompts already imported"
+  else
+    sup_apps kazoo_media_maintenance import_prompts "$dir" "$language"
+  fi
+done
 
 step "Monster UI apps"
 # The app metadata ships in the monster-ui image; crossbar reads it from a
