@@ -1,0 +1,265 @@
+# Reprise single-host test cluster: one of everything, on one bridge network.
+# A test and evaluation setup, not a production deployment (see README.md).
+#
+#   ./init-env.sh           # writes .env: HOST_IP and new credentials
+#   docker compose up -d
+#   ./bootstrap.sh
+#
+# Variants: compose.build.yaml builds the images from this tree,
+# compose.host-network.yaml (Linux) puts Kamailio and FreeSWITCH on the host
+# network. Name them in COMPOSE_FILE in .env so every command uses them.
+#
+# Needs Docker Engine 25+ and Compose 2.24+ (inline configs, healthcheck
+# start_interval, !reset in the overrides).
+
+name: reprise
+
+x-reprise-image: &reprise-image ${REPRISE_REGISTRY:-ghcr.io/reprise-voice}/reprise:${REPRISE_TAG:-latest}
+
+# Both Kazoo nodes: same image, same configuration, same cookie. The node
+# name is <KAZOO_NODE>@<hostname>, so each container gets a fully qualified
+# hostname; Kazoo-to-Kazoo traffic (Erlang distribution included) rides the
+# broker, so the nodes need no ports between them.
+x-kazoo: &kazoo
+  image: *reprise-image
+  platform: linux/amd64
+  restart: unless-stopped
+  depends_on:
+    couchdb: { condition: service_healthy }
+    broker: { condition: service_healthy }
+  configs:
+    - source: kazoo-config
+      target: /etc/kazoo/config.ini
+      mode: 0444
+  ulimits:
+    nofile: { soft: 65536, hard: 65536 }
+  security_opt: [no-new-privileges:true]
+  cap_drop: [ALL]
+
+services:
+  couchdb:
+    image: couchdb:${COUCHDB_VERSION:-3.5}
+    restart: unless-stopped
+    environment:
+      COUCHDB_USER: ${COUCHDB_USER:-admin}
+      COUCHDB_PASSWORD: ${COUCHDB_PASSWORD:?set COUCHDB_PASSWORD in .env}
+    configs:
+      - source: couchdb-local-ini
+        target: /opt/couchdb/etc/local.d/10-reprise.ini
+        mode: 0444
+    volumes:
+      - couchdb-data:/opt/couchdb/data
+    ports:
+      # Fauxton at http://127.0.0.1:5984/_utils (this machine only)
+      - "127.0.0.1:${COUCHDB_LOCAL_PORT:-5984}:5984"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:5984/_up"]
+      interval: 30s
+      start_interval: 2s
+      start_period: 60s
+      retries: 5
+    networks:
+      reprise: { ipv4_address: "${REPRISE_SUBNET:-172.30.10}.10" }
+
+  # LavinMQ: consistent-hash exchanges built in (the tree declares both the
+  # x-hash-on and the hash-header argument); 2.9.3 is the version the tree's
+  # broker notes are written against. Its image lets guest connect from
+  # other hosts (--default-user-only-loopback=false); the broker port is not
+  # published.
+  broker:
+    image: cloudamqp/lavinmq:${LAVINMQ_VERSION:-2.9.3}
+    restart: unless-stopped
+    volumes:
+      - lavinmq-data:/var/lib/lavinmq
+    ports:
+      # management UI at http://127.0.0.1:15672, guest/guest (this machine only)
+      - "127.0.0.1:${BROKER_UI_LOCAL_PORT:-15672}:15672"
+    healthcheck:
+      test: ["CMD", "lavinmqctl", "status"]
+      interval: 30s
+      start_interval: 2s
+      start_period: 60s
+      retries: 5
+    networks:
+      reprise: { ipv4_address: "${REPRISE_SUBNET:-172.30.10}.11" }
+
+  # crossbar (REST API, 8000), blackhole (websockets, 5555), media_mgr (the
+  # media proxy FreeSWITCH fetches prompts from, 24517) and the call-handling
+  # applications. KAZOO_APPS is deliberately unset: the node then starts
+  # system_config/kapps_controller.kapps, whose default is the full set
+  # (core/kazoo_apps/src/kazoo_apps.hrl). An empty KAZOO_APPS would start
+  # nothing.
+  kazoo-apps:
+    <<: *kazoo
+    hostname: apps.reprise.test
+    environment:
+      KAZOO_NODE: kazoo_apps
+      KAZOO_COOKIE: ${KAZOO_COOKIE:?set KAZOO_COOKIE in .env}
+      ERL_FLAGS: ${ERL_FLAGS:-}
+    healthcheck:
+      # crossbar answers HTTP (any status); bootstrap.sh waits for every app
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://127.0.0.1:8000/"]
+      interval: 30s
+      start_interval: 5s
+      start_period: 600s
+      retries: 5
+    networks:
+      reprise:
+        ipv4_address: "${REPRISE_SUBNET:-172.30.10}.20"
+        # media URLs name the media_mgr node's host: http://apps.reprise.test:24517
+        aliases: [apps.reprise.test]
+
+  # ecallmgr drives FreeSWITCH; ecallmgr_extension is the AMQP side of
+  # mod_reprise (configuration and dialplan fetches, and adopting the media
+  # servers it hears heartbeats from). Nothing starts it unless it is named.
+  ecallmgr:
+    <<: *kazoo
+    hostname: ecallmgr.reprise.test
+    environment:
+      KAZOO_NODE: ecallmgr
+      KAZOO_APPS: ecallmgr,ecallmgr_extension
+      KAZOO_COOKIE: ${KAZOO_COOKIE:?set KAZOO_COOKIE in .env}
+      ERL_FLAGS: ${ERL_FLAGS:-}
+    healthcheck:
+      test: ["CMD-SHELL", "sup kapps_controller ready | grep -qx true"]
+      interval: 30s
+      start_interval: 5s
+      start_period: 600s
+      retries: 5
+    networks:
+      reprise: { ipv4_address: "${REPRISE_SUBNET:-172.30.10}.21" }
+
+  # SIP on 11000 (from Kamailio only), RTP straight to the phones. The RTP
+  # range is narrowed and published 1:1 on the host address, which is also
+  # what FreeSWITCH puts in its SDP.
+  freeswitch:
+    image: ${REPRISE_REGISTRY:-ghcr.io/reprise-voice}/reprise-freeswitch:${REPRISE_TAG:-latest}
+    platform: linux/amd64
+    restart: unless-stopped
+    hostname: fs.reprise.test
+    depends_on:
+      broker: { condition: service_healthy }
+      ecallmgr: { condition: service_healthy }
+    environment:
+      KZ_AMQP_HOST: broker
+      KZ_AMQP_USER: guest
+      KZ_AMQP_PASS: guest
+      LOCAL_IP: "${REPRISE_SUBNET:-172.30.10}.30"
+      # media goes straight to the phones, so the SDP names the host address;
+      # signalling stays on this network, so the address ecallmgr hands to
+      # Kamailio's dispatcher is the one Kamailio can reach
+      EXT_RTP_IP: ${HOST_IP:?set HOST_IP in .env}
+      EXT_SIP_IP: "${REPRISE_SUBNET:-172.30.10}.30"
+      RTP_START_PORT: ${RTP_START_PORT:-16384}
+      RTP_END_PORT: ${RTP_END_PORT:-16483}
+    ports:
+      - "${BIND_IP:-${HOST_IP}}:${RTP_START_PORT:-16384}-${RTP_END_PORT:-16483}:${RTP_START_PORT:-16384}-${RTP_END_PORT:-16483}/udp"
+    healthcheck:
+      test: ["CMD-SHELL", "/usr/local/freeswitch/bin/fs_cli -x status | grep -q '^UP'"]
+      interval: 30s
+      start_interval: 5s
+      start_period: 120s
+      retries: 5
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks:
+      reprise: { ipv4_address: "${REPRISE_SUBNET:-172.30.10}.30" }
+
+  # Phones register here (HOST_IP:5060, UDP or TCP). Kamailio advertises the
+  # host address to them and talks to FreeSWITCH from its own address on
+  # 5070 (MY_INTERNAL_IP), which is the address bootstrap.sh allows as the
+  # SBC in ecallmgr's ACLs. The dispatcher fills itself from ecallmgr's
+  # media-server heartbeats; the location database is in-process.
+  kamailio:
+    image: ${REPRISE_REGISTRY:-ghcr.io/reprise-voice}/reprise-kamailio:${REPRISE_TAG:-latest}
+    platform: linux/amd64
+    restart: unless-stopped
+    hostname: sip.reprise.test
+    depends_on:
+      broker: { condition: service_healthy }
+    environment:
+      MY_HOSTNAME: sip.reprise.test
+      MY_LOCAL_IP: "${REPRISE_SUBNET:-172.30.10}.31"
+      MY_PUBLIC_IP: ${HOST_IP:?set HOST_IP in .env}
+      MY_INTERNAL_IP: "${REPRISE_SUBNET:-172.30.10}.31"
+      MY_AMQP_URL: amqp://guest:guest@broker:5672
+    ports:
+      - "${BIND_IP:-${HOST_IP}}:5060:5060/udp"
+      - "${BIND_IP:-${HOST_IP}}:5060:5060/tcp"
+    healthcheck:
+      test: ["CMD", "kamcmd", "core.uptime"]
+      interval: 30s
+      start_interval: 2s
+      start_period: 60s
+      retries: 5
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks:
+      reprise: { ipv4_address: "${REPRISE_SUBNET:-172.30.10}.31" }
+
+  # nginx on 8080: the UI, plus /v2 -> crossbar and /socket -> blackhole, so
+  # the browser needs only this one address.
+  monster-ui:
+    image: ${REPRISE_REGISTRY:-ghcr.io/reprise-voice}/reprise-monster-ui:${REPRISE_TAG:-latest}
+    platform: linux/amd64
+    restart: unless-stopped
+    depends_on:
+      kazoo-apps: { condition: service_healthy }
+    environment:
+      CROSSBAR_UPSTREAM: http://kazoo-apps:8000
+      BLACKHOLE_UPSTREAM: http://kazoo-apps:5555
+    read_only: true
+    tmpfs: [/tmp]
+    ports:
+      - "${BIND_IP:-${HOST_IP}}:${UI_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1:8080/ || wget -q -O /dev/null http://127.0.0.1:8080/"]
+      interval: 30s
+      start_interval: 2s
+      start_period: 30s
+      retries: 5
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    networks:
+      reprise: { ipv4_address: "${REPRISE_SUBNET:-172.30.10}.40" }
+
+configs:
+  # Read by both Kazoo nodes. The broker URI's ?heartbeat=10 must sit inside
+  # the quotes (the config.ini lexer ends an unquoted value at '='); the
+  # quotes are stripped from uri and ip only, so the CouchDB credentials stay
+  # unquoted -- hence letters and digits only in .env. No cookie here:
+  # KAZOO_COOKIE is the one source, for the nodes and for sup.
+  kazoo-config:
+    content: |
+      [amqp]
+      uri = "amqp://guest:guest@broker:5672?heartbeat=10"
+
+      [data]
+      config = couchdb3
+
+      [couchdb3]
+      ip = "couchdb"
+      port = 5984
+      username = ${COUCHDB_USER:-admin}
+      password = ${COUCHDB_PASSWORD}
+
+      [log]
+      console = info
+      syslog = none
+      error = error
+  couchdb-local-ini:
+    content: |
+      [couchdb]
+      single_node = true
+
+networks:
+  reprise:
+    ipam:
+      config:
+        - subnet: "${REPRISE_SUBNET:-172.30.10}.0/24"
+
+volumes:
+  couchdb-data:
+  lavinmq-data:

@@ -1,0 +1,46 @@
+# Linux only: Kamailio and FreeSWITCH on the host's network, the rest on the
+# bridge network as before.
+#
+#   docker compose -f compose.yaml -f compose.host-network.yaml up -d
+#
+# (or COMPOSE_FILE=compose.yaml:compose.host-network.yaml in .env, which
+# bootstrap.sh then picks up too). Nothing is NATed: FreeSWITCH uses the full
+# RTP range on HOST_IP and puts it in its SDP, Kamailio listens on
+# HOST_IP:5060 and talks to FreeSWITCH on HOST_IP:11000. Both reach the
+# broker and the media proxy at the bridge network's fixed addresses, which a
+# Linux host routes to. Docker Desktop has no real host network; use the
+# default file there.
+#
+# Ports taken on HOST_IP: 5060 (udp/tcp), 5061, 5064, 5065, 7000, 7001
+# (Kamailio), 11000, 11001 (FreeSWITCH SIP), 16384-32768/udp (RTP), and
+# 127.0.0.1:8021 (FreeSWITCH event socket).
+
+services:
+  freeswitch:
+    network_mode: host
+    hostname: !reset null
+    networks: !reset null
+    ports: !reset []
+    extra_hosts:
+      # media URLs name the media_mgr node's host
+      - "apps.reprise.test:${REPRISE_SUBNET:-172.30.10}.20"
+    environment:
+      KZ_AMQP_HOST: "${REPRISE_SUBNET:-172.30.10}.11"
+      LOCAL_IP: ${HOST_IP:?set HOST_IP in .env}
+      # one address for signalling and media alike
+      EXT_SIP_IP: ${HOST_IP}
+      EXT_RTP_IP: ${HOST_IP}
+      RTP_START_PORT: 16384
+      RTP_END_PORT: 32768
+
+  kamailio:
+    network_mode: host
+    hostname: !reset null
+    networks: !reset null
+    ports: !reset []
+    environment:
+      MY_LOCAL_IP: ${HOST_IP:?set HOST_IP in .env}
+      MY_PUBLIC_IP: ${HOST_IP}
+      # one address for phones and FreeSWITCH alike: no internal listener
+      MY_INTERNAL_IP: ""
+      MY_AMQP_URL: "amqp://guest:guest@${REPRISE_SUBNET:-172.30.10}.11:5672"

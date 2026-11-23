@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="ISO-8859-1" ?>
+<!DOCTYPE scenario SYSTEM "sipp.dtd">
+<!-- The called phone: take one INVITE, ring, answer, wait for the BYE, and
+     stop. Start it on the port register.xml registered from.
+       sipp -sf uas.xml -i <local ip> -p <port>
+     No -m: a registered phone is also sent requests outside any call
+     (FreeSWITCH's message-summary NOTIFY right after it registers, Kamailio's
+     OPTIONS keepalive), each a call of its own to sipp, and with -m 1 the
+     first of those would be the only call it takes. They are answered 200
+     here, and the scenario ends sipp itself once the real call is over. -->
+<scenario name="reprise smoke uas">
+  <recv request="NOTIFY" optional="true" next="other"/>
+  <recv request="OPTIONS" optional="true" next="other"/>
+  <recv request="INVITE" rrs="true" next="invite"/>
+  <label id="other"/>
+  <send>
+    <![CDATA[
+      SIP/2.0 200 OK
+      [last_Via:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTag02[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Content-Length: 0
+    ]]>
+  </send>
+  <nop next="end"/>
+  <label id="invite"/>
+  <send>
+    <![CDATA[
+      SIP/2.0 180 Ringing
+      [last_Via:]
+      [last_Record-Route:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTag01[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Contact: <sip:callee@[local_ip]:[local_port]>
+      Content-Length: 0
+    ]]>
+  </send>
+  <send retrans="500">
+    <![CDATA[
+      SIP/2.0 200 OK
+      [last_Via:]
+      [last_Record-Route:]
+      [last_From:]
+      [last_To:];tag=[pid]SIPpTag01[call_number]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Contact: <sip:callee@[local_ip]:[local_port]>
+      Content-Type: application/sdp
+      Content-Length: [len]
+
+      v=0
+      o=callee 53655765 2353687637 IN IP[local_ip_type] [local_ip]
+      s=-
+      c=IN IP[media_ip_type] [media_ip]
+      t=0 0
+      m=audio [media_port] RTP/AVP 0
+      a=rtpmap:0 PCMU/8000
+    ]]>
+  </send>
+  <recv request="ACK" optional="true"/>
+  <recv request="BYE" timeout="60000"/>
+  <send>
+    <![CDATA[
+      SIP/2.0 200 OK
+      [last_Via:]
+      [last_From:]
+      [last_To:]
+      [last_Call-ID:]
+      [last_CSeq:]
+      Content-Length: 0
+    ]]>
+  </send>
+  <!-- keep the socket a moment for a retransmitted BYE -->
+  <pause milliseconds="2000"/>
+  <nop>
+    <action><exec int_cmd="stop_gracefully"/></action>
+  </nop>
+  <label id="end"/>
+</scenario>

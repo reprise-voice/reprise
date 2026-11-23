@@ -1,0 +1,50 @@
+# Build the four images from this tree instead of pulling them:
+#
+#   docker compose -f compose.yaml -f compose.build.yaml build
+#   docker compose -f compose.yaml -f compose.build.yaml up -d
+#
+# (or COMPOSE_FILE=compose.yaml:compose.build.yaml in .env). The context is
+# the repository root, as for docker/build.sh. The images are tagged
+# reprise/<image>:dev so they never shadow pulled ones; a cold build takes
+# an hour or more (the Erlang release and FreeSWITCH dominate) and fetches
+# the reprise-voice source repositories from GitHub (REPRISE_GIT_BASE in
+# .env points them at a mirror).
+
+x-build-args: &build-args
+  REPRISE_GIT_BASE: ${REPRISE_GIT_BASE:-https://github.com/reprise-voice}
+  IMAGE_VERSION: dev
+  IMAGE_REVISION: local
+
+services:
+  kazoo-apps:
+    image: reprise/reprise:dev
+    build:
+      context: ../..
+      dockerfile: docker/reprise/Dockerfile
+      args: *build-args
+
+  ecallmgr:
+    image: reprise/reprise:dev
+    # the same image as kazoo-apps; building it once is enough
+    pull_policy: never
+
+  freeswitch:
+    image: reprise/reprise-freeswitch:dev
+    build:
+      context: ../..
+      dockerfile: docker/freeswitch/Dockerfile
+      args: *build-args
+
+  kamailio:
+    image: reprise/reprise-kamailio:dev
+    build:
+      context: ../..
+      dockerfile: docker/kamailio/Dockerfile
+      args: *build-args
+
+  monster-ui:
+    image: reprise/reprise-monster-ui:dev
+    build:
+      context: ../..
+      dockerfile: docker/monster-ui/Dockerfile
+      args: *build-args

@@ -1,0 +1,3 @@
+# local settings (credentials) and smoke-test output
+.env
+smoke-logs/
