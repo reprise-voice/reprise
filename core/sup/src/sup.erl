@@ -34,6 +34,8 @@ main(CommandLineArgs, Loops) ->
 
     {'ok', Options, Args} = parse_args(CommandLineArgs),
 
+    'ok' = resolve_localhost_to_loopback(),
+
     SUPName = my_name(use_short(Options)),
 
     case net_kernel:start([SUPName, long_or_short_name(use_short(Options))]) of
@@ -198,6 +200,24 @@ get_host() ->
             stderr("Unable to resolve host '~s': ~p", [Host, Reason]),
             print_unresolvable_host(Host)
     end.
+
+%%------------------------------------------------------------------------------
+%% @doc A Kazoo node accepts Erlang distribution on the loopback interface
+%% only (`inet_dist_use_interface' in vm.args), while the host's own name
+%% usually resolves to another of its addresses: a container's or a pod's
+%% address, or the machine's address on the LAN. `sup' only ever talks to a
+%% node on the host it runs on, and names that node by this host's name, so
+%% it resolves the name to loopback itself instead of relying on the host
+%% being set up that way.
+%% @end
+%%------------------------------------------------------------------------------
+-spec resolve_localhost_to_loopback() -> 'ok'.
+resolve_localhost_to_loopback() ->
+    Host = localhost(),
+    [Short | _] = string:tokens(Host, "."),
+    'ok' = inet_db:add_host({127,0,0,1}, lists:usort([Host, Short])),
+    Lookup = inet_db:res_option('lookup'),
+    'ok' = inet_db:set_lookup(['file' | lists:delete('file', Lookup)]).
 
 -spec my_name(kz_term:api_boolean()) -> node().
 my_name('true') ->

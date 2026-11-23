@@ -95,7 +95,20 @@ sync_config_to_schema() ->
 
 -spec sync_field({kz_json:get_key(), kz_json:get_key(), fun((kz_json:json_term(), kz_json:json_term()) -> kz_json:json_term())}) -> 'ok'.
 sync_field({ConfigPath, SchemaPath, CastFun}) ->
-    {'ok', SchemaJObj} = kz_json_schema:load(<<"vmboxes">>),
+    %% On the first start against an empty datastore the schemas are still
+    %% being loaded when the modules initialize. There is nothing to sync
+    %% then, and failing here would leave the module unstarted.
+    case kz_json_schema:load(<<"vmboxes">>) of
+        {'ok', SchemaJObj} ->
+            sync_field(ConfigPath, SchemaPath, CastFun, SchemaJObj);
+        {'error', _E} ->
+            lager:info("vmboxes schema not loaded yet (~p), not syncing ~s"
+                      ,[_E, kz_binary:join(ConfigPath, <<".">>)]
+                      )
+    end.
+
+-spec sync_field(kz_json:get_key(), kz_json:get_key(), fun((kz_json:json_term(), kz_json:json_term()) -> kz_json:json_term()), kz_json:object()) -> 'ok'.
+sync_field(ConfigPath, SchemaPath, CastFun, SchemaJObj) ->
     SchemaV = kz_json:get_value(SchemaPath, SchemaJObj),
 
     case kapps_config:get(<<"callflow">>, ConfigPath) of

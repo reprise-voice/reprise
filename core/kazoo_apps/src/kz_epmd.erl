@@ -32,6 +32,7 @@
 -type state() :: #state{}.
 
 -define(CHECK_EPMD, 'check_epmd').
+-define(LOCAL_EPMD, {127,0,0,1}).
 
 -spec start_link() -> kz_types:startlink_ret().
 start_link() ->
@@ -80,12 +81,15 @@ start_check_timer() ->
 start_check_timer(CheckS) ->
     erlang:start_timer(CheckS * ?MILLISECONDS_IN_SECOND, self(), ?CHECK_EPMD).
 
+%% The node asks its own EPMD, which always listens on the loopback address.
+%% Asking at the node's host name instead fails wherever that name resolves
+%% to an address EPMD is not bound to (ERL_EPMD_ADDRESS=127.0.0.1, as in the
+%% container images): every check then reported "no EPMD response".
 check_epmd(#state{name=Name
-                 ,host=Host
                  ,epmd_mod=Mod
                  }=State
           ) ->
-    check_epmd(State, Mod:port_please(Name, Host)).
+    check_epmd(State, Mod:port_please(Name, ?LOCAL_EPMD)).
 
 check_epmd(#state{port=_Port}=State, 'noport') ->
     lager:error("no EPMD response, re-registering on port ~p", [_Port]),

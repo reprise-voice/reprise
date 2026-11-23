@@ -235,16 +235,23 @@ revise_docs_from_folder(DbName, App, Folder, Sleep) ->
 -spec do_revise_docs_from_folder(database_name(), boolean(), kz_term:ne_binaries()) -> 'ok'.
 do_revise_docs_from_folder(_, _, []) -> 'ok';
 do_revise_docs_from_folder(DbName, Sleep, [H|T]) ->
-    try
-        {'ok', _} = update_doc_from_file(DbName, H),
-        Sleep
-            andalso timer:sleep(250),
-        do_revise_docs_from_folder(DbName, Sleep, T)
-    catch
-        ?STACKTRACE(_, _, ST)
-        kz_log:log_stacktrace(ST),
-        do_revise_docs_from_folder(DbName, Sleep, T)
-        end.
+    case update_doc_from_file(DbName, H) of
+        {'ok', _} ->
+            Sleep
+                andalso timer:sleep(250);
+        {'error', 'conflict'} ->
+            %% another node revised the same document between this node's
+            %% read and its write, as happens when the nodes of a cluster
+            %% start together: the document is there, from the same file
+            lager:info("~s in ~s was revised by another node meanwhile"
+                      ,[filename:basename(H), DbName]
+                      );
+        {'error', _E} ->
+            lager:warning("failed to revise ~s in ~s: ~p"
+                         ,[filename:basename(H), DbName, _E]
+                         )
+    end,
+    do_revise_docs_from_folder(DbName, Sleep, T).
 
 -spec maybe_update_doc(database_name(), kz_json:object()) ->
           {'ok', kz_json:object()} |
