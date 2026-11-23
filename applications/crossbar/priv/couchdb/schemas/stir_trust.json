@@ -1,0 +1,50 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "stir_trust",
+    "anyOf": [
+        {
+            "required": [
+                "action"
+            ]
+        },
+        {
+            "required": [
+                "kind",
+                "pem"
+            ]
+        }
+    ],
+    "description": "Refresh the STIR/SHAKEN trust material from the STI-PA, or upload roots or a CRL by hand: send 'action', or 'kind' and 'pem' (and, for roots, 'role')",
+    "properties": {
+        "action": {
+            "description": "'refresh' fetches the trusted CA list and the CRL from the STI-PA named by stipa_api_url and stores both",
+            "enum": [
+                "refresh"
+            ],
+            "type": "string"
+        },
+        "kind": {
+            "description": "What 'pem' is: trusted roots (see 'role') or the certificate revocation list, or the certificate that signs it",
+            "enum": [
+                "ca",
+                "crl"
+            ],
+            "type": "string"
+        },
+        "pem": {
+            "description": "The bundle or CRL as PEM text",
+            "maxLength": 1048576,
+            "minLength": 1,
+            "type": "string"
+        },
+        "role": {
+            "description": "For kind 'ca' only, what the uploaded roots are for: 'stipa' pins the STI-PA root the CA list's and the CRL's signers must chain to, and never anchors a call; 'calls' is an extra anchor for call certificate chains, and never pins the STI-PA. Absent means 'calls'. An upload replaces the roots of its role only",
+            "enum": [
+                "calls",
+                "stipa"
+            ],
+            "type": "string"
+        }
+    },
+    "type": "object"
+}

@@ -51,6 +51,7 @@
         ,get_resrc_classifier_enable/1
         ,get_resrc_supports_pidflo/1
         ,get_resrc_classifier_include_pidflo/1
+        ,get_resrc_stir_sign/1
         ]).
 
 -export([set_resrc_id/2
@@ -178,6 +179,7 @@
                ,sip_headers :: kz_term:api_object()
                ,sip_interface :: kz_term:api_binary()
                ,supports_pidflo = 'false' :: boolean()
+               ,stir_sign = 'true' :: boolean()
                }).
 
 -type gateway_strategy() :: 'sequential' | 'random'.
@@ -264,7 +266,7 @@ sort_resources(Resources) ->
 endpoints(Number, OffnetJObj) ->
     case maybe_get_endpoints(Number, OffnetJObj) of
         [] -> [];
-        Endpoints -> sort_endpoints(Endpoints)
+        Endpoints -> sort_endpoints(stepswitch_stir:maybe_sign(Number, OffnetJObj, Endpoints))
     end.
 
 -spec is_test_number(kz_term:ne_binary(), kz_term:ne_binary()) -> boolean().
@@ -602,6 +604,7 @@ maybe_resource_to_endpoints(#resrc{id=Id
                                   ,proxies=Proxies
                                   ,classifier=Classifier
                                   ,classifier_include_pidflo=IncludePidflo
+                                  ,stir_sign=StirSign
                                   } = Resource
                            ,Number
                            ,OffnetJObj
@@ -627,6 +630,7 @@ maybe_resource_to_endpoints(#resrc{id=Id
                            ,{<<"DID-Classifier">>, knm_converters:classify(Number)}
                            ,{<<"Original-Number">>, kapi_offnet_resource:to_did(OffnetJObj)}
                            ,{<<"Include-Pidflo">>, IncludePidflo}
+                           ,{<<"Stir-Sign">>, stir_sign_ccv(StirSign)}
                            ]),
             Updates = [{<<"Name">>, Name}
                       ,{<<"Weight">>, Weight}
@@ -639,6 +643,15 @@ maybe_resource_to_endpoints(#resrc{id=Id
                            ],
             maybe_add_proxies(EndpointList, Proxies, Endpoints)
     end.
+
+%% `Stir-Sign' is the resource's opt-out, and only the opt-out is worth
+%% carrying: signing is the default, so the endpoints of every other
+%% resource would carry a `true' that says nothing.
+%% `stepswitch_stir:maybe_sign/3' takes it off the endpoint again once it
+%% has read it.
+-spec stir_sign_ccv(boolean()) -> 'false' | 'undefined'.
+stir_sign_ccv('false') -> 'false';
+stir_sign_ccv(_Sign) -> 'undefined'.
 
 -spec check_diversion_fields(kapi_offnet_resource:req()) -> kz_term:api_binary().
 check_diversion_fields(OffnetJObj) ->
@@ -1221,6 +1234,7 @@ resource_from_jobj(JObj) ->
                      ,sip_headers = kzd_resources:cshs(JObj, kz_json:new())
                      ,sip_interface = kzd_resources:custom_sip_interface(JObj)
                      ,supports_pidflo = kzd_resources:supports_pidflo(JObj)
+                     ,stir_sign = kz_json:is_true([<<"stir">>, <<"sign">>], JObj, 'true')
                      },
     Gateways = gateways_from_jobjs(kzd_resources:gateways(JObj, []), Resource),
     Resource#resrc{gateways=Gateways}.
@@ -1529,6 +1543,9 @@ get_resrc_supports_pidflo(#resrc{supports_pidflo=Supported}) -> Supported.
 
 -spec get_resrc_classifier_include_pidflo(resource()) -> boolean().
 get_resrc_classifier_include_pidflo(#resrc{classifier_include_pidflo=Included}) -> Included.
+
+-spec get_resrc_stir_sign(resource()) -> boolean().
+get_resrc_stir_sign(#resrc{stir_sign=Sign}) -> Sign.
 
 -spec set_resrc_id(resource(), kz_term:api_binary()) -> resource().
 set_resrc_id(Resource, Id) -> Resource#resrc{id=Id}.

@@ -64,3 +64,62 @@ build_simple_channels_test_() ->
                    )
      }
     ].
+
+%%------------------------------------------------------------------------------
+%% Sofia places `Identity' from the `sip_h_' variable itself and then sends
+%% every `sip_h_*' variable as an extra header, so the signer answers an
+%% `Exclude-Outgoing-Extra-Header' with the `Identity' and stepswitch puts
+%% both on the endpoint. These pin the wiring from that endpoint to the
+%% dial string, with and without the bridge command in between.
+%%------------------------------------------------------------------------------
+
+-define(PASSPORT, <<"eyJhbGciOiJFUzI1NiIsInBwdCI6InNoYWtlbiIsInR5cCI6InBhc3Nwb3J0In0"
+                    ".eyJhdHRlc3QiOiJBIn0.c2lnbmF0dXJl"
+                    ";info=<https://certs.example.invalid/k.pem>;alg=ES256;ppt=shaken"
+                  >>).
+-define(STIR_EXCLUSION, <<"^sip_h_[Ii]dentity$">>).
+
+signed_leg_carries_identity_once_test_() ->
+    DialString = ecallmgr_util:build_bridge_string([signed_endpoint()]),
+    [{"the dial string sets sip_h_Identity once"
+     ,?_assertEqual(1, occurrences(<<"sip_h_Identity='">>, DialString))
+     }
+    ,{"and carries the signer's exclusion"
+     ,?_assertEqual(1, occurrences(<<"exclude_outgoing_extra_header='", ?STIR_EXCLUSION/binary, "'">>, DialString))
+     }
+    ].
+
+signed_leg_through_the_bridge_command_test_() ->
+    Req = [{<<"Application-Name">>, <<"bridge">>}
+          ,{<<"Call-ID">>, <<"a-leg-call-id">>}
+          ,{<<"Msg-ID">>, <<"msg-id">>}
+          ,{<<"Endpoints">>, [signed_endpoint()]}
+           | kz_api:default_headers(<<"call">>, <<"command">>, <<"stepswitch">>, <<"1.0">>)
+          ],
+    {'ok', Payload} = kapi_dialplan:bridge(Req),
+    Endpoints = kz_json:get_list_value(<<"Endpoints">>, kz_json:decode(Payload)),
+    DialString = ecallmgr_util:build_bridge_string(Endpoints),
+    [{"the leg built from the published command sets sip_h_Identity once"
+     ,?_assertEqual(1, occurrences(<<"sip_h_Identity='">>, DialString))
+     }
+    ,{"and carries the signer's exclusion"
+     ,?_assertEqual(1, occurrences(<<"exclude_outgoing_extra_header='", ?STIR_EXCLUSION/binary, "'">>, DialString))
+     }
+    ].
+
+%% A carrier endpoint as stepswitch_stir leaves it after a signed answer.
+-spec signed_endpoint() -> kz_json:object().
+signed_endpoint() ->
+    kz_json:from_list(
+      [{<<"Invite-Format">>, <<"route">>}
+      ,{<<"Route">>, <<"sip:+15552001353@carrier.invalid">>}
+      ,{<<"To-DID">>, <<"+15552001353">>}
+      ,{<<"Custom-SIP-Headers">>, kz_json:from_list([{<<"X-Account-ID">>, <<"e1670784712716304bf982f8ab7c46cf">>}
+                                                    ,{<<"Identity">>, ?PASSPORT}
+                                                    ])}
+      ,{<<"Exclude-Outgoing-Extra-Header">>, ?STIR_EXCLUSION}
+      ]).
+
+-spec occurrences(binary(), binary()) -> non_neg_integer().
+occurrences(Needle, Haystack) ->
+    length(binary:matches(Haystack, Needle)).

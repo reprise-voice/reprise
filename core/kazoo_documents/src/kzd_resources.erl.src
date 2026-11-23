@@ -32,6 +32,9 @@
 -export([require_flags/1, require_flags/2, set_require_flags/2]).
 -export([rules/1, rules/2, set_rules/2]).
 -export([rules_test/1, rules_test/2, set_rules_test/2]).
+-export([stir/1, stir/2, set_stir/2]).
+-export([stir_sign/1, stir_sign/2, set_stir_sign/2]).
+-export([stir_verify/1, stir_verify/2, set_stir_verify/2]).
 -export([supports_pidflo/1, supports_pidflo/2, set_supports_pidflo/2]).
 -export([weight_cost/1, weight_cost/2, set_weight_cost/2]).
 
@@ -358,6 +361,42 @@ rules_test(Doc, Default) ->
 -spec set_rules_test(doc(), kz_term:ne_binaries()) -> doc().
 set_rules_test(Doc, RulesTest) ->
     kz_json:set_value([<<"rules_test">>], RulesTest, Doc).
+
+-spec stir(doc()) -> kz_term:api_object().
+stir(Doc) ->
+    stir(Doc, 'undefined').
+
+-spec stir(doc(), Default) -> kz_json:object() | Default.
+stir(Doc, Default) ->
+    kz_json:get_json_value([<<"stir">>], Doc, Default).
+
+-spec set_stir(doc(), kz_json:object()) -> doc().
+set_stir(Doc, Stir) ->
+    kz_json:set_value([<<"stir">>], Stir, Doc).
+
+-spec stir_sign(doc()) -> boolean().
+stir_sign(Doc) ->
+    stir_sign(Doc, 'true').
+
+-spec stir_sign(doc(), Default) -> boolean() | Default.
+stir_sign(Doc, Default) ->
+    kz_json:get_boolean_value([<<"stir">>, <<"sign">>], Doc, Default).
+
+-spec set_stir_sign(doc(), boolean()) -> doc().
+set_stir_sign(Doc, StirSign) ->
+    kz_json:set_value([<<"stir">>, <<"sign">>], StirSign, Doc).
+
+-spec stir_verify(doc()) -> binary().
+stir_verify(Doc) ->
+    stir_verify(Doc, <<"trust_upstream">>).
+
+-spec stir_verify(doc(), Default) -> binary() | Default.
+stir_verify(Doc, Default) ->
+    kz_json:get_binary_value([<<"stir">>, <<"verify">>], Doc, Default).
+
+-spec set_stir_verify(doc(), binary()) -> doc().
+set_stir_verify(Doc, StirVerify) ->
+    kz_json:set_value([<<"stir">>, <<"verify">>], StirVerify, Doc).
 
 -spec supports_pidflo(doc()) -> kz_term:api_boolean().
 supports_pidflo(Doc) ->

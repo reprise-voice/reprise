@@ -224,6 +224,7 @@ bootstrap_callflow_executer(Call) ->
                ,fun maybe_start_recording/1
                ,fun store_execute_callflow/1
                ,fun maybe_start_metaflow/1
+               ,fun cf_stir:maybe_verify/1
                ],
     kapps_call:exec(Routines, Call).
 

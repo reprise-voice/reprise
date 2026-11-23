@@ -1,0 +1,120 @@
+# Hostile `x5u` URLs for `stir/hostile_url_test`.
+#
+# The URL arrives in the `Identity` header of an inbound call, so it is
+# the attacker's to write. `stir/x5u` fetches it only when its policy
+# says so: https, no userinfo, port 443 or none, and no IP-literal host
+# on a network this node has no business being aimed at.
+#
+# One entry a line: `refuse` for a URL no request may be made for,
+# `fetch` for one the policy lets through (the suite's transport has
+# nothing at any of them, which is an answer and not a refusal).
+# Lines starting with `#`, and blank lines, are skipped.
+
+# --- the scheme -----------------------------------------------------
+refuse	http://signer.test/a.pem
+refuse	HTTP://signer.test/a.pem
+refuse	ftp://signer.test/a.pem
+refuse	file:///etc/passwd
+refuse	file://signer.test/a.pem
+refuse	gopher://signer.test/a.pem
+refuse	ws://signer.test/a.pem
+refuse	wss://signer.test/a.pem
+refuse	javascript:alert(1)
+refuse	data:text/plain;base64,aGk=
+refuse	httpss://signer.test/a.pem
+refuse	shttp://signer.test/a.pem
+refuse	https:\\signer.test\a.pem
+refuse	https:/signer.test/a.pem
+refuse	https:signer.test/a.pem
+refuse	//signer.test/a.pem
+refuse	signer.test/a.pem
+refuse	/a.pem
+refuse	a.pem
+refuse	 https://signer.test/a.pem
+refuse	ht tps://signer.test/a.pem
+refuse	https//signer.test/a.pem
+fetch	HTTPS://signer.test/a.pem
+fetch	hTTps://signer.test/a.pem
+
+# --- the authority --------------------------------------------------
+refuse	https://
+refuse	https:///a.pem
+refuse	https://:443/a.pem
+refuse	https://user@signer.test/a.pem
+refuse	https://user:pass@signer.test/a.pem
+refuse	https://@signer.test/a.pem
+refuse	https://:@signer.test/a.pem
+refuse	https://signer.test@10.0.0.1/a.pem
+refuse	https://example.com@169.254.169.254/latest/meta-data/
+refuse	https://signer.test:80/a.pem
+refuse	https://signer.test:8443/a.pem
+refuse	https://signer.test:0/a.pem
+refuse	https://signer.test:1/a.pem
+refuse	https://signer.test:65535/a.pem
+refuse	https://signer.test:4430/a.pem
+fetch	https://signer.test:443/a.pem
+fetch	https://signer.test/a.pem?x=1#y
+fetch	https://signer.test/../../a.pem
+fetch	https://signer.test/a.pem#@10.0.0.1
+
+# --- IPv4 literals on networks this node must not be aimed at --------
+refuse	https://127.0.0.1/a.pem
+refuse	https://127.255.255.254/a.pem
+refuse	https://127.000.000.001/a.pem
+refuse	https://0.0.0.0/a.pem
+refuse	https://0.0.0.1/a.pem
+refuse	https://10.0.0.1/a.pem
+refuse	https://10.255.255.255/a.pem
+refuse	https://172.16.0.1/a.pem
+refuse	https://172.31.255.255/a.pem
+refuse	https://192.168.0.1/a.pem
+refuse	https://169.254.169.254/a.pem
+refuse	https://100.64.0.1/a.pem
+refuse	https://100.127.255.255/a.pem
+refuse	https://224.0.0.1/a.pem
+refuse	https://239.255.255.250/a.pem
+refuse	https://240.0.0.1/a.pem
+refuse	https://255.255.255.255/a.pem
+refuse	https://10.0.0.1:443/a.pem
+refuse	https://user@127.0.0.1/a.pem
+fetch	https://8.8.8.8/a.pem
+fetch	https://1.1.1.1/a.pem
+fetch	https://172.15.255.255/a.pem
+fetch	https://172.32.0.1/a.pem
+fetch	https://100.63.255.255/a.pem
+fetch	https://100.128.0.1/a.pem
+fetch	https://223.255.255.255/a.pem
+fetch	https://192.167.255.255/a.pem
+fetch	https://11.0.0.1/a.pem
+
+# --- IPv6 literals ---------------------------------------------------
+refuse	https://[::1]/a.pem
+refuse	https://[0:0:0:0:0:0:0:1]/a.pem
+refuse	https://[0000:0000:0000:0000:0000:0000:0000:0001]/a.pem
+refuse	https://[::]/a.pem
+refuse	https://[0:0:0:0:0:0:0:0]/a.pem
+refuse	https://[fc00::1]/a.pem
+refuse	https://[fd12:3456:789a::1]/a.pem
+refuse	https://[FD00::1]/a.pem
+refuse	https://[fe80::1]/a.pem
+refuse	https://[fe80::1%25eth0]/a.pem
+refuse	https://[febf::1]/a.pem
+refuse	https://[ff02::1]/a.pem
+refuse	https://[ff00::]/a.pem
+refuse	https://[::ffff:127.0.0.1]/a.pem
+refuse	https://[::ffff:7f00:1]/a.pem
+refuse	https://[::FFFF:10.0.0.1]/a.pem
+refuse	https://[::ffff:169.254.169.254]/a.pem
+refuse	https://[::ffff:a9fe:a9fe]/a.pem
+refuse	https://[::1]:443/a.pem
+refuse	https://user@[::1]/a.pem
+fetch	https://[2606:4700:4700::1111]/a.pem
+fetch	https://[2001:4860:4860::8888]/a.pem
+fetch	https://[fe00::1]/a.pem
+
+# --- names, including the ones that look like addresses --------------
+fetch	https://xn--e1afmkfd.xn--p1ai/a.pem
+fetch	https://signer.test./a.pem
+fetch	https://a.b.c.d.e.f.signer.test/a.pem
+fetch	https://SIGNER.TEST/A.PEM
+fetch	https://localhost.signer.test/a.pem

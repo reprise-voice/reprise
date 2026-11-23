@@ -36,6 +36,19 @@
        ).
 -define(IP_REGEX, <<"^(\\d{1,3}\\\.\\d{1,3}\\\.\\d{1,3}\\\.\\d{1,3}).*">>).
 -define(ACL_RESULT(IP, ACL), {'acl', IP, ACL}).
+
+%% The group of the Kamailio trusted table an entry goes into. Kamailio
+%% stamps it on every INVITE from that peer as `X-AUTH-Trusted-Type'
+%% (`configs/kamailio/kamailio/trusted.cfg'), and the `stir' application
+%% takes a carrier's own STIR/SHAKEN verdict only from the two carrier
+%% groups (`doc/engineering/stir-shaken.md' §3.5a). The group is the view
+%% the entry came out of, not a guess from the document: the offnet
+%% database holds the global carriers and an account database the local
+%% ones.
+-define(GROUP_GLOBAL_CARRIER, <<"global_carrier">>).
+-define(GROUP_LOCAL_CARRIER, <<"local_carrier">>).
+-define(GROUP_ENDPOINT, <<"endpoint">>).
+-define(GROUP_TRUSTED_SOURCE, <<"trusted_source">>).
 -define(ACL_RESULT_MERGE(ACL), {'acl_merge', ACL}).
 
 -type acls() :: kz_json:object().
@@ -309,6 +322,7 @@ trusted_acl(K, V) ->
             AuthorizingId = kz_json:get_ne_binary_value(<<"authorizing_id">>, V, trusted_default_authorization_id()),
             KVs = [{<<"account_id">>, AccountId}
                   ,{<<"authorizing_id">>, AuthorizingId}
+                  ,{<<"group">>, ?GROUP_TRUSTED_SOURCE}
                   ],
             JObj = kz_json:set_values(KVs, V),
             {'true', {K, JObj}}
@@ -465,7 +479,7 @@ handle_sip_auth_result(Collector, JObj, IPs) ->
     AccountId = kz_json:get_value([<<"value">>, <<"account_id">>], JObj),
     AuthorizingId = kz_doc:id(JObj),
     AuthorizingType = kz_json:get_value([<<"value">>, <<"authorizing_type">>], JObj),
-    add_trusted_objects(Collector, AccountId, AuthorizingId, AuthorizingType, IPs).
+    add_trusted_objects(Collector, AccountId, AuthorizingId, AuthorizingType, ?GROUP_ENDPOINT, IPs).
 
 -spec local_resources(pid()) -> 'ok'.
 local_resources(Collector) ->
@@ -476,7 +490,7 @@ local_resources(Collector) ->
         {'ok', []} ->
             lager:info("no local resources in ~s", [?KZ_SIP_DB]);
         {'ok', JObjs} ->
-            handle_resource_results(Collector, JObjs)
+            handle_resource_results(Collector, ?GROUP_LOCAL_CARRIER, JObjs)
     end.
 
 -spec offnet_resources(pid()) -> 'ok'.
@@ -487,87 +501,94 @@ offnet_resources(Collector) ->
             throw(io_lib:format("unable to get view results for offnet active resources : ~s", [_R]));
         {'ok', ViewResources} ->
             lager:debug("fetch offnet resources"),
-            handle_resource_results(Collector, ViewResources)
+            handle_resource_results(Collector, ?GROUP_GLOBAL_CARRIER, ViewResources)
     end.
 
--spec handle_resource_results(pid(), kz_json:objects()) -> 'ok'.
-handle_resource_results(Collector, ViewResources) ->
-    PidRefs = [kz_process:spawn_monitor(fun handle_resource_view_result/2
-                                       ,[Collector, ViewResource]
+-spec handle_resource_results(pid(), kz_term:ne_binary(), kz_json:objects()) -> 'ok'.
+handle_resource_results(Collector, Group, ViewResources) ->
+    PidRefs = [kz_process:spawn_monitor(fun handle_resource_view_result/3
+                                       ,[Collector, Group, ViewResource]
                                        )
                || ViewResource <- ViewResources
               ],
     wait_for_pid_refs(PidRefs),
-    lager:debug("handled ~p resources", [length(ViewResources)]).
+    lager:debug("handled ~p ~s resources", [length(ViewResources), Group]).
 
--spec handle_resource_view_result(pid(), kz_json:object()) -> 'ok'.
-handle_resource_view_result(Collector, ViewResource) ->
+-spec handle_resource_view_result(pid(), kz_term:ne_binary(), kz_json:object()) -> 'ok'.
+handle_resource_view_result(Collector, Group, ViewResource) ->
     Resource = kz_json:get_json_value(<<"doc">>, ViewResource),
 
-    ServerPidRefs = resource_server_ips(Collector, Resource),
-    resource_inbound_ips(Collector, Resource), %% direct IPs sent to Collector
+    ServerPidRefs = resource_server_ips(Collector, Group, Resource),
+    resource_inbound_ips(Collector, Group, Resource), %% direct IPs sent to Collector
 
     wait_for_pid_refs(ServerPidRefs).
 
 %% IPs could be [IP] | [{IP, Port}]
--spec handle_resource_result(pid(), kzd_resources:doc(), kz_term:ne_binaries() | kz_term:proplist()) -> 'ok'.
-handle_resource_result(Collector, Resource, IPs) ->
+-spec handle_resource_result(pid(), kz_term:ne_binary(), kzd_resources:doc(), kz_term:ne_binaries() | kz_term:proplist()) -> 'ok'.
+handle_resource_result(Collector, Group, Resource, IPs) ->
     AuthorizingId = kz_doc:id(Resource),
     {'ok', Master} = kapps_util:get_master_account_id(),
     AccountId = kz_doc:account_id(Resource, Master),
-    add_trusted_objects(Collector, AccountId, AuthorizingId, <<"resource">>, IPs).
+    add_trusted_objects(Collector, AccountId, AuthorizingId, <<"resource">>, Group, IPs).
 
--spec resource_inbound_ips(pid(), kzd_resources:doc()) -> 'ok'.
-resource_inbound_ips(Collector, Resource) ->
+%% The builder fun `resolve_hostname/4' calls back with, with the group of
+%% the view the resource came out of bound into it.
+-spec resource_acl_builder(kz_term:ne_binary()) -> acl_builder_fun().
+resource_acl_builder(Group) ->
+    fun(Collector, Resource, IPs) -> handle_resource_result(Collector, Group, Resource, IPs) end.
+
+-spec resource_inbound_ips(pid(), kz_term:ne_binary(), kzd_resources:doc()) -> 'ok'.
+resource_inbound_ips(Collector, Group, Resource) ->
     lists:foreach(fun(InboundIP) ->
-                          handle_resource_result(Collector, Resource, [{InboundIP, 'undefined'}])
+                          handle_resource_result(Collector, Group, Resource, [{InboundIP, 'undefined'}])
                   end
                  ,kz_json:get_list_value(<<"inbound_ips">>, Resource, [])
                  ).
 
--spec resource_server_ips(pid(), kzd_resources:doc()) -> kz_term:pid_refs().
-resource_server_ips(Collector, Resource) ->
-    lists:foldl(fun(Gateway, Acc) -> maybe_collect_ips_and_hosts(Collector, Resource, Gateway, Acc) end
+-spec resource_server_ips(pid(), kz_term:ne_binary(), kzd_resources:doc()) -> kz_term:pid_refs().
+resource_server_ips(Collector, Group, Resource) ->
+    lists:foldl(fun(Gateway, Acc) -> maybe_collect_ips_and_hosts(Collector, Group, Resource, Gateway, Acc) end
                ,[]
                ,kzd_resources:gateways(Resource, [])
                ).
 
-maybe_collect_ips_and_hosts(Collector, Resource, Gateway, Acc) ->
+maybe_collect_ips_and_hosts(Collector, Group, Resource, Gateway, Acc) ->
     case kz_json:get_ne_binary_value(<<"endpoint_type">>, Gateway) =:= <<"sip">>
         andalso kz_json:is_true(<<"enabled">>, Gateway, 'false')
     of
         'false' -> Acc;
         'true' ->
-            collect_ips_and_hosts(Collector, Resource, Gateway, Acc)
+            collect_ips_and_hosts(Collector, Group, Resource, Gateway, Acc)
     end.
 
-collect_ips_and_hosts(Collector, Resource, Gateway, Acc) ->
+collect_ips_and_hosts(Collector, Group, Resource, Gateway, Acc) ->
     Server = kz_json:get_ne_binary_value(<<"server">>, Gateway),
     Port = kz_json:get_integer_value(<<"port">>, Gateway),
 
     case kz_network_utils:is_ip(Server) of
         'true' ->
-            handle_resource_result(Collector, Resource, [{Server, Port}]),
+            handle_resource_result(Collector, Group, Resource, [{Server, Port}]),
             Acc;
         'false' ->
             PidRef = kz_process:spawn_monitor(fun resolve_hostname/4
                                              ,[Collector
                                               ,{Server, Port}
                                               ,Resource
-                                              ,fun handle_resource_result/3
+                                              ,resource_acl_builder(Group)
                                               ]
                                              ),
             [PidRef | Acc]
     end.
 
--spec add_trusted_objects(pid(), kz_term:api_binary(), kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binaries() | kz_term:proplist()) -> 'ok'.
-add_trusted_objects(Collector, AccountId, AuthorizingId, AuthorizingType, IPs) ->
+-spec add_trusted_objects(pid(), kz_term:api_binary(), kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binary(), kz_term:ne_binaries() | kz_term:proplist()) -> 'ok'.
+add_trusted_objects(Collector, AccountId, AuthorizingId, AuthorizingType, Group, IPs) ->
     BaseACL = kz_json:from_list(
                 [{<<"type">>, <<"allow">>}
                 ,{<<"network-list-name">>, <<"trusted">>}
                 ,{<<"account_id">>, AccountId}
                 ,{<<"authorizing_id">>, AuthorizingId}
                 ,{<<"authorizing_type">>, AuthorizingType}
+                ,{<<"group">>, Group}
                 ]),
     lists:foreach(fun(IP) -> add_trusted_object(Collector, BaseACL, IP) end, IPs).
 

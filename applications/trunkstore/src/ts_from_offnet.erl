@@ -106,7 +106,30 @@ media_handling(_InceptionAccountId, _Endpoint) ->
 send_park(State, Command) ->
     case ts_callflow:send_park(State) of
         {'lost', _} -> 'ok';
-        {'won', State1} -> route_call(State1, Command)
+        {'won', State1} ->
+            %% The STIR/SHAKEN verdict goes onto the channel here, once the
+            %% route win has given us its control queue; the park response
+            %% carries the route request's CCVs, so the call record's copy
+            %% would not reach the channel.
+            _ = maybe_verify_stir(State1),
+            route_call(State1, Command)
+    end.
+
+%% `cf_stir' belongs to callflow, which a trunkstore node need not be
+%% running, and nothing it does may stop a call: an absent module or
+%% anything raised in it leaves the call as it was.
+-spec maybe_verify_stir(ts_callflow:state()) -> 'ok'.
+maybe_verify_stir(State) ->
+    try code:ensure_loaded('cf_stir') of
+        {'module', 'cf_stir'} ->
+            _ = cf_stir:maybe_verify(ts_callflow:get_kapps_call(State)),
+            'ok';
+        {'error', _Why} ->
+            lager:debug("cf_stir is not loaded (~p), no stir verdict on this call", [_Why])
+    catch
+        _E:_R ->
+            lager:debug("stir verification skipped: ~p:~p", [_E, _R]),
+            'ok'
     end.
 
 -spec route_call(ts_callflow:state(), kz_term:proplist()) -> 'ok'.

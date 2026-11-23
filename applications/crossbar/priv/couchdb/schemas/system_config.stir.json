@@ -1,0 +1,182 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "system_config.stir",
+    "description": "Schema for stir system_config",
+    "properties": {
+        "acme_directory_url": {
+            "default": "",
+            "description": "stir the STI-CA's ACME directory URL; empty means certificates are issued from a CSR by hand",
+            "type": "string"
+        },
+        "alert_days": {
+            "default": "60,30,14",
+            "description": "stir days before a certificate's not_after at which an expiry alert is raised, comma separated",
+            "type": "string"
+        },
+        "allow_account_keys": {
+            "default": false,
+            "description": "stir allow a reseller account its own signing key through /v2/accounts/{id}/stir/keys",
+            "type": "boolean"
+        },
+        "attest_forwarded": {
+            "default": "B",
+            "description": "stir attestation for a call that arrived from a carrier and goes back out with the original caller id kept; never above the attestation the inbound call itself carried; the forward rule requires the inbound call to have been a verified carrier call, so a leg claiming to be a forward without that is attested by the other rules; passthru carries the inbound call's own Identity header through instead of signing, and only when that call verified",
+            "enum": [
+                "A",
+                "B",
+                "C",
+                "passthru"
+            ],
+            "type": "string"
+        },
+        "attest_forwarded_when_inbound_failed": {
+            "default": "B",
+            "description": "stir attestation for a forwarded call whose inbound Identity failed verification, capped at C like every forward of a call that did not verify; a forwarded call whose inbound leg carried no verdict at all takes attest_unverified instead",
+            "enum": [
+                "A",
+                "B",
+                "C",
+                "passthru"
+            ],
+            "type": "string"
+        },
+        "attest_owned_number": {
+            "default": "A",
+            "description": "stir attestation when the caller id is a number assigned to the account",
+            "enum": [
+                "A",
+                "B",
+                "C"
+            ],
+            "type": "string"
+        },
+        "attest_owned_scope": {
+            "default": "account",
+            "description": "stir whether a number assigned to an ancestor account counts as owned: account or tree; tree walks the account's ancestors without the master account, which is every account's ancestor",
+            "enum": [
+                "account",
+                "tree"
+            ],
+            "type": "string"
+        },
+        "attest_transit": {
+            "default": "C",
+            "description": "stir attestation for any other call that arrived from a carrier and goes back out",
+            "enum": [
+                "A",
+                "B",
+                "C"
+            ],
+            "type": "string"
+        },
+        "attest_unverified": {
+            "default": "B",
+            "description": "stir attestation for an authenticated customer calling from a number the platform does not know",
+            "enum": [
+                "A",
+                "B",
+                "C"
+            ],
+            "type": "string"
+        },
+        "attest_verified_external_number": {
+            "default": "B",
+            "description": "stir attestation when the caller id is a verified external number of the account; adopted numbers (gather_external_numbers) never count as verified",
+            "enum": [
+                "A",
+                "B",
+                "C"
+            ],
+            "type": "string"
+        },
+        "cid_name_prefix_failed": {
+            "default": "",
+            "description": "stir prefix put on the caller id name when inbound verification fails",
+            "type": "string"
+        },
+        "csr_organization": {
+            "default": "",
+            "description": "stir the organization (O) every new key's CSR names: the legal name of the service provider the certificate is for; a key cannot be created while it is empty unless the request names one",
+            "type": "string"
+        },
+        "identity_max_age_s": {
+            "default": 60,
+            "description": "stir how old an inbound Identity's iat may be, in seconds",
+            "minimum": 0,
+            "type": "integer"
+        },
+        "renewal_enabled": {
+            "default": false,
+            "description": "stir order a new certificate through ACME when the active key is inside the renewal window",
+            "type": "boolean"
+        },
+        "renewal_window_days": {
+            "default": 30,
+            "description": "stir days before not_after at which a renewal is ordered",
+            "minimum": 0,
+            "type": "integer"
+        },
+        "require_date_header": {
+            "default": false,
+            "description": "stir reject an inbound Identity when the request carries no Date header",
+            "type": "boolean"
+        },
+        "sign_anonymous": {
+            "default": true,
+            "description": "stir sign when privacy hides the caller id; orig.tn is the real number",
+            "type": "boolean"
+        },
+        "sign_enabled": {
+            "default": false,
+            "description": "stir add an Identity header to outbound carrier calls",
+            "type": "boolean"
+        },
+        "sign_non_nanp_origin": {
+            "default": false,
+            "description": "stir sign when the originating number is outside NANP",
+            "type": "boolean"
+        },
+        "stipa_api_url": {
+            "default": "https://authenticate-api.iconectiv.com",
+            "description": "stir the STI-PA API base URL, for the trusted CA list, the CRL and SPC tokens",
+            "type": "string"
+        },
+        "trust_refresh_hours": {
+            "default": 6,
+            "description": "stir how often the trusted CA list and the CRL are refreshed from the STI-PA, in hours; the CRL lives 24 hours, so keep this well below that",
+            "minimum": 1,
+            "type": "integer"
+        },
+        "trust_upstream_verstat": {
+            "default": true,
+            "description": "stir take the carrier's own verdict (verstat on P-Asserted-Identity or From, P-Attestation-Indicator, P-Origination-ID) for a call the SBC classified as a carrier call, and verify locally only when the carrier said nothing",
+            "type": "boolean"
+        },
+        "verify_enabled": {
+            "default": false,
+            "description": "stir verify the Identity header of inbound carrier calls",
+            "type": "boolean"
+        },
+        "verify_mode": {
+            "default": "sync",
+            "description": "stir sync verifies before the callflow starts, within verify_timeout_ms; async starts the callflow and lands the verdict when ready",
+            "enum": [
+                "sync",
+                "async"
+            ],
+            "type": "string"
+        },
+        "verify_timeout_ms": {
+            "default": 1500,
+            "description": "stir the budget for fetching the signer's certificate on an inbound call, in milliseconds; past it the verdict is No-TN-Validation",
+            "minimum": 0,
+            "type": "integer"
+        },
+        "x5u_base_url": {
+            "default": "",
+            "description": "stir the public prefix new keys' certificates are served under, e.g. https://api.example.com/v2/stir/certs; a key cannot be created while it is empty",
+            "type": "string"
+        }
+    },
+    "type": "object"
+}

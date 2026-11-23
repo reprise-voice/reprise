@@ -1,0 +1,17 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "stir_certificate",
+    "description": "Attach the certificate chain a CA issued for a STIR/SHAKEN signing key's CSR. The chain must match the key and carry its SPC; the key's status becomes pending",
+    "properties": {
+        "certificate": {
+            "description": "The issued certificate chain as PEM text: the leaf first, then its intermediates",
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+        }
+    },
+    "required": [
+        "certificate"
+    ],
+    "type": "object"
+}

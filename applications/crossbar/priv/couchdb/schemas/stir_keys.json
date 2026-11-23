@@ -1,0 +1,29 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "stir_keys",
+    "description": "Ask for a new STIR/SHAKEN signing key: it is generated inside Kazoo and the answer is its metadata and a certificate signing request, never the private key",
+    "properties": {
+        "organization": {
+            "description": "The organization (O) the certificate signing request names: the legal name of the service provider the certificate is for. Defaults to csr_organization in system_config/stir; a key cannot be created when neither is set",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+        },
+        "scope": {
+            "default": "system",
+            "description": "Whose calls the key signs: the platform's ('system') or one reseller account's (its account id). Under /v2/accounts/{id}/stir/keys it may only be that account",
+            "pattern": "^(system|[0-9a-f]{32})$",
+            "type": "string"
+        },
+        "spc": {
+            "description": "The Service Provider Code the certificate will be issued for, e.g. 999Y",
+            "maxLength": 64,
+            "minLength": 1,
+            "type": "string"
+        }
+    },
+    "required": [
+        "spc"
+    ],
+    "type": "object"
+}

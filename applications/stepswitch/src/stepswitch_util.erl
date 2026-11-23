@@ -29,6 +29,7 @@
         ,do_correct_shortdial/3
         ,should_correct_shortdial/2
         ,correct_shortdial/4
+        ,format_sip_headers/3
         ]).
 -endif.
 
@@ -338,13 +339,29 @@ format_endpoint(Endpoint, Number, FilterFun, OffnetReq, SIPHeaders, AccountId) -
 
 -spec apply_formatters(kz_json:object(), kz_json:object(), kz_term:ne_binary()) -> kz_json:object().
 apply_formatters(Endpoint, SIPHeaders, AccountId) ->
-    kz_formatters:apply(maybe_add_sip_headers(Endpoint, SIPHeaders)
-                       ,props:get_value(<<"Formatters">>
-                                       ,endpoint_props(Endpoint, AccountId)
-                                       ,kz_json:new()
-                                       )
-                       ,'outbound'
-                       ).
+    format_sip_headers(Endpoint
+                      ,SIPHeaders
+                      ,props:get_value(<<"Formatters">>
+                                      ,endpoint_props(Endpoint, AccountId)
+                                      ,kz_json:new()
+                                      )
+                      ).
+
+%% The signer's `Identity' taken off the endpoint, the request's headers
+%% merged over the endpoint's, the resource's formatters, then every
+%% `Identity' left among the headers dropped and the signer's (or none)
+%% written as the last word: neither the request, the resource, another
+%% endpoint builder nor a formatter decides the `Identity' of a carrier
+%% leg. Every carrier leg stepswitch bridges or originates passes here,
+%% so this is also where the signer's private key comes off for good.
+-spec format_sip_headers(kz_json:object(), kz_json:object(), kz_json:object()) -> kz_json:object().
+format_sip_headers(Endpoint, SIPHeaders, Formatters) ->
+    {Own, Unsigned} = stepswitch_stir:take_own_identity(Endpoint),
+    Formatted = kz_formatters:apply(maybe_add_sip_headers(Unsigned, SIPHeaders)
+                                   ,Formatters
+                                   ,'outbound'
+                                   ),
+    stepswitch_stir:put_own_identity(Own, Formatted).
 
 -spec endpoint_props(kz_json:object(), kz_term:api_binary()) -> kz_term:proplist().
 endpoint_props(Endpoint, AccountId) ->
@@ -473,11 +490,16 @@ maybe_resource_to_endpoints(Resource
     %% DestinationNumber = maybe_update_number(Resource, Number),
     DestinationNumber = Number,
     lager:debug("building resource ~s endpoints", [Id]),
-    CCVUpdates = [{<<"Global-Resource">>, Global}
-                 ,{<<"Resource-ID">>, Id}
-                 ,{<<"E164-Destination">>, DestinationNumber}
-                 ,{<<"Original-Number">>, kapi_offnet_resource:to_did(OffnetJObj)}
-                 ],
+    CCVUpdates = props:filter_undefined(
+                   [{<<"Global-Resource">>, Global}
+                   ,{<<"Resource-ID">>, Id}
+                   ,{<<"E164-Destination">>, DestinationNumber}
+                   ,{<<"Original-Number">>, kapi_offnet_resource:to_did(OffnetJObj)}
+                     %% only the opt-out is carried, the same as the other
+                     %% `route_by' module; `stepswitch_stir' reads it and
+                     %% takes it off again
+                   ,{<<"Stir-Sign">>, stir_sign_ccv(stepswitch_resources:get_resrc_stir_sign(Resource))}
+                   ]),
     Updates = [{<<"Name">>, Name}
               ,{<<"Weight">>, Weight}
               ,{<<"Supports-Pidflo">>, stepswitch_resources:get_resrc_supports_pidflo(Resource)}
@@ -486,6 +508,10 @@ maybe_resource_to_endpoints(Resource
                     || Endpoint <- stepswitch_resources:gateways_to_endpoints(DestinationNumber, Gateways, OffnetJObj, [])
                    ],
     stepswitch_resources:maybe_add_proxies(EndpointList, Proxies, Endpoints).
+
+-spec stir_sign_ccv(boolean()) -> 'false' | 'undefined'.
+stir_sign_ccv('false') -> 'false';
+stir_sign_ccv(_Sign) -> 'undefined'.
 
 -spec update_ccvs(kz_json:object(), kz_term:proplist()) -> kz_json:object().
 update_ccvs(Endpoint, Updates) ->

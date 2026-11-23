@@ -1,0 +1,19 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "stir_key_status",
+    "description": "Change a STIR/SHAKEN signing key's status: make a pending key the active one for its scope, or retire a key",
+    "properties": {
+        "status": {
+            "description": "'active' makes a pending key sign for its scope and retires the previous active key; 'retired' stops a key signing while its certificate is still served until it expires",
+            "enum": [
+                "active",
+                "retired"
+            ],
+            "type": "string"
+        }
+    },
+    "required": [
+        "status"
+    ],
+    "type": "object"
+}

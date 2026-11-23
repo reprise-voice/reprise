@@ -107,6 +107,9 @@ Key | Description | Type | Default | Required | Support Level
 `rules` | A list of regular expressions of which one must match for the rule to be eligible, they can optionally contain capture groups | `array(string())` | `[]` | `false` |  
 `rules_test.[]` |   | `string()` |   | `false` |  
 `rules_test` | A list of regular expressions of which if matched denotes a test rule | `array(string())` | `[]` | `false` |  
+`stir.sign` | Whether calls sent through this resource carry a STIR/SHAKEN Identity header signed by Kazoo | `boolean()` | `true` | `false` |  
+`stir.verify` | How the verdict on calls arriving from this resource is reached: trust_upstream takes the carrier's own verdict (verstat, P-Attestation-Indicator) and verifies the Identity header only when the carrier gave none, verify always verifies the Identity header, ignore records nothing | `string('trust_upstream' \| 'verify' \| 'ignore')` | `trust_upstream` | `false` |  
+`stir` | STIR/SHAKEN policy for calls through this resource | `object()` |   | `false` |  
 `supports_pidflo` | Whether or not the resource supports multi-part PIDF+LO INVITEs for calls | `boolean()` |   | `false` |  
 `weight_cost` | A value between 0 and 100 that determines the order of resources when multiple can be used | `integer(0..100)` | `50` | `false` |  
 
@@ -251,6 +254,16 @@ and assuming the requesting call has pass-through (with value `pass-through=0288
 ```
 INVITE sip:+14158867900@10.26.0.88;npid;id=XXXX;pass-through=0288 SIP/2.0
 ```
+
+## STIR/SHAKEN
+
+The `stir` object sets the resource's STIR/SHAKEN policy in both directions.
+
+`stir.sign` (default `true`) says whether calls sent through the resource carry an `Identity` header signed by Kazoo; set it to `false` for a carrier that signs on Kazoo's behalf or rejects a signed INVITE. It can only turn signing off, never on: signing is subordinate to `sign_enabled` in the `stir` system configuration, and while that is off nothing is signed whatever a resource says.
+
+`stir.verify` says how the verdict on calls arriving from the resource is reached: `trust_upstream` (the default) takes the carrier's own verdict from the `verstat` parameter of the P-Asserted-Identity or From header and from `P-Attestation-Indicator` / `P-Origination-ID`, and verifies the `Identity` header itself only when the carrier gave no verdict; `verify` ignores the carrier's verdict and always verifies the `Identity` header; `ignore` records nothing. A verdict is only ever taken from a call the SBC classified as coming from this resource's addresses, and `trust_upstream` is honoured only for a global carrier — a local (account-level) resource's calls are verified by Kazoo, since only a global resource is a carrier whose own verification the platform warrants. Verification as a whole is subordinate to `verify_enabled` in the `stir` system configuration in the same way `stir.sign` is to `sign_enabled`.
+
+The verdict is on the call as the `STIR-Verstat`, `STIR-Attest`, `STIR-Orig-ID` and `STIR-Verdict-Source` channel variables.
 
 ## Formatting the From
 

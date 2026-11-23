@@ -1,0 +1,57 @@
+{
+    "_id": "_design/stir",
+    "kazoo": {
+        "view_map": [
+            {
+                "database": "stir"
+            }
+        ]
+    },
+    "language": "javascript",
+    "views": {
+        "credentials_by_name": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'stir_credentials' || doc.pvt_deleted) return;",
+                "  emit(doc.name, {",
+                "    'name': doc.name,",
+                "    'set_at': doc.set_at,",
+                "    'by': doc.by,",
+                "    'kek': doc.kek",
+                "  });",
+                "}"
+            ]
+        },
+        "keys_by_scope": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'stir_key' || doc.pvt_deleted) return;",
+                "  emit([doc.scope, doc.status], {",
+                "    'scope': doc.scope,",
+                "    'status': doc.status,",
+                "    'spc': doc.spc,",
+                "    'alg': doc.alg,",
+                "    'x5u': doc.x5u,",
+                "    'not_before': doc.not_before,",
+                "    'not_after': doc.not_after,",
+                "    'source': doc.source,",
+                "    'fingerprint': doc.fingerprint,",
+                "    'kek': doc.kek,",
+                "    'history': doc.history",
+                "  });",
+                "}"
+            ]
+        },
+        "trust_by_kind": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'stir_trust' || doc.pvt_deleted) return;",
+                "  emit(doc.kind, {",
+                "    'fetched_at': doc.fetched_at,",
+                "    'source': doc.source",
+                "  });",
+                "}"
+            ]
+        }
+    }
+}

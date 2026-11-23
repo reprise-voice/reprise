@@ -586,6 +586,7 @@ bridge_endpoint_definition() ->
                                                             ,<<"Endpoint-Timeout">>
                                                             ,<<"Endpoint-Type">>
                                                             ,<<"Endpoint-URI">>
+                                                            ,<<"Exclude-Outgoing-Extra-Header">>
                                                             ,<<"Failover">>
                                                             ,<<"Force-Fax">>
                                                             ,<<"Forward-IP">>
@@ -638,6 +639,7 @@ bridge_endpoint_definition() ->
                 ,{<<"Custom-Application-Vars">>, fun kz_json:is_json_object/1}
                 ,{<<"Custom-Channel-Vars">>, fun kz_json:is_json_object/1}
                 ,{<<"Endpoint-Options">>, fun kz_json:is_json_object/1}
+                ,{<<"Exclude-Outgoing-Extra-Header">>, fun kz_term:is_ne_binary/1}
                 ,{<<"Ignore-Early-Media">>, fun kz_term:is_boolean/1}
                 ,{<<"Bypass-Media">>, fun kz_term:is_boolean/1}
                 ,{<<"SIP-Invite-Parameters">>, fun erlang:is_list/1}

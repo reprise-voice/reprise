@@ -57,6 +57,9 @@
         ]).
 
 -export([custom_sip_interface/1, custom_sip_interface/2, set_custom_sip_interface/2]).
+-export([stir/1, stir/2, set_stir/2]).
+-export([stir_sign/1, stir_sign/2, set_stir_sign/2]).
+-export([stir_verify/1, stir_verify/2, set_stir_verify/2]).
 
 -include("kz_documents.hrl").
 
@@ -541,3 +544,39 @@ custom_sip_interface(Doc, Default) ->
 -spec set_custom_sip_interface(doc(), kz_term:ne_binary()) -> doc().
 set_custom_sip_interface(Doc, Name) ->
     kz_json:set_value([<<"custom_sip_interface">>], Name, Doc).
+
+-spec stir(doc()) -> kz_term:api_object().
+stir(Doc) ->
+    stir(Doc, 'undefined').
+
+-spec stir(doc(), Default) -> kz_json:object() | Default.
+stir(Doc, Default) ->
+    kz_json:get_json_value([<<"stir">>], Doc, Default).
+
+-spec set_stir(doc(), kz_json:object()) -> doc().
+set_stir(Doc, Stir) ->
+    kz_json:set_value([<<"stir">>], Stir, Doc).
+
+-spec stir_sign(doc()) -> boolean().
+stir_sign(Doc) ->
+    stir_sign(Doc, 'true').
+
+-spec stir_sign(doc(), Default) -> boolean() | Default.
+stir_sign(Doc, Default) ->
+    kz_json:get_boolean_value([<<"stir">>, <<"sign">>], Doc, Default).
+
+-spec set_stir_sign(doc(), boolean()) -> doc().
+set_stir_sign(Doc, StirSign) ->
+    kz_json:set_value([<<"stir">>, <<"sign">>], StirSign, Doc).
+
+-spec stir_verify(doc()) -> binary().
+stir_verify(Doc) ->
+    stir_verify(Doc, <<"trust_upstream">>).
+
+-spec stir_verify(doc(), Default) -> binary() | Default.
+stir_verify(Doc, Default) ->
+    kz_json:get_binary_value([<<"stir">>, <<"verify">>], Doc, Default).
+
+-spec set_stir_verify(doc(), binary()) -> doc().
+set_stir_verify(Doc, StirVerify) ->
+    kz_json:set_value([<<"stir">>, <<"verify">>], StirVerify, Doc).

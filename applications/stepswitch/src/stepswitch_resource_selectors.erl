@@ -55,7 +55,13 @@ endpoints(Number, OffnetJObj) ->
     case get_selector_rules(HuntAccountId) of
         {'ok', SelectorRules} ->
             Resources = foldl_modules(Number, OffnetJObj, SelectorsDb, SelectorRules),
-            stepswitch_util:resources_to_endpoints(Resources, Number, OffnetJObj);
+            %% the other `route_by' module signs in its own `endpoints/2'
+            %% (`stepswitch_resources'); this is where a request routed by
+            %% the selectors passes exactly once
+            stepswitch_stir:maybe_sign(Number
+                                      ,OffnetJObj
+                                      ,stepswitch_util:resources_to_endpoints(Resources, Number, OffnetJObj)
+                                      );
         {'error', _E} -> []
     end.
 

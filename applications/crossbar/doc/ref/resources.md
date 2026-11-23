@@ -91,6 +91,9 @@ Key | Description | Type | Default | Required | Support Level
 `rules` | A list of regular expressions of which one must match for the rule to be eligible, they can optionally contain capture groups | `array(string())` | `[]` | `false` |  
 `rules_test.[]` |   | `string()` |   | `false` |  
 `rules_test` | A list of regular expressions of which if matched denotes a test rule | `array(string())` | `[]` | `false` |  
+`stir.sign` | Whether calls sent through this resource carry a STIR/SHAKEN Identity header signed by Kazoo | `boolean()` | `true` | `false` |  
+`stir.verify` | How the verdict on calls arriving from this resource is reached: trust_upstream takes the carrier's own verdict (verstat, P-Attestation-Indicator) and verifies the Identity header only when the carrier gave none, verify always verifies the Identity header, ignore records nothing | `string('trust_upstream' \| 'verify' \| 'ignore')` | `trust_upstream` | `false` |  
+`stir` | STIR/SHAKEN policy for calls through this resource | `object()` |   | `false` |  
 `supports_pidflo` | Whether or not the resource supports multi-part PIDF+LO INVITEs for calls | `boolean()` |   | `false` |  
 `weight_cost` | A value between 0 and 100 that determines the order of resources when multiple can be used | `integer(0..100)` | `50` | `false` |  
 

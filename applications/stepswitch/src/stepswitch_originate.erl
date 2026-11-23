@@ -251,7 +251,14 @@ build_originate(#state{endpoints=Endpoints
       ,{<<"Caller-ID-Name">>, CIDName}
       ,{<<"Caller-ID-Number">>, CIDNum}
       ,{<<"Custom-Channel-Vars">>, kz_json:set_values(CCVUpdates, CCVs)}
-      ,{<<"Custom-SIP-Headers">>, kz_json:get_value(<<"Custom-SIP-Headers">>, OffnetReq)}
+       %% these become the originate's global `{}' variables, which each
+       %% leg's own `[]' ones override: an `Identity' here would not replace
+       %% the signer's, it would go out on every leg that is not signed (and,
+       %% its name in another case, could go out beside the signer's)
+      ,{<<"Custom-SIP-Headers">>, stepswitch_stir:drop_foreign_identity(kz_json:get_value(<<"Custom-SIP-Headers">>, OffnetReq)
+                                                                        ,<<"the originate request">>
+                                                                        )
+       }
       ,{<<"Dial-Endpoint-Method">>, <<"single">>}
       ,{<<"Endpoints">>, FmtEndpoints}
       ,{<<"Existing-Call-ID">>, kz_json:get_value(<<"Existing-Call-ID">>, OffnetReq)}

@@ -179,7 +179,7 @@ list_doc() ->
       "* `created`: timestamp number document was created.\n"
       "* `modified`: timestamp number document was last updated.\n"
       "* `used_by`: Kazoo application handling this number.\n"
-      "* `ported_in`: whether this number was imported as part of a port request ('true' of 'false').\n"
+      "* `ported_in`: whether this number was imported as part of a port request ('true' of 'false'); honoured only for a superduper admin.\n"
       "* `carrier_module`: service that created the number document.\n"
       "* `cnam.inbound`: whether inbound CNAM is activated ('true' or 'false').\n"
       "* `cnam.outbound`: caller ID to use on outbound calls.\n"
@@ -573,7 +573,7 @@ import(#{'account_id' := Account
               ,{'batch_run', 'true'}
               ,{'assign_to', AccountId}
               ,{'module_name', import_module_name(AuthAccountId, Carrier)}
-              ,{'ported_in', PortedIn =:= <<"true">>}
+              ,{'ported_in', import_ported_in(AuthAccountId, PortedIn)}
               ,{'public_fields', public_fields(Args)}
               | import_state(AuthAccountId, State)
               ],
@@ -648,6 +648,16 @@ import_module_name(AuthBy, Carrier) ->
         'undefined' -> ?IMPORT_DEFAULTS_TO_CARRIER;
         _ -> Carrier
     end.
+
+%% `ported_in' lets a number past `knm_lib:ensure_account_can_create/2'
+%% and puts it in service at once, which makes it the account's own number
+%% to everything that asks the number manager -- STIR/SHAKEN signs such a
+%% number at A. A CSV cell is not a port, so like `state' and the carrier
+%% module it is taken only from a superduper admin.
+-spec import_ported_in(kz_term:ne_binary(), kz_term:api_binary()) -> boolean().
+import_ported_in(AuthBy, PortedIn) ->
+    PortedIn =:= <<"true">>
+        andalso kzd_accounts:is_superduper_admin(AuthBy).
 
 import_state(AuthBy, State) ->
     case kzd_accounts:is_superduper_admin(AuthBy)

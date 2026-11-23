@@ -469,6 +469,27 @@
             },
             "type": "array"
         },
+        "stir": {
+            "description": "STIR/SHAKEN policy for calls through this resource",
+            "properties": {
+                "sign": {
+                    "default": true,
+                    "description": "Whether calls sent through this resource carry a STIR/SHAKEN Identity header signed by Kazoo",
+                    "type": "boolean"
+                },
+                "verify": {
+                    "default": "trust_upstream",
+                    "description": "How the verdict on calls arriving from this resource is reached: trust_upstream takes the carrier's own verdict (verstat, P-Attestation-Indicator) and verifies the Identity header only when the carrier gave none, verify always verifies the Identity header, ignore records nothing",
+                    "enum": [
+                        "trust_upstream",
+                        "verify",
+                        "ignore"
+                    ],
+                    "type": "string"
+                }
+            },
+            "type": "object"
+        },
         "supports_pidflo": {
             "description": "Whether or not the resource supports multi-part PIDF+LO INVITEs for calls",
             "type": "boolean"

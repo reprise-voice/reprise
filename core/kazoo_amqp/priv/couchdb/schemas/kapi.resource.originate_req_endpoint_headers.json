@@ -99,6 +99,9 @@
         "Endpoint-URI": {
             "type": "string"
         },
+        "Exclude-Outgoing-Extra-Header": {
+            "type": "string"
+        },
         "Failover": {
             "type": "string"
         },
