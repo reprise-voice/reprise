@@ -18,6 +18,11 @@
             "description": "The CouchDB API port, typically 5984",
             "type": "integer"
         },
+        "async_query": {
+            "default": false,
+            "description": "kazoo_couch async_query",
+            "type": "boolean"
+        },
         "compact_automatically": {
             "default": false,
             "description": "kazoo_couch compact automatically",

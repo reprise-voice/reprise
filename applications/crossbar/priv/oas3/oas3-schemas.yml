@@ -60,6 +60,16 @@
       'description': the value to use when a caller ID name is required but unknown
       'type': string
   'type': object
+'account_config.callcenter':
+  'description': Schema for callcenter account_config
+  'properties':
+    'agent_presence_prefix':
+      'default': '*22'
+      'description': |-
+        Prefix of the agent login lamp's presence id: an agent_login key watches <prefix><user presence_id>. Overrides system_config/callcenter.agent_presence_prefix for the account
+      'pattern': '^[0-9*#]{1,10}$'
+      'type': string
+  'type': object
 'account_config.callflow':
   'description': Schema for callflow account_config
   'properties':
@@ -271,7 +281,8 @@
   'description': Schema for crossbar.auth account_config
   'properties':
     'auth_modules':
-      'additionalProperties': false
+      'additionalProperties':
+        '$ref': '#/auth_module_config'
       'default':
         'cb_api_auth':
           'enabled': true
@@ -362,7 +373,7 @@
   'description': Schema for fax account_config
   'properties':
     'default_smtp_domain':
-      'default': fax.kazoo.io
+      'default': fax.example.com
       'description': fax defaultsmtp domain
       'type': string
     'log_faxbox_errors':
@@ -1777,6 +1788,79 @@
       'description': Determines if server side call waiting is enabled/disabled
       'type': boolean
   'type': object
+'callcenter_agent':
+  'description': An agent's call center availability, kept per user and written on every change
+  'properties':
+    'agent_id':
+      'description': The user this document is about
+      'type': string
+    'availability':
+      'default': logged_out
+      'description': What the agent, a supervisor or an automatic rule chose
+      'enum':
+        - logged_out
+        - available
+        - available_on_demand
+        - on_break
+      'type': string
+    'break_ends':
+      'description': |-
+        When the break the agent is on ends by itself, in Gregorian seconds; set by a break given a timeout and removed by every other change
+      'minimum': 0
+      'type': integer
+    'counters':
+      'default':
+      'description': Counters kept since the agent last logged in
+      'properties':
+        'calls_answered':
+          'default': 0
+          'description': Queue calls answered since login
+          'minimum': 0
+          'type': integer
+        'last_call_end':
+          'description': When the agent's last queue call ended, in Gregorian seconds
+          'minimum': 0
+          'type': integer
+        'missed':
+          'default': 0
+          'description': Offers missed since login, not counted while the agent is on break or logged out
+          'minimum': 0
+          'type': integer
+        'talk_time_s':
+          'default': 0
+          'description': Seconds spent on queue calls since login
+          'minimum': 0
+          'type': integer
+      'type': object
+    'presence_id':
+      'description': |-
+        Where the agent's login lamp is published, stored by a callcenter_agent callflow action that names one; overrides <prefix><user presence_id>
+      'type': string
+    'previous':
+      'description': The availability to restore when do-not-disturb is cleared
+      'enum':
+        - logged_out
+        - available
+        - available_on_demand
+        - on_break
+      'type': string
+    'source':
+      'description': What made the last change
+      'enum':
+        - phone
+        - ui
+        - supervisor
+        - no_answer
+        - dnd
+        - system
+      'type': string
+    'timestamp':
+      'description': When the availability last changed, in Gregorian seconds
+      'type': integer
+  'required':
+    - agent_id
+    - availability
+  'type': object
 'caller_id':
   'description': Defines caller ID settings based on the type of call being made
   'properties':
@@ -2405,6 +2489,58 @@
       'description': |-
         When set to true this callflow action is skipped, advancing to the wildcard branch (if any)
       'type': boolean
+  'type': object
+'callflows.callcenter':
+  'description': Validator for the callcenter callflow data object
+  'properties':
+    'id':
+      'description': ID of the queue the caller joins
+      'type': string
+    'priority':
+      'default': 0
+      'description': Order this caller ahead of lower priorities regardless of age
+      'minimum': 0
+      'type': integer
+    'skip_module':
+      'description': |-
+        When set to true this callflow action is skipped, advancing to the wildcard branch (if any)
+      'type': boolean
+  'type': object
+'callflows.callcenter_agent':
+  'description': Validator for the callcenter_agent callflow data object
+  'properties':
+    'action':
+      'description': |-
+        Which change to make to the calling user's availability. toggle_login on the pattern ^\*22([0-9]*)$ toggles the agent whose presence_id is the captured extension instead: the caller's own, or anybody's when the caller is an account admin
+      'enum':
+        - login
+        - logout
+        - toggle_login
+        - break
+        - resume
+        - toggle_break
+      'type': string
+    'presence_id':
+      'description': |-
+        Presence id of the BLF key that shows this agent's login; remembered for later changes. Empty uses <prefix><presence_id>
+      'type': string
+    'require_pin':
+      'default': false
+      'description': |-
+        Ask for an agent id and a PIN even when the call carries an owner, so that the agent who types them is the one whose availability changes rather than the phone's owner
+      'type': boolean
+    'skip_module':
+      'description': |-
+        When set to true this callflow action is skipped, advancing to the wildcard branch (if any)
+      'type': boolean
+    'timeout':
+      'default': 0
+      'description': |-
+        Seconds the agent stays on break before returning to their previous availability, 0 for no limit
+      'minimum': 0
+      'type': integer
+  'required':
+    - action
   'type': object
 'callflows.callflow':
   'description': Validator for the callflow data object
@@ -4342,6 +4478,15 @@
         - h
       'type': string
   'type': object
+'callflows.stir_shaken':
+  'description': |-
+    Validator for the stir_shaken callflow data object. The action branches on the inbound STIR/SHAKEN verdict, to the child passed, failed or none, and takes no data of its own: the prefix put on the caller id name of a failed call is cid_name_prefix_failed in system_config/stir
+  'properties':
+    'skip_module':
+      'description': |-
+        When set to true this callflow action is skipped, advancing to the wildcard branch (if any)
+      'type': boolean
+  'type': object
 'callflows.temporal_route':
   'description': Validator for the temporal_route callflow data object
   'properties':
@@ -6222,6 +6367,7 @@
         'type':
           'description': Feature key type
           'enum':
+            - agent_login
             - line
             - presence
             - personal_parking
@@ -8747,6 +8893,91 @@
         The duration (in seconds) for which notification delivery should be retried if it fails
       'type': integer
   'type': object
+'queue_call':
+  'description': |-
+    One call's passage through a queue, written to the monthly account database as it happens
+  'properties':
+    'agent_call_id':
+      'description': Call-ID of the agent's leg
+      'type': string
+    'agent_id':
+      'description': The agent who answered, or the supervisor who picked the caller up
+      'type': string
+    'answered':
+      'description': When the agent answered, in Gregorian seconds
+      'type': integer
+    'call_id':
+      'description': Call-ID of the caller's channel
+      'type': string
+    'caller_id_name':
+      'description': The caller's name
+      'type': string
+    'caller_id_number':
+      'description': The caller's number
+      'type': string
+    'cancel_reason':
+      'description': Why the caller left without being connected
+      'enum':
+        - hangup
+        - timeout
+        - no_agent_timeout
+        - exit_key
+        - queue_full
+        - transfer
+        - queue_deleted
+      'type': string
+    'cancelled':
+      'description': When the caller left without being connected, in Gregorian seconds
+      'type': integer
+    'ended':
+      'description': When the call finished, in Gregorian seconds
+      'type': integer
+    'joined':
+      'description': When the caller entered the queue, in Gregorian seconds
+      'type': integer
+    'offered_to':
+      'default':
+      'description': Every agent this caller was offered to, in order
+      'items':
+        'description': One offer
+        'properties':
+          'agent_id':
+            'description': The agent offered the caller
+            'type': string
+          'at':
+            'description': When the offer was made, in Gregorian seconds
+            'type': integer
+          'leg_prefix':
+            'description': What the call ids of the legs the offer rang start with, followed by a dash
+            'type': string
+          'outcome':
+            'description': How the offer ended
+            'enum':
+              - answered
+              - no_answer
+              - busy
+              - reject
+              - cancelled
+            'type': string
+          'pickup':
+            'description': The phone rung was a supervisor's, for a pickup, and not an agent's
+            'type': boolean
+        'type': object
+      'type': array
+    'picked_up':
+      'description': 'A supervisor picked the caller up: agent_id is the supervisor, who is not counted as an agent who answered'
+      'type': boolean
+    'queue_id':
+      'description': The queue the caller waited in
+      'type': string
+    'recording':
+      'description': Recording of the call, when the queue or the agent asked for one
+      'type': string
+  'required':
+    - call_id
+    - joined
+    - queue_id
+  'type': object
 'queue_update':
   'description': Schema for queue update request
   'properties':
@@ -8766,8 +8997,18 @@
     - queue_id
   'type': object
 'queues':
-  'description': Call Queues - FIFO call queues for serializing callers connecting to agents
+  'description': Call queues - callers wait here in order until an agent is free to take them
   'properties':
+    'agent_no_answer_status':
+      'default': on_break
+      'description': |-
+        Availability an agent is moved to once they have missed max_no_answer offers
+      'enum':
+        - logged_out
+        - available
+        - available_on_demand
+        - on_break
+      'type': string
     'agent_ring_timeout':
       'default': 15
       'description': |-
@@ -8779,92 +9020,103 @@
       'description': Pre-defined wait period applied after an agent handles a customer call
       'minimum': 0
       'type': integer
+    'agents':
+      'default':
+      'description': The agents in this queue and their tier
+      'items':
+        'description': One agent's tier in this queue
+        'properties':
+          'id':
+            'description': The user who is the agent
+            'type': string
+          'level':
+            'default': 1
+            'description': Agents at lower levels are offered a caller first
+            'minimum': 1
+            'type': integer
+          'position':
+            'default': 1
+            'description': |-
+              Order within the level, and the tie-break every strategy falls back to
+            'minimum': 1
+            'type': integer
+        'required':
+          - id
+        'type': object
+      'type': array
     'announce':
-      'description': |-
-        Media ID (or appropriate media URI) of media to play when caller is about to be connected.
-      'type': string
-    'announcements':
-      'description': Configuration for periodic announcements to callers waiting in the queue
+      'default':
+      'description': Media played to waiting callers at a fixed interval
       'properties':
         'interval':
           'default': 30
-          'description': Time between announcements
+          'description': Seconds between announcements
           'minimum': 15
           'type': integer
         'media':
-          'description': Custom prompts to be played for the announcements
-          'properties':
-            'in_the_queue':
-              'description': Played after the numeric position
-              'type': string
-            'increase_in_call_volume':
-              'description': |-
-                Played if the estimated wait time has increased since the previous wait time announcement
-              'type': string
-            'the_estimated_wait_time_is':
-              'description': Played before the estimated wait time media
-              'type': string
-            'you_are_at_position':
-              'description': Played before the numeric position
-              'type': string
-          'required':
-            - in_the_queue
-            - increase_in_call_volume
-            - the_estimated_wait_time_is
-            - you_are_at_position
-          'type': object
-        'position_announcements_enabled':
-          'description': |-
-            Whether announcements of the caller's position in the queue should be played
-          'type': boolean
-        'wait_time_announcements_enabled':
-          'description': |-
-            Whether announcements of the estimated wait time in the queue should be played
+          'description': Media ID (or appropriate media URI) of the announcement
+          'type': string
+        'position':
+          'default': false
+          'description': Speak the caller's position in the queue before the announcement
           'type': boolean
       'type': object
-    'caller_exit_key':
-      'default': '#'
+    'announcements':
       'description': |-
-        Key caller can press while on hold to exit the queue and continue in the callflow
-      'enum':
-        - 1
-        - 2
-        - 3
-        - 4
-        - 5
-        - 6
-        - 7
-        - 8
-        - 9
-        - '*'
-        - 0
-        - '#'
-      'type': string
-    'cdr_url':
-      'description': An optional HTTP URL to POST the CDR
-      'format': uri
-      'minLength': 6
-      'type': string
-    'connection_timeout':
-      'default': 3600
+        Overrides for the prompts the position announcement is made of; the announcement itself is set in announce
+      'properties':
+        'media':
+          'description': |-
+            The prompts spoken around the caller's position; a prompt left out is the system prompt
+          'properties':
+            'in_the_queue':
+              'description': |-
+                Media ID (or appropriate media URI) played after the caller's position
+              'type': string
+            'you_are_at_position':
+              'description': |-
+                Media ID (or appropriate media URI) played before the caller's position
+              'type': string
+          'type': object
+      'type': object
+    'cid_prefix':
       'description': |-
-        In seconds, how long to try to connect the caller before progressing past the queue callflow action
-      'minimum': 0
-      'type': integer
+        Prefixed to the caller ID name shown to the agent, so they know which queue the call came from
+      'type': string
     'enter_when_empty':
       'default': true
       'description': Allows a caller to enter a queue and wait when no agents are available
       'type': boolean
-    'max_priority':
+    'exit_keys':
+      'default': '#'
       'description': |-
-        Maximum possible priority level queue will support. Can not be redefined for existing queue.
-      'maximum': 255
-      'minimum': 0
-      'type': integer
+        DTMF keys that let a caller leave the queue and continue in the callflow; an empty string turns them off
+      'pattern': ^[0-9*#]*$
+      'type': string
+    'greeting':
+      'description': |-
+        Media ID (or appropriate media URI) of media played once as the caller enters the queue
+      'type': string
     'max_queue_size':
       'default': 0
+      'description': How many callers are allowed to wait on hold in the queue (0 for no limit)
+      'type': integer
+    'max_wait_time':
+      'default': 0
       'description': |-
-        How many callers are allowed to wait on hold in the queue (0 for no limit)
+        Seconds a caller may wait before the callflow continues on the timeout branch, 0 for no limit
+      'minimum': 0
+      'type': integer
+    'max_wait_time_with_no_agent':
+      'default': 0
+      'description': Seconds a caller may wait while no agent could take them, 0 for no limit
+      'minimum': 0
+      'type': integer
+    'max_wait_time_with_no_agent_time_reached':
+      'default': 5
+      'description': |-
+        Seconds a caller must already have waited before max_wait_time_with_no_agent starts to apply
+      'minimum': 0
       'type': integer
     'moh':
       'description': |-
@@ -8875,28 +9127,75 @@
       'maxLength': 128
       'minLength': 1
       'type': string
-    'record_caller':
+    'outbound_caller_id':
+      'default':
+      'description': Caller ID for agent legs to contacts outside the account
+      'properties':
+        'name':
+          'description': Caller ID name
+          'type': string
+        'number':
+          'description': Caller ID number
+          'type': string
+      'type': object
+    'record':
       'default': false
-      'description': 'When enabled, a caller''s audio will be recorded'
+      'description': Record queue calls, through the account's own recording storage
       'type': boolean
-    'recording_url':
-      'description': |-
-        An optional HTTP URL to PUT the call recording after the call ends (and should respond to GET for retrieving the audio data)
-      'format': uri
-      'minLength': 6
-      'type': string
     'ring_simultaneously':
       'default': 1
       'description': The number of agents to try in parallel when connecting a caller
       'minimum': 1
       'type': integer
+    'skip_agents_with_external_calls':
+      'default': true
+      'description': |-
+        Do not offer callers to an agent who is on a call that did not come from a queue
+      'type': boolean
     'strategy':
-      'default': round_robin
-      'description': The queue strategy for connecting agents to callers
+      'default': longest_idle
+      'description': How the queue picks which agent to offer a caller to
       'enum':
         - ring_all
+        - longest_idle
         - round_robin
+        - least_talk_time
+        - fewest_calls
+        - sequential
         - most_idle
+      'type': string
+    'tier_rules':
+      'default':
+      'description': |-
+        When higher tier levels are added to the set of agents a waiting caller may be offered to
+      'properties':
+        'apply':
+          'default': false
+          'description': |-
+            Add levels as the caller waits rather than offering every level at once
+          'type': boolean
+        'no_agent_no_wait':
+          'default': true
+          'description': Skip the wait when the current levels hold no agent who could answer
+          'type': boolean
+        'wait_multiply_level':
+          'default': false
+          'description': |-
+            Multiply wait_seconds by the level, so each level waits longer than the last
+          'type': boolean
+        'wait_seconds':
+          'default': 0
+          'description': Seconds a caller waits before the next level is added
+          'minimum': 0
+          'type': integer
+      'type': object
+    'time_base_score':
+      'default': system
+      'description': |-
+        Whether a caller's age counts from when they entered the system or when they entered this queue, which decides their place after a transfer
+      'enum':
+        - system
+        - queue
       'type': string
   'required':
     - name
@@ -10818,6 +11117,70 @@
       'description': parser specifications. Will be started on app startup
       'type': object
   'type': object
+'system_config.callcenter':
+  'description': Schema for callcenter system_config
+  'properties':
+    'agent_presence_prefix':
+      'default': '*22'
+      'description': |-
+        Prefix of the agent login lamp's presence id: an agent_login key watches <prefix><user presence_id>. An account's configs/callcenter overrides it
+      'pattern': '^[0-9*#]{1,10}$'
+      'type': string
+    'announce_default_interval_s':
+      'default': 30
+      'description': Seconds between periodic announcements when a queue does not set its own
+      'minimum': 15
+      'type': integer
+    'default_agent_no_answer_status':
+      'default': on_break
+      'description': |-
+        Availability an agent is moved to after too many missed offers, when a queue does not set its own
+      'enum':
+        - logged_out
+        - available
+        - available_on_demand
+        - on_break
+      'type': string
+    'offer_grace_s':
+      'default': 5
+      'description': |-
+        Seconds an offer is allowed to run past the agent's ring timeout before it is given up on
+      'minimum': 0
+      'type': integer
+    'queue_refresh_s':
+      'default': 10
+      'description': |-
+        Seconds between the dispatcher's reads of a queue document from the database instead of the cache, which bounds how long an edit whose change notice was lost stays unseen
+      'minimum': 1
+      'type': integer
+    'reconcile_interval_s':
+      'default': 30
+      'description': |-
+        Seconds between reconciliation sweeps of agent activity and waiting callers
+      'minimum': 1
+      'type': integer
+    'shards':
+      'default': 64
+      'description': |-
+        How many dispatcher shards accounts hash into; changing it restarts the application on every node
+      'minimum': 1
+      'type': integer
+    'stub_offer':
+      'default': false
+      'description': |-
+        Answer every offer with a process that rings nobody, for a cluster with no media server
+      'type': boolean
+    'stub_offer_answer_ms':
+      'default': 1000
+      'description': Milliseconds a stub offer rings before it answers
+      'minimum': 0
+      'type': integer
+    'stub_offer_talk_ms':
+      'default': 3000
+      'description': Milliseconds a stub offer stays answered before it ends
+      'minimum': 0
+      'type': integer
+  'type': object
 'system_config.callflow':
   'description': Schema for callflow system_config
   'properties':
@@ -11711,7 +12074,7 @@
   'description': Schema for crossbar.accounts system_config
   'properties':
     'account_realm_suffix':
-      'default': sip.2600hz.com
+      'default': sip.example.com
       'description': crossbar.accounts account realm suffix
       'type': string
     'allow_move':
@@ -11797,7 +12160,8 @@
   'description': Schema for crossbar.auth system_config
   'properties':
     'auth_modules':
-      'additionalProperties': false
+      'additionalProperties':
+        '$ref': '#/auth_module_config'
       'default':
         'cb_api_auth':
           'enabled': true
@@ -11864,6 +12228,12 @@
         - md5
         - sha
       'type': string
+    'external_auth_methods':
+      'default': []
+      'description': Token methods minted by another application (with kz_auth:create_token/1) rather than by a crossbar auth module; each gets a default auth_modules entry, joins the available_auth_methods default and can key token restrictions
+      'items':
+        'type': string
+      'type': array
     'lock_account_on_failed_attempts':
       'default': false
       'description': crossbar auth lock_account_on_failed_attempts
@@ -12866,7 +13236,7 @@
       'description': fax default retry period
       'type': integer
     'default_smtp_domain':
-      'default': fax.kazoo.io
+      'default': fax.example.com
       'description': fax default SMTP domain
       'type': string
     'delete_empty_faxes':
@@ -13518,7 +13888,7 @@
       'description': kazoo_endpoint.mobile prefix
       'type': string
     'realm':
-      'default': mobile.k.zswitch.net
+      'default': mobile.example.com
       'description': kazoo_endpoint.mobile realm
       'type': string
     'sms':
@@ -14740,6 +15110,59 @@
       'description': number_manager.telnyx user
       'type': string
   'type': object
+'system_config.number_manager.telnyx2':
+  'description': Schema for number_manager.telnyx2 system_config
+  'properties':
+    'connection_id':
+      'description': Telnyx connection id assigned to numbers ordered through this carrier
+      'type': string
+    'debug':
+      'default': false
+      'description': number_manager.telnyx2 debug
+      'type': boolean
+    'default_country_code':
+      'default': US
+      'description': country code used for E911 addresses when the address does not carry one
+      'type': string
+    'enable_provisioning':
+      'default': true
+      'description': number_manager.telnyx2 enable provisioning
+      'type': boolean
+    'messaging_profile_id':
+      'description': Telnyx messaging profile id assigned to numbers ordered through this carrier
+      'type': string
+    'monthly_cost':
+      'default': 1.0
+      'description': allowed monthly recurring cost when acquiring number
+      'type': number
+    'order_poll_attempts':
+      'default': 10
+      'description': how many times to poll a pending number order before giving up
+      'type': integer
+    'order_poll_interval_ms':
+      'default': 2000
+      'description': time to wait between polls of a pending number order in milliseconds
+      'type': integer
+    'sandbox_provisioning':
+      'default': false
+      'description': number_manager.telnyx2 sandbox provisioning
+      'type': boolean
+    'should_filter_rates':
+      'default': false
+      'description': should search results be filtered based on configured allowed cost?
+      'type': boolean
+    'should_keep_best_effort':
+      'default': false
+      'description': 'should search results also contain ''best effort'' results?'
+      'type': boolean
+    'token':
+      'description': number_manager.telnyx2 token
+      'type': string
+    'upfront_cost':
+      'default': 1.0
+      'description': allowed upfront cost when acquiring number
+      'type': number
+  'type': object
 'system_config.number_manager.vitelity':
   'description': Schema for number_manager.vitelity system_config
   'properties':
@@ -15055,6 +15478,12 @@
           'default': {}
           'description': pusher firebase headers
           'type': object
+      'type': object
+    'token_type_modules':
+      'additionalProperties':
+        'type': string
+      'default': {}
+      'description': 'Further push token types and the module (pusher_module behaviour, outside the pusher application) that serves each, as {"<token type>": "<module>"}; built-in token types cannot be remapped'
       'type': object
   'type': object
 'system_config.qubicle':
@@ -16043,45 +16472,6 @@
     'rollover_in_parallel':
       'default': 10
       'description': How many accounts to rollover services for per pass (in parallel)
-      'type': integer
-  'type': object
-'system_config.telemetry':
-  'description': Schema for telemetry system_config
-  'properties':
-    'cluster_id_anonymized':
-      'default': true
-      'description': telemetry cluster_id_anonymized
-      'type': boolean
-    'collection_interval_s':
-      'default': 86400
-      'description': telemetry collection_interval_s
-      'type': integer
-    'include_apps':
-      'default': true
-      'description': telemetry include_apps
-      'type': boolean
-    'include_database':
-      'default': true
-      'description': telemetry include_database
-      'type': boolean
-    'include_freeswitch':
-      'default': true
-      'description': telemetry include_freeswitch
-      'type': boolean
-    'include_kamailio':
-      'default': true
-      'description': telemetry include_kamailio
-      'type': boolean
-    'include_services':
-      'default': true
-      'description': telemetry include_services
-      'type': boolean
-  'type': object
-'system_config.telemetry.waveguide':
-  'description': Schema for telemetry.waveguide system_config
-  'properties':
-    'activation':
-      'description': telemetry waveguide activation
       'type': integer
   'type': object
 'system_config.teletype':
@@ -17493,6 +17883,61 @@
               - address
             'type': object
           'type': array
+      'type': object
+    'call_center':
+      'description': |-
+        Call center agent attributes, which make this user an agent; a user who is not an agent has no call_center object at all
+      'properties':
+        'agent_id':
+          'description': |-
+            Login id for the agent feature code, when it differs from the user id
+          'maxLength': 15
+          'type': string
+        'busy_delay':
+          'default': 0
+          'description': |-
+            Seconds before this agent is offered another caller after their phone answered busy
+          'minimum': 0
+          'type': integer
+        'max_no_answer':
+          'default': 0
+          'description': |-
+            Missed offers before the agent is moved to the queue's agent_no_answer_status, 0 for no limit
+          'minimum': 0
+          'type': integer
+        'no_answer_delay':
+          'default': 0
+          'description': |-
+            Seconds before this agent is offered another caller after their phone did not answer
+          'minimum': 0
+          'type': integer
+        'pin':
+          'description': PIN for the agent feature code
+          'maxLength': 15
+          'minLength': 4
+          'pattern': '^[0-9]+$'
+          'type': string
+        'record':
+          'default': false
+          'description': |-
+            Record this agent's legs, through the account's own recording storage
+          'type': boolean
+        'reject_delay':
+          'default': 0
+          'description': |-
+            Seconds before this agent is offered another caller after their phone rejected one
+          'minimum': 0
+          'type': integer
+        'ring_timeout':
+          'description': |-
+            Seconds this agent's phones ring on an offer, overriding the queue's agent_ring_timeout
+          'minimum': 1
+          'type': integer
+        'wrapup_time':
+          'description': |-
+            Seconds this agent is left alone after a queue call, overriding the queue's agent_wrapup_time
+          'minimum': 0
+          'type': integer
       'type': object
     'call_failover':
       '$ref': '#/call_failover'
