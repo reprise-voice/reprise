@@ -16,6 +16,10 @@ Here are a non-exhaustive list of bindings provided per default callback module:
     * `conference.command.*`
 * `bh_fax`:
     * `fax.status.*`
+* `bh_callcenter`:
+    * `callcenter.agent.{AGENT_ID}`
+    * `callcenter.queue.{QUEUE_ID}`
+    * `callcenter.call.{CALL_ID}`
 
 ### Writing your own bindings
 

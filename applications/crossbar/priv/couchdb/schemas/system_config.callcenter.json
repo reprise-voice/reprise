@@ -1,0 +1,72 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "system_config.callcenter",
+    "description": "Schema for callcenter system_config",
+    "properties": {
+        "agent_presence_prefix": {
+            "default": "*22",
+            "description": "Prefix of the agent login lamp's presence id: an agent_login key watches <prefix><user presence_id>. An account's configs/callcenter overrides it",
+            "pattern": "^[0-9*#]{1,10}$",
+            "type": "string"
+        },
+        "announce_default_interval_s": {
+            "default": 30,
+            "description": "Seconds between periodic announcements when a queue does not set its own",
+            "minimum": 15,
+            "type": "integer"
+        },
+        "default_agent_no_answer_status": {
+            "default": "on_break",
+            "description": "Availability an agent is moved to after too many missed offers, when a queue does not set its own",
+            "enum": [
+                "logged_out",
+                "available",
+                "available_on_demand",
+                "on_break"
+            ],
+            "type": "string"
+        },
+        "offer_grace_s": {
+            "default": 5,
+            "description": "Seconds an offer is allowed to run past the agent's ring timeout before it is given up on",
+            "minimum": 0,
+            "type": "integer"
+        },
+        "queue_refresh_s": {
+            "default": 10,
+            "description": "Seconds between the dispatcher's reads of a queue document from the database instead of the cache, which bounds how long an edit whose change notice was lost stays unseen",
+            "minimum": 1,
+            "type": "integer"
+        },
+        "reconcile_interval_s": {
+            "default": 30,
+            "description": "Seconds between reconciliation sweeps of agent activity and waiting callers",
+            "minimum": 1,
+            "type": "integer"
+        },
+        "shards": {
+            "default": 64,
+            "description": "How many dispatcher shards accounts hash into; changing it restarts the application on every node",
+            "minimum": 1,
+            "type": "integer"
+        },
+        "stub_offer": {
+            "default": false,
+            "description": "Answer every offer with a process that rings nobody, for a cluster with no media server",
+            "type": "boolean"
+        },
+        "stub_offer_answer_ms": {
+            "default": 1000,
+            "description": "Milliseconds a stub offer rings before it answers",
+            "minimum": 0,
+            "type": "integer"
+        },
+        "stub_offer_talk_ms": {
+            "default": 3000,
+            "description": "Milliseconds a stub offer stays answered before it ends",
+            "minimum": 0,
+            "type": "integer"
+        }
+    },
+    "type": "object"
+}

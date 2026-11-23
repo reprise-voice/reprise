@@ -51,7 +51,7 @@
         "non_direct_modules": {
             "default": [
                 "cf_ring_group",
-                "acdc_util",
+                "callcenter",
                 "cf_qubicle",
                 "qubicle"
             ],

@@ -17,6 +17,16 @@ Key | Description | Type | Default | Required | Support Level
 `addresses` | User addresses | `object()` |   | `false` |  
 `allowed_proxy_ips.[]` |   | `string()` |   | `false` |  
 `allowed_proxy_ips` | Allowed proxy ips from which user can authenticate | `array(string())` |   | `false` |  
+`call_center.agent_id` | Login id for the agent feature code, when it differs from the user id | `string(0..15)` |   | `false` |  
+`call_center.busy_delay` | Seconds before this agent is offered another caller after their phone answered busy | `integer(0..)` | `0` | `false` |  
+`call_center.max_no_answer` | Missed offers before the agent is moved to the queue's agent_no_answer_status, 0 for no limit | `integer(0..)` | `0` | `false` |  
+`call_center.no_answer_delay` | Seconds before this agent is offered another caller after their phone did not answer | `integer(0..)` | `0` | `false` |  
+`call_center.pin` | PIN for the agent feature code | `string(4..15)` |   | `false` |  
+`call_center.record` | Record this agent's legs, through the account's own recording storage | `boolean()` | `false` | `false` |  
+`call_center.reject_delay` | Seconds before this agent is offered another caller after their phone rejected one | `integer(0..)` | `0` | `false` |  
+`call_center.ring_timeout` | Seconds this agent's phones ring on an offer, overriding the queue's agent_ring_timeout | `integer(1..)` |   | `false` |  
+`call_center.wrapup_time` | Seconds this agent is left alone after a queue call, overriding the queue's agent_wrapup_time | `integer(0..)` |   | `false` |  
+`call_center` | Call center agent attributes, which make this user an agent; a user who is not an agent has no call_center object at all | `object()` |   | `false` |  
 `call_failover` | The device call failover parameters, to replace the device with an extension/phone number when device is offline. | [#/definitions/call_failover](#call_failover) |   | `false` |  
 `call_forward` | Call forward settings | [#/definitions/call_forward](#call_forward) |   | `false` |  
 `call_limits` | Schema for call limits | [#/definitions/call_limits](#call_limits) |   | `false` |  

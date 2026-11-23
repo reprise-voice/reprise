@@ -21,8 +21,6 @@
 -define(KZ_WEBHOOKS_DB, <<"webhooks">>).
 -define(KZ_FUNCTIONS_DB, <<"functions">>).
 
--define(KZ_ACDC_DB, <<"acdc">>).
-
 -define(KZ_CCCPS_DB, <<"cccps">>).
 
 -define(KZ_PORT_REQUESTS_DB, <<"port_requests">>).
@@ -50,7 +48,6 @@
                        ,?KZ_ANONYMOUS_CDR_DB
                        ,?KZ_PORT_REQUESTS_DB
                        ,?KZ_DEDICATED_IP_DB
-                       ,?KZ_ACDC_DB
                        ,?KZ_OAUTH_DB
                        ,?KZ_FUNCTIONS_DB
                        ,?KZ_WEBHOOKS_DB

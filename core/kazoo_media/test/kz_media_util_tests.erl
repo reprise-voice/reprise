@@ -33,3 +33,19 @@ apply_get_prompt([Name, Lang]) ->
     kz_media_util:get_prompt(Name, Lang);
 apply_get_prompt([Name, Lang, AccountId]) ->
     kz_media_util:get_prompt(Name, Lang, AccountId).
+
+media_path_test_() ->
+    AccountId = kz_binary:rand_hex(16),
+    [{"a media document of the account's is put under the account"
+     ,?_assertEqual(<<"/", AccountId/binary, "/hold-music">>, kz_media_util:media_path(<<"hold-music">>, AccountId))
+     }
+    ,{"a stream is the switch's own"
+     ,?_assertEqual(<<"local_stream://default">>, kz_media_util:media_path(<<"local_stream://default">>, AccountId))
+     }
+    ,{"a channel variable is the switch's own"
+     ,?_assertEqual(<<"${hold_music}">>, kz_media_util:media_path(<<"${hold_music}">>, AccountId))
+     }
+    ,{"nothing is nothing"
+     ,?_assertEqual('undefined', kz_media_util:media_path(<<>>, AccountId))
+     }
+    ].

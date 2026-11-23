@@ -1,0 +1,52 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.agent_answered",
+    "description": "An agent answered a queue call",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Agent-Call-ID": {
+            "description": "Call-ID of the agent's leg",
+            "type": "string"
+        },
+        "Agent-ID": {
+            "description": "The agent, which is a user of the account",
+            "type": "string"
+        },
+        "Answered-Timestamp": {
+            "description": "When the agent answered, in Gregorian seconds",
+            "type": "integer"
+        },
+        "Call-ID": {
+            "description": "Call-ID of the caller's channel",
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "agent_answered"
+            ],
+            "type": "string"
+        },
+        "Queue-ID": {
+            "description": "Queue the event belongs to",
+            "type": "string"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Queue-ID",
+        "Agent-ID",
+        "Call-ID",
+        "Agent-Call-ID",
+        "Answered-Timestamp"
+    ],
+    "type": "object"
+}

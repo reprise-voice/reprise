@@ -416,6 +416,10 @@ media_path(<<"/system_media", _/binary>> = Path, _AccountId) -> Path;
 media_path(<<"system_media", _/binary>> = Path, _AccountId) -> Path;
 media_path(<<"local_stream://",_/binary>> = Path, _AccountId) -> Path;
 media_path(<<"silence_stream://",_/binary>> = Path, _AccountId) -> Path;
+%% A channel variable, `${hold_music}' being the one that matters: the switch
+%% expands it, so it is not a media document of the account's and is not put
+%% under the account.
+media_path(<<"$", _/binary>> = Variable, _AccountId) -> Variable;
 media_path(_Path, 'undefined') -> 'undefined';
 media_path(Path, AccountId) when is_binary(AccountId) ->
     case binary:match(Path, <<"/">>) of

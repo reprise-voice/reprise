@@ -79,9 +79,6 @@ Examples:
         "classification": "account"
       },
       {
-        "classification": "acdc"
-      },
-      {
         "classification": "aggregate"
       },
       {

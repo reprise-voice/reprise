@@ -1,0 +1,59 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.member_cancel",
+    "description": "A caller has left a queue before being connected to an agent",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Call-ID": {
+            "description": "Call-ID of the caller's channel",
+            "type": "string"
+        },
+        "Cancelled-Timestamp": {
+            "description": "When the caller left the queue, in Gregorian seconds",
+            "type": "integer"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "member_cancel"
+            ],
+            "type": "string"
+        },
+        "Joined-Timestamp": {
+            "description": "When the caller entered the queue, in Gregorian seconds",
+            "type": "integer"
+        },
+        "Queue-ID": {
+            "description": "Queue the event belongs to",
+            "type": "string"
+        },
+        "Reason": {
+            "description": "Why the caller left",
+            "enum": [
+                "hangup",
+                "timeout",
+                "no_agent_timeout",
+                "exit_key",
+                "queue_full",
+                "transfer",
+                "queue_deleted"
+            ],
+            "type": "string"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Queue-ID",
+        "Call-ID",
+        "Reason"
+    ],
+    "type": "object"
+}

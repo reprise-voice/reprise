@@ -201,7 +201,7 @@
 -define(UNKNOWN_CALLER_ID_NAME_KEY, <<"unknown_cid_name">>).
 
 -define(NON_DIRECT_MODULES_KEY, <<"non_direct_modules">>).
--define(DEFAULT_NON_DIRECT_MODULES, [<<"cf_ring_group">>, <<"acdc_util">>, <<"cf_qubicle">>, <<"qubicle">>]).
+-define(DEFAULT_NON_DIRECT_MODULES, [<<"cf_ring_group">>, <<"callcenter">>, <<"cf_qubicle">>, <<"qubicle">>]).
 
 -record(kapps_call, {call_id :: kz_term:api_binary()                       %% The UUID of the call
                     ,call_id_helper = fun default_helper_function/2 :: kapps_helper_function()         %% A function used when requesting the call id, to ensure it is up-to-date

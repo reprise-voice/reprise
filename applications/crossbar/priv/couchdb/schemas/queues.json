@@ -1,8 +1,19 @@
 {
     "$schema": "http://json-schema.org/draft-04/schema#",
     "_id": "queues",
-    "description": "Call Queues - FIFO call queues for serializing callers connecting to agents",
+    "description": "Call queues - callers wait here in order until an agent is free to take them",
     "properties": {
+        "agent_no_answer_status": {
+            "default": "on_break",
+            "description": "Availability an agent is moved to once they have missed max_no_answer offers",
+            "enum": [
+                "logged_out",
+                "available",
+                "available_on_demand",
+                "on_break"
+            ],
+            "type": "string"
+        },
         "agent_ring_timeout": {
             "default": 15,
             "description": "In seconds, how long to ring an agent before progressing to the next agent available",
@@ -15,103 +26,118 @@
             "minimum": 0,
             "type": "integer"
         },
-        "announce": {
-            "description": "Media ID (or appropriate media URI) of media to play when caller is about to be connected.",
-            "type": "string"
+        "agents": {
+            "default": [],
+            "description": "The agents in this queue and their tier",
+            "items": {
+                "description": "One agent's tier in this queue",
+                "properties": {
+                    "id": {
+                        "description": "The user who is the agent",
+                        "type": "string"
+                    },
+                    "level": {
+                        "default": 1,
+                        "description": "Agents at lower levels are offered a caller first",
+                        "minimum": 1,
+                        "type": "integer"
+                    },
+                    "position": {
+                        "default": 1,
+                        "description": "Order within the level, and the tie-break every strategy falls back to",
+                        "minimum": 1,
+                        "type": "integer"
+                    }
+                },
+                "required": [
+                    "id"
+                ],
+                "type": "object"
+            },
+            "type": "array"
         },
-        "announcements": {
-            "description": "Configuration for periodic announcements to callers waiting in the queue",
+        "announce": {
+            "default": {},
+            "description": "Media played to waiting callers at a fixed interval",
             "properties": {
                 "interval": {
                     "default": 30,
-                    "description": "Time between announcements",
+                    "description": "Seconds between announcements",
                     "minimum": 15,
                     "type": "integer"
                 },
                 "media": {
-                    "description": "Custom prompts to be played for the announcements",
-                    "properties": {
-                        "in_the_queue": {
-                            "description": "Played after the numeric position",
-                            "type": "string"
-                        },
-                        "increase_in_call_volume": {
-                            "description": "Played if the estimated wait time has increased since the previous wait time announcement",
-                            "type": "string"
-                        },
-                        "the_estimated_wait_time_is": {
-                            "description": "Played before the estimated wait time media",
-                            "type": "string"
-                        },
-                        "you_are_at_position": {
-                            "description": "Played before the numeric position",
-                            "type": "string"
-                        }
-                    },
-                    "required": [
-                        "in_the_queue",
-                        "increase_in_call_volume",
-                        "the_estimated_wait_time_is",
-                        "you_are_at_position"
-                    ],
-                    "type": "object"
+                    "description": "Media ID (or appropriate media URI) of the announcement",
+                    "type": "string"
                 },
-                "position_announcements_enabled": {
-                    "description": "Whether announcements of the caller's position in the queue should be played",
-                    "type": "boolean"
-                },
-                "wait_time_announcements_enabled": {
-                    "description": "Whether announcements of the estimated wait time in the queue should be played",
+                "position": {
+                    "default": false,
+                    "description": "Speak the caller's position in the queue before the announcement",
                     "type": "boolean"
                 }
             },
             "type": "object"
         },
-        "caller_exit_key": {
-            "default": "#",
-            "description": "Key caller can press while on hold to exit the queue and continue in the callflow",
-            "enum": [
-                "1",
-                "2",
-                "3",
-                "4",
-                "5",
-                "6",
-                "7",
-                "8",
-                "9",
-                "*",
-                "0",
-                "#"
-            ],
-            "type": "string"
+        "announcements": {
+            "description": "Overrides for the prompts the position announcement is made of; the announcement itself is set in announce",
+            "properties": {
+                "media": {
+                    "description": "The prompts spoken around the caller's position; a prompt left out is the system prompt",
+                    "properties": {
+                        "in_the_queue": {
+                            "description": "Media ID (or appropriate media URI) played after the caller's position",
+                            "type": "string"
+                        },
+                        "you_are_at_position": {
+                            "description": "Media ID (or appropriate media URI) played before the caller's position",
+                            "type": "string"
+                        }
+                    },
+                    "type": "object"
+                }
+            },
+            "type": "object"
         },
-        "cdr_url": {
-            "description": "An optional HTTP URL to POST the CDR",
-            "format": "uri",
-            "minLength": 6,
+        "cid_prefix": {
+            "description": "Prefixed to the caller ID name shown to the agent, so they know which queue the call came from",
             "type": "string"
-        },
-        "connection_timeout": {
-            "default": 3600,
-            "description": "In seconds, how long to try to connect the caller before progressing past the queue callflow action",
-            "minimum": 0,
-            "type": "integer"
         },
         "enter_when_empty": {
             "default": true,
             "description": "Allows a caller to enter a queue and wait when no agents are available",
             "type": "boolean"
         },
-        "max_priority": {
-            "description": "Maximum possible priority level queue will support. Can not be redefined for existing queue.",
-            "maximum": 255,
-            "minimum": 0,
-            "type": "integer"
+        "exit_keys": {
+            "default": "#",
+            "description": "DTMF keys that let a caller leave the queue and continue in the callflow; an empty string turns them off",
+            "pattern": "^[0-9*#]*$",
+            "type": "string"
+        },
+        "greeting": {
+            "description": "Media ID (or appropriate media URI) of media played once as the caller enters the queue",
+            "type": "string"
         },
         "max_queue_size": {
             "default": 0,
             "description": "How many callers are allowed to wait on hold in the queue (0 for no limit)",
+            "type": "integer"
+        },
+        "max_wait_time": {
+            "default": 0,
+            "description": "Seconds a caller may wait before the callflow continues on the timeout branch, 0 for no limit",
+            "minimum": 0,
+            "type": "integer"
+        },
+        "max_wait_time_with_no_agent": {
+            "default": 0,
+            "description": "Seconds a caller may wait while no agent could take them, 0 for no limit",
+            "minimum": 0,
+            "type": "integer"
+        },
+        "max_wait_time_with_no_agent_time_reached": {
+            "default": 5,
+            "description": "Seconds a caller must already have waited before max_wait_time_with_no_agent starts to apply",
+            "minimum": 0,
             "type": "integer"
         },
         "moh": {
@@ -124,16 +150,25 @@
             "minLength": 1,
             "type": "string"
         },
-        "record_caller": {
-            "default": false,
-            "description": "When enabled, a caller's audio will be recorded",
-            "type": "boolean"
+        "outbound_caller_id": {
+            "default": {},
+            "description": "Caller ID for agent legs to contacts outside the account",
+            "properties": {
+                "name": {
+                    "description": "Caller ID name",
+                    "type": "string"
+                },
+                "number": {
+                    "description": "Caller ID number",
+                    "type": "string"
+                }
+            },
+            "type": "object"
         },
-        "recording_url": {
-            "description": "An optional HTTP URL to PUT the call recording after the call ends (and should respond to GET for retrieving the audio data)",
-            "format": "uri",
-            "minLength": 6,
-            "type": "string"
+        "record": {
+            "default": false,
+            "description": "Record queue calls, through the account's own recording storage",
+            "type": "boolean"
         },
         "ring_simultaneously": {
             "default": 1,
@@ -141,13 +176,59 @@
             "minimum": 1,
             "type": "integer"
         },
+        "skip_agents_with_external_calls": {
+            "default": true,
+            "description": "Do not offer callers to an agent who is on a call that did not come from a queue",
+            "type": "boolean"
+        },
         "strategy": {
-            "default": "round_robin",
-            "description": "The queue strategy for connecting agents to callers",
+            "default": "longest_idle",
+            "description": "How the queue picks which agent to offer a caller to",
             "enum": [
                 "ring_all",
+                "longest_idle",
                 "round_robin",
+                "least_talk_time",
+                "fewest_calls",
+                "sequential",
                 "most_idle"
+            ],
+            "type": "string"
+        },
+        "tier_rules": {
+            "default": {},
+            "description": "When higher tier levels are added to the set of agents a waiting caller may be offered to",
+            "properties": {
+                "apply": {
+                    "default": false,
+                    "description": "Add levels as the caller waits rather than offering every level at once",
+                    "type": "boolean"
+                },
+                "no_agent_no_wait": {
+                    "default": true,
+                    "description": "Skip the wait when the current levels hold no agent who could answer",
+                    "type": "boolean"
+                },
+                "wait_multiply_level": {
+                    "default": false,
+                    "description": "Multiply wait_seconds by the level, so each level waits longer than the last",
+                    "type": "boolean"
+                },
+                "wait_seconds": {
+                    "default": 0,
+                    "description": "Seconds a caller waits before the next level is added",
+                    "minimum": 0,
+                    "type": "integer"
+                }
+            },
+            "type": "object"
+        },
+        "time_base_score": {
+            "default": "system",
+            "description": "Whether a caller's age counts from when they entered the system or when they entered this queue, which decides their place after a transfer",
+            "enum": [
+                "system",
+                "queue"
             ],
             "type": "string"
         }

@@ -1,0 +1,56 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.agent_activity",
+    "description": "An agent's derived activity has changed",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Activity": {
+            "description": "What the agent's phones are doing",
+            "enum": [
+                "idle",
+                "ringing",
+                "on_call",
+                "wrapping_up"
+            ],
+            "type": "string"
+        },
+        "Agent-ID": {
+            "description": "The agent, which is a user of the account",
+            "type": "string"
+        },
+        "Call-ID": {
+            "description": "The call the activity is about, when there is one",
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "agent_activity"
+            ],
+            "type": "string"
+        },
+        "Queue-Call": {
+            "description": "Whether that call came from a queue",
+            "type": "boolean"
+        },
+        "Timestamp": {
+            "description": "When it changed, in Gregorian seconds",
+            "type": "integer"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Agent-ID",
+        "Activity",
+        "Timestamp"
+    ],
+    "type": "object"
+}

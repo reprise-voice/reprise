@@ -12,6 +12,7 @@
 -define(KAPPS_GETBY_CACHE, 'kapps_getby_cache').
 
 -define(DEFAULT_KAPPS, ['blackhole'
+                       ,'callcenter'
                        ,'callflow'
                        ,'cdr'
                        ,'conference'

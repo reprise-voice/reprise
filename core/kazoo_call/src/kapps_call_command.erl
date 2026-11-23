@@ -25,7 +25,7 @@
         ,get_event_type/1
         ]).
 
--export([audio_macro/2, audio_macro/3]).
+-export([audio_macro/2, audio_macro/3, audio_macro/4]).
 -ifdef(TEST).
 -export([macros_to_commands/3]).
 -endif.
@@ -61,6 +61,7 @@
         ,b_bridge/2, b_bridge/3, b_bridge/4, b_bridge/5, b_bridge/6, b_bridge/7, b_bridge/8, b_bridge/9
         ,unbridge/1, unbridge/2, unbridge/3
         ,b_bridge_wait/2
+        ,bridge_command/9
         ]).
 -export([page/2, page/3, page/4, page/5, page/6, page/7, page/8]).
 -export([hold/1, hold/2
@@ -535,6 +536,20 @@ audio_macro(Prompts, Call) -> audio_macro(Prompts, Call, kz_binary:rand_hex(3)).
 -spec audio_macro(audio_macro_prompts(), kapps_call:call(), kz_term:ne_binary()) ->
           binary().
 audio_macro(Prompts, Call, GroupId) ->
+    audio_macro(Prompts, Call, GroupId, 'undefined').
+
+%%------------------------------------------------------------------------------
+%% @doc The same macro with an `Insert-At': the whole sequence is one `queue'
+%% command, so where it goes in the channel's command queue is decided once,
+%% for all of it. `interrupt' is what an announcement to a caller on hold
+%% wants: hold never finishes on its own, so a macro queued behind it is
+%% never played, and a flush would break into a bridge that is ringing that
+%% caller's agents.
+%% @end
+%%------------------------------------------------------------------------------
+-spec audio_macro(audio_macro_prompts(), kapps_call:call(), kz_term:ne_binary(), kz_term:api_ne_binary()) ->
+          binary().
+audio_macro(Prompts, Call, GroupId, InsertAt) ->
     Queue = macros_to_commands(Prompts, Call, GroupId),
 
     NoopId = noop_id(),
@@ -547,6 +562,7 @@ audio_macro(Prompts, Call, GroupId) ->
                ],
     Command = [{<<"Application-Name">>, <<"queue">>}
               ,{<<"Commands">>, Commands}
+              ,{<<"Insert-At">>, InsertAt}
               ],
     send_command(Command, Call),
     NoopId.
@@ -1203,6 +1219,8 @@ bridge_command(Endpoints, Timeout, Strategy, IgnoreEarlyMedia, Ringback, SIPHead
     bridge_command(Endpoints, Timeout, Strategy, IgnoreEarlyMedia, Ringback, SIPHeaders, <<"false">>, Call).
 bridge_command(Endpoints, Timeout, Strategy, IgnoreEarlyMedia, Ringback, SIPHeaders, IgnoreForward, Call) ->
     bridge_command(Endpoints, Timeout, Strategy, IgnoreEarlyMedia, Ringback, SIPHeaders, IgnoreForward, 'undefined', Call).
+-spec bridge_command(kz_json:objects(), integer(), kz_term:api_binary(), kz_term:api_boolean(), kz_term:api_binary(), kz_term:api_object(), kz_term:api_binary(), kz_term:api_binary(), kapps_call:call()) ->
+          kz_term:proplist().
 bridge_command(Endpoints, Timeout, Strategy, IgnoreEarlyMedia, Ringback, SIPHeaders, IgnoreForward, FailOnSingleReject, Call) ->
     [{<<"Application-Name">>, <<"bridge">>}
     ,{<<"Endpoints">>, Endpoints}

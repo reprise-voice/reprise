@@ -1,0 +1,77 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.member_position",
+    "description": "Where a waiting caller stands in their queue",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Agents-Available": {
+            "description": "How many agents could be offered a caller right now; absent when the dispatcher cannot say, which is not zero",
+            "type": "integer"
+        },
+        "Call-ID": {
+            "description": "Call-ID of the waiting caller",
+            "type": "string"
+        },
+        "Caller-ID-Name": {
+            "description": "The caller's name",
+            "type": "string"
+        },
+        "Caller-ID-Number": {
+            "description": "The caller's number",
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "member_position"
+            ],
+            "type": "string"
+        },
+        "Joined-Timestamp": {
+            "description": "When the caller entered the queue, in Gregorian seconds",
+            "type": "integer"
+        },
+        "Media-Node": {
+            "description": "The media server the caller's channel is parked on",
+            "type": "string"
+        },
+        "Offered": {
+            "description": "Whether an offer is in flight for the caller: asked for or ringing, and neither answered nor called off",
+            "type": "boolean"
+        },
+        "Position": {
+            "description": "The caller's place in the queue, counting from one",
+            "minimum": 1,
+            "type": "integer"
+        },
+        "Queue-ID": {
+            "description": "Queue the caller is waiting in",
+            "type": "string"
+        },
+        "Timestamp": {
+            "description": "When this was true, in Gregorian seconds",
+            "type": "integer"
+        },
+        "Waiting": {
+            "description": "How many callers are waiting in the queue",
+            "type": "integer"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Call-ID",
+        "Position",
+        "Queue-ID",
+        "Timestamp",
+        "Waiting"
+    ],
+    "type": "object"
+}

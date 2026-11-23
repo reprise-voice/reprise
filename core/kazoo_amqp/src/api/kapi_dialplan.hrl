@@ -21,7 +21,11 @@
                              }).
 
 %% For dialplan messages, an optional insert-at tuple is common across all requests
--define(INSERT_AT_TUPLE, {<<"Insert-At">>, [<<"head">>, <<"tail">>, <<"flush">>, <<"now">>]}).
+%% `interrupt' is `flush' for a channel that is playing something, and `tail'
+%% for one that is bridging or about to: whatever is playing is stopped and
+%% the queue thrown away, but a bridge that is running, or waiting to run, is
+%% never broken into or thrown away, and the command waits behind it instead.
+-define(INSERT_AT_TUPLE, {<<"Insert-At">>, [<<"head">>, <<"tail">>, <<"flush">>, <<"now">>, <<"interrupt">>]}).
 -define(IS_TERMINATOR, fun kapi_dialplan:terminators_v/1).
 
 -define(DIAL_METHOD_SINGLE, <<"single">>).

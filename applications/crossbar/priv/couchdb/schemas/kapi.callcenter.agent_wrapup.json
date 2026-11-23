@@ -1,0 +1,51 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.agent_wrapup",
+    "description": "An agent has entered wrap-up after a queue call",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Agent-ID": {
+            "description": "The agent, which is a user of the account",
+            "type": "string"
+        },
+        "Call-ID": {
+            "description": "The queue call that has just ended",
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "agent_wrapup"
+            ],
+            "type": "string"
+        },
+        "Queue-ID": {
+            "description": "Queue the event belongs to",
+            "type": "string"
+        },
+        "Timestamp": {
+            "description": "When wrap-up started, in Gregorian seconds",
+            "type": "integer"
+        },
+        "Wrapup-Ends": {
+            "description": "When the agent becomes available again, in Gregorian seconds",
+            "type": "integer"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Queue-ID",
+        "Agent-ID",
+        "Wrapup-Ends",
+        "Timestamp"
+    ],
+    "type": "object"
+}

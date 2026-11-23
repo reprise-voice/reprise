@@ -34,3 +34,51 @@ handle_utc_time_offset_1_test_() ->
             ,{Timestamp, Timestamp + 14400, <<"14400">>}
             ],
     [?_assertEqual(Result, cb_cdrs:handle_utc_time_offset(UTC, Offset)) || {UTC, Result, Offset} <- Tests].
+
+%% `?queue_id=' and `?agent_id=' are aliases for a filter on the channel
+%% variable the CDR keeps them in. Without the rewrite they are not filter
+%% keys at all, so the listing would ignore them and answer with every call.
+expand_ccv_filters_test_() ->
+    [{"a queue becomes a filter on the queue channel variable"
+     ,?_assertEqual([{<<"filter_custom_channel_vars.queue_id">>, <<"q1">>}]
+                   ,expanded([{<<"queue_id">>, <<"q1">>}])
+                   )
+     }
+    ,{"an agent becomes a filter on the agent channel variable"
+     ,?_assertEqual([{<<"filter_custom_channel_vars.agent_id">>, <<"a1">>}]
+                   ,expanded([{<<"agent_id">>, <<"a1">>}])
+                   )
+     }
+    ,{"both at once, and the originals are gone"
+     ,?_assertEqual([{<<"filter_custom_channel_vars.agent_id">>, <<"a1">>}
+                    ,{<<"filter_custom_channel_vars.queue_id">>, <<"q1">>}
+                    ]
+                   ,expanded([{<<"agent_id">>, <<"a1">>}
+                             ,{<<"queue_id">>, <<"q1">>}
+                             ])
+                   )
+     }
+    ,{"a list of queues is carried through for the filter to decode"
+     ,?_assertEqual([{<<"filter_custom_channel_vars.queue_id">>, <<"[\"q1\",\"q2\"]">>}]
+                   ,expanded([{<<"queue_id">>, <<"[\"q1\",\"q2\"]">>}])
+                   )
+     }
+    ,{"every other parameter is left alone"
+     ,?_assertEqual([{<<"created_from">>, <<"63687252084">>}
+                    ,{<<"filter_custom_channel_vars.queue_id">>, <<"q1">>}
+                    ]
+                   ,expanded([{<<"created_from">>, <<"63687252084">>}
+                             ,{<<"queue_id">>, <<"q1">>}
+                             ])
+                   )
+     }
+    ,{"a listing with neither is untouched"
+     ,?_assertEqual([{<<"created_to">>, <<"63687252084">>}]
+                   ,expanded([{<<"created_to">>, <<"63687252084">>}])
+                   )
+     }
+    ].
+
+expanded(QueryString) ->
+    Context = cb_context:set_query_string(cb_context:new(), kz_json:from_list(QueryString)),
+    lists:sort(kz_json:to_proplist(cb_context:query_string(cb_cdrs:expand_ccv_filters(Context)))).

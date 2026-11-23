@@ -1,0 +1,48 @@
+{
+    "_id": "_design/agents",
+    "kazoo": {
+        "view_map": [
+            {
+                "classification": "account"
+            }
+        ]
+    },
+    "language": "javascript",
+    "views": {
+        "by_agent_id": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'user' || doc.pvt_deleted) return;",
+                "  if (!doc.call_center || !doc.call_center.agent_id) return;",
+                "  emit(String(doc.call_center.agent_id), {",
+                "    'id': doc._id",
+                "  });",
+                "}"
+            ]
+        },
+        "crossbar_listing": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'user' || doc.pvt_deleted) return;",
+                "  if (!doc.call_center) return;",
+                "  var settings = 0;",
+                "  for (var key in doc.call_center) {",
+                "    settings++;",
+                "    break;",
+                "  }",
+                "  if (!settings) return;",
+                "  emit(doc._id, {",
+                "    'id': doc._id,",
+                "    'agent_id': doc.call_center.agent_id,",
+                "    'email': doc.email,",
+                "    'enabled': doc.enabled,",
+                "    'first_name': doc.first_name,",
+                "    'last_name': doc.last_name,",
+                "    'presence_id': doc.presence_id,",
+                "    'username': doc.username",
+                "  });",
+                "}"
+            ]
+        }
+    }
+}

@@ -1,0 +1,56 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.member_connected",
+    "description": "A waiting caller has been connected to an agent",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Agent-Call-ID": {
+            "description": "Call-ID of the agent's leg",
+            "type": "string"
+        },
+        "Agent-ID": {
+            "description": "The agent, which is a user of the account",
+            "type": "string"
+        },
+        "Answered-Timestamp": {
+            "description": "When the agent answered, in Gregorian seconds",
+            "type": "integer"
+        },
+        "Call-ID": {
+            "description": "Call-ID of the caller's channel",
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "member_connected"
+            ],
+            "type": "string"
+        },
+        "Joined-Timestamp": {
+            "description": "When the caller entered the queue, in Gregorian seconds: which of the call's passages through the queue this is about",
+            "type": "integer"
+        },
+        "Queue-ID": {
+            "description": "Queue the event belongs to",
+            "type": "string"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Queue-ID",
+        "Call-ID",
+        "Agent-ID",
+        "Agent-Call-ID",
+        "Answered-Timestamp"
+    ],
+    "type": "object"
+}

@@ -1,0 +1,92 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "callcenter_agent",
+    "description": "An agent's call center availability, kept per user and written on every change",
+    "properties": {
+        "agent_id": {
+            "description": "The user this document is about",
+            "type": "string"
+        },
+        "availability": {
+            "default": "logged_out",
+            "description": "What the agent, a supervisor or an automatic rule chose",
+            "enum": [
+                "logged_out",
+                "available",
+                "available_on_demand",
+                "on_break"
+            ],
+            "type": "string"
+        },
+        "break_ends": {
+            "description": "When the break the agent is on ends by itself, in Gregorian seconds; set by a break given a timeout and removed by every other change",
+            "minimum": 0,
+            "type": "integer"
+        },
+        "counters": {
+            "default": {},
+            "description": "Counters kept since the agent last logged in",
+            "properties": {
+                "calls_answered": {
+                    "default": 0,
+                    "description": "Queue calls answered since login",
+                    "minimum": 0,
+                    "type": "integer"
+                },
+                "last_call_end": {
+                    "description": "When the agent's last queue call ended, in Gregorian seconds",
+                    "minimum": 0,
+                    "type": "integer"
+                },
+                "missed": {
+                    "default": 0,
+                    "description": "Offers missed since login, not counted while the agent is on break or logged out",
+                    "minimum": 0,
+                    "type": "integer"
+                },
+                "talk_time_s": {
+                    "default": 0,
+                    "description": "Seconds spent on queue calls since login",
+                    "minimum": 0,
+                    "type": "integer"
+                }
+            },
+            "type": "object"
+        },
+        "presence_id": {
+            "description": "Where the agent's login lamp is published, stored by a callcenter_agent callflow action that names one; overrides <prefix><user presence_id>",
+            "type": "string"
+        },
+        "previous": {
+            "description": "The availability to restore when do-not-disturb is cleared",
+            "enum": [
+                "logged_out",
+                "available",
+                "available_on_demand",
+                "on_break"
+            ],
+            "type": "string"
+        },
+        "source": {
+            "description": "What made the last change",
+            "enum": [
+                "phone",
+                "ui",
+                "supervisor",
+                "no_answer",
+                "dnd",
+                "system"
+            ],
+            "type": "string"
+        },
+        "timestamp": {
+            "description": "When the availability last changed, in Gregorian seconds",
+            "type": "integer"
+        }
+    },
+    "required": [
+        "agent_id",
+        "availability"
+    ],
+    "type": "object"
+}

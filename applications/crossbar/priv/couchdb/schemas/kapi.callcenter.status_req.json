@@ -1,0 +1,31 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.status_req",
+    "description": "Ask for an account's live queue and agent state",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "status_req"
+            ],
+            "type": "string"
+        },
+        "Queue-ID": {
+            "description": "Ask about one queue rather than all of them",
+            "type": "string"
+        }
+    },
+    "required": [
+        "Account-ID"
+    ],
+    "type": "object"
+}

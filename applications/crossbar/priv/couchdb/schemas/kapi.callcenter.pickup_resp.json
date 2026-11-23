@@ -1,0 +1,57 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.pickup_resp",
+    "description": "Whether a supervisor's phones are ringing for a waiting caller",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Call-ID": {
+            "description": "Call-ID of the waiting caller's channel",
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "pickup_resp"
+            ],
+            "type": "string"
+        },
+        "Node": {
+            "description": "The kazoo node answering",
+            "type": "string"
+        },
+        "Offer-Timeout": {
+            "description": "How long the supervisor's phones ring, in seconds",
+            "type": "integer"
+        },
+        "Reason": {
+            "description": "Why the ring could not be started",
+            "type": "string"
+        },
+        "Result": {
+            "description": "What the node dispatching the account did",
+            "enum": [
+                "ringing",
+                "not_waiting",
+                "being_offered",
+                "supervisor_busy",
+                "not_started",
+                "too_late"
+            ],
+            "type": "string"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Call-ID",
+        "Result"
+    ],
+    "type": "object"
+}

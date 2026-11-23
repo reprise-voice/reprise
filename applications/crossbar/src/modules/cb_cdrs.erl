@@ -26,7 +26,9 @@
         ]).
 
 -ifdef(TEST).
--export([handle_utc_time_offset/2]).
+-export([handle_utc_time_offset/2
+        ,expand_ccv_filters/1
+        ]).
 -endif.
 
 -export([fix_qs_filter_keys/1
@@ -53,6 +55,15 @@
 -define(PATH_SUMMARY, <<"summary">>).
 
 -define(KEY_UTC_OFFSET, <<"utc_offset">>).
+
+%% Query parameters that are shorthand for a filter on a channel variable,
+%% as `{Parameter, Filter}'. The call center sets `Queue-ID' and `Agent-ID'
+%% on both legs of a queue call, and `cdr_channel_destroy' writes the
+%% channel variables into the CDR under `custom_channel_vars' with their
+%% names lower-cased.
+-define(CCV_FILTERS, [{<<"queue_id">>, <<"filter_custom_channel_vars.queue_id">>}
+                     ,{<<"agent_id">>, <<"filter_custom_channel_vars.agent_id">>}
+                     ]).
 
 %%%=============================================================================
 %%% API
@@ -202,9 +213,42 @@ load_chunk_view(Context, ViewName, Options0) ->
               ,{'max_range', ?MOD_MAX_RANGE}
               | Options0
               ],
+    Filtered = fix_qs_filter_keys(expand_ccv_filters(Context)),
     maybe_add_fields_fun(
-      crossbar_view:load_modb(cb_context:setters(fix_qs_filter_keys(Context), Setters), ViewName, Options)
+      crossbar_view:load_modb(cb_context:setters(Filtered, Setters), ViewName, Options)
      ).
+
+%%------------------------------------------------------------------------------
+%% @doc Turn the call center's two query parameters into filters on the
+%% channel variables the CDR keeps them in.
+%%
+%% `?queue_id={QUEUE_ID}' and `?agent_id={AGENT_ID}' are shorthand for
+%% `?filter_custom_channel_vars.queue_id={QUEUE_ID}'. They are aliases rather
+%% than a view of their own because the CDR listing is keyed on the creation
+%% time and emits no channel variable to key on: a view that could answer
+%% these without reading the documents would have to be a second view over
+%% every MODB. The filter is therefore applied to the documents the listing
+%% already includes, which is where every other CDR filter is applied.
+%%
+%% A JSON array is accepted, as it is for any filter: `?queue_id=["a","b"]'
+%% is either queue.
+%% @end
+%%------------------------------------------------------------------------------
+-spec expand_ccv_filters(cb_context:context()) -> cb_context:context().
+expand_ccv_filters(Context) ->
+    QS = lists:foldl(fun expand_ccv_filter/2
+                    ,cb_context:query_string(Context)
+                    ,?CCV_FILTERS
+                    ),
+    cb_context:set_query_string(Context, QS).
+
+-spec expand_ccv_filter({kz_term:ne_binary(), kz_term:ne_binary()}, kz_json:object()) ->
+          kz_json:object().
+expand_ccv_filter({Key, FilterKey}, QS) ->
+    case kz_json:get_value(Key, QS) of
+        'undefined' -> QS;
+        Value -> kz_json:set_value(FilterKey, Value, kz_json:delete_key(Key, QS))
+    end.
 
 maybe_add_fields_fun(Context) ->
     case cb_context:fetch(Context, 'fields', []) of

@@ -1,0 +1,75 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.agent_availability",
+    "description": "An agent's chosen availability has changed",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Agent-ID": {
+            "description": "The agent, which is a user of the account",
+            "type": "string"
+        },
+        "Availability": {
+            "description": "The agent's availability now",
+            "enum": [
+                "logged_out",
+                "available",
+                "available_on_demand",
+                "on_break"
+            ],
+            "type": "string"
+        },
+        "Break-Ends": {
+            "description": "When the break the agent is now on ends by itself, in Gregorian seconds; absent for a break with no end and for anything but a break",
+            "type": "integer"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "agent_availability"
+            ],
+            "type": "string"
+        },
+        "Previous": {
+            "description": "The agent's availability before this change",
+            "enum": [
+                "logged_out",
+                "available",
+                "available_on_demand",
+                "on_break"
+            ],
+            "type": "string"
+        },
+        "Source": {
+            "description": "What changed it",
+            "enum": [
+                "phone",
+                "ui",
+                "supervisor",
+                "no_answer",
+                "dnd",
+                "system"
+            ],
+            "type": "string"
+        },
+        "Timestamp": {
+            "description": "When it changed, in Gregorian seconds",
+            "type": "integer"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Agent-ID",
+        "Availability",
+        "Source",
+        "Timestamp"
+    ],
+    "type": "object"
+}

@@ -1,0 +1,65 @@
+{
+    "_id": "_design/callcenter",
+    "kazoo": {
+        "view_map": [
+            {
+                "classification": "account"
+            }
+        ]
+    },
+    "language": "javascript",
+    "views": {
+        "agent_users": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'user' || doc.pvt_deleted) return;",
+                "  if (!doc.call_center) return;",
+                "  var settings = 0;",
+                "  for (var key in doc.call_center) {",
+                "    settings++;",
+                "    break;",
+                "  }",
+                "  if (!settings) return;",
+                "  emit(doc._id, {",
+                "    'agent': typeof doc.call_center == 'object' && !Array.isArray(doc.call_center),",
+                "    'enabled': doc.enabled,",
+                "    'do_not_disturb': doc.do_not_disturb ? doc.do_not_disturb.enabled : undefined",
+                "  });",
+                "}"
+            ]
+        },
+        "agents": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'callcenter_agent' || doc.pvt_deleted) return;",
+                "  emit(doc.agent_id || doc._id, {",
+                "    'availability': doc.availability,",
+                "    'timestamp': doc.timestamp,",
+                "    'source': doc.source,",
+                "    'previous': doc.previous,",
+                "    'break_ends': doc.break_ends,",
+                "    'counters': doc.counters",
+                "  });",
+                "}"
+            ]
+        },
+        "queues_by_agent": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'queue' || doc.pvt_deleted) return;",
+                "  var agents = doc.agents || [];",
+                "  for (var i = 0; i < agents.length; i++) {",
+                "    if (!agents[i].id) continue;",
+                "    emit([agents[i].id], {",
+                "      'agent_id': agents[i].id,",
+                "      'queue_id': doc._id,",
+                "      'queue_name': doc.name,",
+                "      'level': agents[i].level,",
+                "      'position': agents[i].position",
+                "    });",
+                "  }",
+                "}"
+            ]
+        }
+    }
+}

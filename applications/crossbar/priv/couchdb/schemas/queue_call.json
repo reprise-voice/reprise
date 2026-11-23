@@ -1,0 +1,112 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "queue_call",
+    "description": "One call's passage through a queue, written to the monthly account database as it happens",
+    "properties": {
+        "agent_call_id": {
+            "description": "Call-ID of the agent's leg",
+            "type": "string"
+        },
+        "agent_id": {
+            "description": "The agent who answered, or the supervisor who picked the caller up",
+            "type": "string"
+        },
+        "answered": {
+            "description": "When the agent answered, in Gregorian seconds",
+            "type": "integer"
+        },
+        "call_id": {
+            "description": "Call-ID of the caller's channel",
+            "type": "string"
+        },
+        "caller_id_name": {
+            "description": "The caller's name",
+            "type": "string"
+        },
+        "caller_id_number": {
+            "description": "The caller's number",
+            "type": "string"
+        },
+        "cancel_reason": {
+            "description": "Why the caller left without being connected",
+            "enum": [
+                "hangup",
+                "timeout",
+                "no_agent_timeout",
+                "exit_key",
+                "queue_full",
+                "transfer",
+                "queue_deleted"
+            ],
+            "type": "string"
+        },
+        "cancelled": {
+            "description": "When the caller left without being connected, in Gregorian seconds",
+            "type": "integer"
+        },
+        "ended": {
+            "description": "When the call finished, in Gregorian seconds",
+            "type": "integer"
+        },
+        "joined": {
+            "description": "When the caller entered the queue, in Gregorian seconds",
+            "type": "integer"
+        },
+        "offered_to": {
+            "default": [],
+            "description": "Every agent this caller was offered to, in order",
+            "items": {
+                "description": "One offer",
+                "properties": {
+                    "agent_id": {
+                        "description": "The agent offered the caller",
+                        "type": "string"
+                    },
+                    "at": {
+                        "description": "When the offer was made, in Gregorian seconds",
+                        "type": "integer"
+                    },
+                    "leg_prefix": {
+                        "description": "What the call ids of the legs the offer rang start with, followed by a dash",
+                        "type": "string"
+                    },
+                    "outcome": {
+                        "description": "How the offer ended",
+                        "enum": [
+                            "answered",
+                            "no_answer",
+                            "busy",
+                            "reject",
+                            "cancelled"
+                        ],
+                        "type": "string"
+                    },
+                    "pickup": {
+                        "description": "The phone rung was a supervisor's, for a pickup, and not an agent's",
+                        "type": "boolean"
+                    }
+                },
+                "type": "object"
+            },
+            "type": "array"
+        },
+        "picked_up": {
+            "description": "A supervisor picked the caller up: agent_id is the supervisor, who is not counted as an agent who answered",
+            "type": "boolean"
+        },
+        "queue_id": {
+            "description": "The queue the caller waited in",
+            "type": "string"
+        },
+        "recording": {
+            "description": "Recording of the call, when the queue or the agent asked for one",
+            "type": "string"
+        }
+    },
+    "required": [
+        "call_id",
+        "joined",
+        "queue_id"
+    ],
+    "type": "object"
+}

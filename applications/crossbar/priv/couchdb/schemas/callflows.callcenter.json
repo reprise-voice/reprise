@@ -1,0 +1,22 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "callflows.callcenter",
+    "description": "Validator for the callcenter callflow data object",
+    "properties": {
+        "id": {
+            "description": "ID of the queue the caller joins",
+            "type": "string"
+        },
+        "priority": {
+            "default": 0,
+            "description": "Order this caller ahead of lower priorities regardless of age",
+            "minimum": 0,
+            "type": "integer"
+        },
+        "skip_module": {
+            "description": "When set to true this callflow action is skipped, advancing to the wildcard branch (if any)",
+            "type": "boolean"
+        }
+    },
+    "type": "object"
+}

@@ -96,6 +96,34 @@ Clients should use the `next_start_key` to move to the next page on subsequent r
 
 KAZOO provides [filters](filters.md) to filter out rows from the results. This can be helpful if you're looking for rows related to each other (like the same `presence_id`, for instance).
 
+#### Call center calls
+
+Two shorthands, because a call center's CDRs are asked for often enough to deserve them:
+
+| Parameter | Selects |
+|---|---|
+| `queue_id={QUEUE_ID}` | both legs of every call that went through that queue |
+| `agent_id={AGENT_ID}` | the agent leg of every queue call that agent answered |
+
+Each is the same as filtering on the channel variable the call center sets, so `?queue_id={QUEUE_ID}` and `?filter_custom_channel_vars.queue_id={QUEUE_ID}` return the same rows. Both take a JSON array for several at once, as any filter does, and both combine with each other and with the time range.
+
+```shell
+curl -v -X GET \
+    -H "X-Auth-Token: {AUTH_TOKEN}" \
+    http://{SERVER}:8000/v2/accounts/{ACCOUNT_ID}/cdrs?queue_id={QUEUE_ID}&created_from={FROM_TIMESTAMP}&created_to={TO_TIMESTAMP}
+```
+
+The CSV export takes them too:
+
+```shell
+curl -v -X GET \
+    -H "Accept: text/csv" \
+    -H "X-Auth-Token: {AUTH_TOKEN}" \
+    'http://{SERVER}:8000/v2/accounts/{ACCOUNT_ID}/cdrs?queue_id=["{QUEUE_ID}","{OTHER_QUEUE_ID}"]'
+```
+
+These are applied to the documents rather than to the view's keys: the listing is keyed on the call's time and the filter runs over the page it reads, so a narrow time range is worth giving. For the same reason they apply to the CDR listing and not to `/cdrs/interaction`, which is a grouped count and reads no documents.
+
 ### Timestamps
 
 KAZOO timestamps, unless otherwise noted, are in [Gregorian seconds](basics.md#timestamps). Alternative timestamp formats are generally noted by the field name (e.g. `unix_timestamp`, `rfc1036`, or `iso8601`).

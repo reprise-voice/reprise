@@ -1,0 +1,68 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.pickup_req",
+    "description": "Ring a supervisor's own phones for a caller waiting in a queue",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Call-ID": {
+            "description": "Call-ID of the waiting caller's channel",
+            "type": "string"
+        },
+        "Deadline-Ms": {
+            "description": "System time, in Unix milliseconds, at which the requester stops waiting for the answer: nothing is rung for a request read after it",
+            "type": "integer"
+        },
+        "Device-IDs": {
+            "description": "The supervisor's devices to ring",
+            "items": {
+                "type": "string"
+            },
+            "type": "array"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "pickup_req"
+            ],
+            "type": "string"
+        },
+        "Queue-ID": {
+            "description": "The queue the caller is waiting in",
+            "type": "string"
+        },
+        "Supervisor-ID": {
+            "description": "Who answers: the user, the owner of the device named, or the device when nobody owns it",
+            "type": "string"
+        },
+        "Target-ID": {
+            "description": "The device or user the request named",
+            "type": "string"
+        },
+        "Target-Type": {
+            "description": "Whether the request named a device or a user",
+            "enum": [
+                "device",
+                "user"
+            ],
+            "type": "string"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Call-ID",
+        "Device-IDs",
+        "Queue-ID",
+        "Supervisor-ID",
+        "Target-ID",
+        "Target-Type"
+    ],
+    "type": "object"
+}

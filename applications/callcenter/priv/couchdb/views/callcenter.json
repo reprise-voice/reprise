@@ -1,0 +1,77 @@
+{
+    "_id": "_design/callcenter",
+    "kazoo": {
+        "view_map": [
+            {
+                "classification": "modb"
+            }
+        ]
+    },
+    "language": "javascript",
+    "views": {
+        "queue_calls_by_agent": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'queue_call' || doc.pvt_deleted) return;",
+                "  if (!doc.agent_id) return;",
+                "  emit([doc.agent_id, doc.joined], {",
+                "    'call_id': doc.call_id,",
+                "    'queue_id': doc.queue_id,",
+                "    'joined': doc.joined,",
+                "    'answered': doc.answered,",
+                "    'ended': doc.ended,",
+                "    'cancel_reason': doc.cancel_reason",
+                "  });",
+                "}"
+            ]
+        },
+        "queue_calls_by_queue": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'queue_call' || doc.pvt_deleted) return;",
+                "  emit([doc.queue_id, doc.joined], {",
+                "    'call_id': doc.call_id,",
+                "    'agent_id': doc.agent_id,",
+                "    'caller_id_name': doc.caller_id_name,",
+                "    'caller_id_number': doc.caller_id_number,",
+                "    'joined': doc.joined,",
+                "    'answered': doc.answered,",
+                "    'ended': doc.ended,",
+                "    'cancelled': doc.cancelled,",
+                "    'cancel_reason': doc.cancel_reason",
+                "  });",
+                "}"
+            ]
+        },
+        "queue_calls_open": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'queue_call' || doc.pvt_deleted) return;",
+                "  if (!doc.answered || doc.ended || doc.cancelled) return;",
+                "  emit(doc.pvt_account_id, {",
+                "    'call_id': doc.call_id,",
+                "    'queue_id': doc.queue_id,",
+                "    'agent_id': doc.agent_id,",
+                "    'agent_call_id': doc.agent_call_id,",
+                "    'joined': doc.joined,",
+                "    'answered': doc.answered,",
+                "    'picked_up': doc.picked_up",
+                "  });",
+                "}"
+            ]
+        },
+        "status_changes_by_agent": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'agent_status_change' || doc.pvt_deleted) return;",
+                "  emit([doc.agent_id, doc.timestamp], {",
+                "    'from': doc.from,",
+                "    'to': doc.to,",
+                "    'source': doc.source,",
+                "    'timestamp': doc.timestamp",
+                "  });",
+                "}"
+            ]
+        }
+    }
+}

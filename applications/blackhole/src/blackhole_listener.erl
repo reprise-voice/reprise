@@ -501,6 +501,9 @@ lookup_bindings(EventJObj, {<<"fax">>, <<"status">>}) ->
                ,FaxId
                ],
     do_lookup(Base, Suffixes);
+lookup_bindings(EventJObj, {<<"callcenter">>, EventName}) ->
+    %% RK: callcenter.{family}.{account_id}.{id}, which `kapi_callcenter' spells
+    do_lookup(<<"blackhole.event.">>, kapi_callcenter:event_routing_keys(EventName, EventJObj));
 lookup_bindings(_EventJObj, LookupType) ->
     lager:info("unsupported hook type: ~p", [LookupType]),
     [].

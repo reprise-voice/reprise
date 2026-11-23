@@ -6,6 +6,7 @@
         "kapps": {
             "default": [
                 "blackhole",
+                "callcenter",
                 "callflow",
                 "cdr",
                 "conference",

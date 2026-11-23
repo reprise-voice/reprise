@@ -1,0 +1,64 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.member_call",
+    "description": "A caller has joined a queue and is waiting for an agent",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Call": {
+            "description": "The caller's kapps_call JSON, including the control queue and Resource-Type",
+            "type": "object"
+        },
+        "Caller-ID-Name": {
+            "description": "Caller ID name as the agent should see it",
+            "type": "string"
+        },
+        "Caller-ID-Number": {
+            "description": "Caller ID number as the agent should see it",
+            "type": "string"
+        },
+        "Callflow-Node": {
+            "description": "The kazoo node running the caller's callflow",
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "member_call"
+            ],
+            "type": "string"
+        },
+        "Joined-Timestamp": {
+            "description": "When the caller entered the queue, in Gregorian seconds",
+            "type": "integer"
+        },
+        "Priority": {
+            "default": 0,
+            "description": "Ordering ahead of lower priorities regardless of age",
+            "type": "integer"
+        },
+        "Queue-ID": {
+            "description": "Queue the event belongs to",
+            "type": "string"
+        },
+        "Shard-Count": {
+            "description": "The shard count the publisher addressed the member with",
+            "type": "integer"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Queue-ID",
+        "Call",
+        "Callflow-Node",
+        "Joined-Timestamp"
+    ],
+    "type": "object"
+}

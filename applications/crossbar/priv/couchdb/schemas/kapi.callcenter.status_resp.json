@@ -1,0 +1,192 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.status_resp",
+    "description": "One node's view of an account's live queue and agent state",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Caller-Delivery": {
+            "description": "How the answering node's dispatchers reach a waiting caller: controller, at the caller's controller queue. An answer without it is from a node that publishes only on the caller's exchange key",
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "status_resp"
+            ],
+            "type": "string"
+        },
+        "Node": {
+            "description": "The kazoo node answering",
+            "type": "string"
+        },
+        "On-Queue-Call": {
+            "description": "The agents on a queue call in the account right now: an offer they answered that has not ended",
+            "items": {
+                "type": "string"
+            },
+            "type": "array"
+        },
+        "Queues": {
+            "description": "One entry per queue with waiting callers or agents",
+            "items": {
+                "description": "One queue's live state",
+                "properties": {
+                    "Agents": {
+                        "description": "The agents in this queue",
+                        "items": {
+                            "description": "One agent's state in this queue",
+                            "properties": {
+                                "Activity": {
+                                    "description": "What the agent's phones are doing",
+                                    "enum": [
+                                        "idle",
+                                        "ringing",
+                                        "on_call",
+                                        "wrapping_up"
+                                    ],
+                                    "type": "string"
+                                },
+                                "Agent-ID": {
+                                    "description": "The agent, which is a user of the account",
+                                    "type": "string"
+                                },
+                                "Answered": {
+                                    "description": "Queue calls answered since login",
+                                    "type": "integer"
+                                },
+                                "Availability": {
+                                    "description": "The agent's chosen availability",
+                                    "enum": [
+                                        "logged_out",
+                                        "available",
+                                        "available_on_demand",
+                                        "on_break"
+                                    ],
+                                    "type": "string"
+                                },
+                                "Call-ID": {
+                                    "description": "Call-ID of the caller the agent is being rung for or is talking to, on a queue call; eavesdropping on it hears both of them",
+                                    "type": "string"
+                                },
+                                "Connected": {
+                                    "description": "Whether the agent answered the caller named by Call-ID; false while their phones ring",
+                                    "type": "boolean"
+                                },
+                                "Last-Call-End": {
+                                    "description": "When the agent's last queue call ended, in Gregorian seconds",
+                                    "type": "integer"
+                                },
+                                "Missed": {
+                                    "description": "Offers missed since login, not counted while the agent is on break or logged out",
+                                    "type": "integer"
+                                },
+                                "Queue-ID": {
+                                    "description": "The queue the caller named by Call-ID came in through, which is another of the agent's queues when they are in more than one",
+                                    "type": "string"
+                                },
+                                "Tier-Level": {
+                                    "description": "Lower levels are offered a caller first",
+                                    "type": "integer"
+                                },
+                                "Tier-Position": {
+                                    "description": "Order within the level",
+                                    "type": "integer"
+                                },
+                                "Tier-State": {
+                                    "description": "The agent's state in this queue",
+                                    "enum": [
+                                        "ready",
+                                        "offering",
+                                        "active_inbound",
+                                        "standby",
+                                        "no_answer"
+                                    ],
+                                    "type": "string"
+                                }
+                            },
+                            "type": "object"
+                        },
+                        "type": "array"
+                    },
+                    "Agents-Available": {
+                        "description": "How many of the queue's agents could be offered a caller now; absent when the dispatcher cannot say, which is not zero",
+                        "type": "integer"
+                    },
+                    "Queue-ID": {
+                        "description": "Queue the event belongs to",
+                        "type": "string"
+                    },
+                    "Waiting": {
+                        "description": "The waiting callers, in order",
+                        "items": {
+                            "description": "One waiting caller",
+                            "properties": {
+                                "Call-ID": {
+                                    "description": "Call-ID of the caller's channel",
+                                    "type": "string"
+                                },
+                                "Caller-ID-Name": {
+                                    "description": "The caller's name",
+                                    "type": "string"
+                                },
+                                "Caller-ID-Number": {
+                                    "description": "The caller's number",
+                                    "type": "string"
+                                },
+                                "Joined-Timestamp": {
+                                    "description": "When the caller entered the queue, in Gregorian seconds",
+                                    "type": "integer"
+                                },
+                                "Media-Node": {
+                                    "description": "The media server the caller's channel is parked on",
+                                    "type": "string"
+                                },
+                                "Offered-To": {
+                                    "description": "The agent currently being tried, when there is one",
+                                    "type": "string"
+                                },
+                                "Position": {
+                                    "description": "Place in the queue, counting from 1",
+                                    "type": "integer"
+                                },
+                                "Priority": {
+                                    "description": "The caller's priority; higher is served first",
+                                    "type": "integer"
+                                },
+                                "Waited": {
+                                    "description": "Seconds the caller has been in the queue",
+                                    "type": "integer"
+                                }
+                            },
+                            "type": "object"
+                        },
+                        "type": "array"
+                    },
+                    "Waiting-Count": {
+                        "description": "How many callers are waiting, the length of Waiting",
+                        "type": "integer"
+                    }
+                },
+                "type": "object"
+            },
+            "type": "array"
+        },
+        "Shard": {
+            "description": "The shard the account hashes into",
+            "type": "integer"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Queues"
+    ],
+    "type": "object"
+}

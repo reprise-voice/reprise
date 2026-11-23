@@ -66,6 +66,7 @@
                 "type": {
                     "description": "Feature key type",
                     "enum": [
+                        "agent_login",
                         "line",
                         "presence",
                         "personal_parking",

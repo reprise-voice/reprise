@@ -1,0 +1,26 @@
+{
+    "_id": "_design/queues",
+    "kazoo": {
+        "view_map": [
+            {
+                "classification": "account"
+            }
+        ]
+    },
+    "language": "javascript",
+    "views": {
+        "crossbar_listing": {
+            "map": [
+                "function(doc) {",
+                "  if (doc.pvt_type != 'queue' || doc.pvt_deleted) return;",
+                "  emit(doc._id, {",
+                "    'id': doc._id,",
+                "    'name': doc.name,",
+                "    'strategy': doc.strategy,",
+                "    'agent_count': (doc.agents || []).length",
+                "  });",
+                "}"
+            ]
+        }
+    }
+}

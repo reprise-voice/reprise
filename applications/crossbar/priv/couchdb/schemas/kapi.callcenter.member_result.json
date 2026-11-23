@@ -1,0 +1,67 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.member_result",
+    "description": "How a queue call ended",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Agent-Call-ID": {
+            "description": "Call-ID of the agent's leg",
+            "type": "string"
+        },
+        "Agent-ID": {
+            "description": "The agent, which is a user of the account",
+            "type": "string"
+        },
+        "Call-ID": {
+            "description": "Call-ID of the caller's channel",
+            "type": "string"
+        },
+        "Ended-Timestamp": {
+            "description": "When the call finished, in Gregorian seconds",
+            "type": "integer"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "member_result"
+            ],
+            "type": "string"
+        },
+        "Joined-Timestamp": {
+            "description": "When the caller entered the queue, in Gregorian seconds: which of the call's passages through the queue this is about",
+            "type": "integer"
+        },
+        "Queue-ID": {
+            "description": "Queue the event belongs to",
+            "type": "string"
+        },
+        "Result": {
+            "description": "How the call finished",
+            "enum": [
+                "completed",
+                "agent_hangup",
+                "caller_hangup",
+                "failed",
+                "transferred",
+                "queue_deleted"
+            ],
+            "type": "string"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Queue-ID",
+        "Call-ID",
+        "Result",
+        "Ended-Timestamp"
+    ],
+    "type": "object"
+}

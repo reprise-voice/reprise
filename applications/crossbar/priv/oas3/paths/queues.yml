@@ -24,36 +24,9 @@ paths:
       responses:
         200:
           description: Successful operation
+        403:
+          description: Not an account administrator or a superduper administrator
       summary: Add an instance of queues
-      tags:
-        - queues
-  /accounts/{ACCOUNT_ID}/queues/eavesdrop:
-    put:
-      operationId: PutAccountsAccountIdQueuesEavesdrop
-      parameters:
-        - $ref: '../oas3-parameters.yml#/auth_token_header'
-        - $ref: '../oas3-parameters.yml#/ACCOUNT_ID'
-      requestBody:
-        content:
-          application/json:
-            schema:
-              $ref: '../oas3-schemas.yml#/queues'
-      responses:
-        200:
-          description: Successful operation
-      summary: Add an instance of queues
-      tags:
-        - queues
-  /accounts/{ACCOUNT_ID}/queues/stats:
-    get:
-      operationId: GetAccountsAccountIdQueuesStats
-      parameters:
-        - $ref: '../oas3-parameters.yml#/auth_token_header'
-        - $ref: '../oas3-parameters.yml#/ACCOUNT_ID'
-      responses:
-        200:
-          description: Successful operation
-      summary: Get stats of queues
       tags:
         - queues
   /accounts/{ACCOUNT_ID}/queues/{QUEUE_ID}:
@@ -66,6 +39,8 @@ paths:
       responses:
         200:
           description: Successful operation
+        403:
+          description: Not an account administrator or a superduper administrator
       summary: Delete an instance of queues
       tags:
         - queues
@@ -95,6 +70,8 @@ paths:
       responses:
         200:
           description: Successful operation
+        403:
+          description: Not an account administrator or a superduper administrator
       summary: Patch specific fields of queues
       tags:
         - queues
@@ -112,7 +89,104 @@ paths:
       responses:
         200:
           description: Successful operation
+        403:
+          description: Not an account administrator or a superduper administrator
       summary: Update an instance of queues
+      tags:
+        - queues
+  /accounts/{ACCOUNT_ID}/queues/{QUEUE_ID}/agents:
+    get:
+      operationId: GetAccountsAccountIdQueuesQueueIdAgents
+      parameters:
+        - $ref: '../oas3-parameters.yml#/auth_token_header'
+        - $ref: '../oas3-parameters.yml#/ACCOUNT_ID'
+        - $ref: '../oas3-parameters.yml#/QUEUE_ID'
+      responses:
+        200:
+          description: Successful operation
+      summary: Get agents of queues
+      tags:
+        - queues
+    put:
+      operationId: PutAccountsAccountIdQueuesQueueIdAgents
+      parameters:
+        - $ref: '../oas3-parameters.yml#/auth_token_header'
+        - $ref: '../oas3-parameters.yml#/ACCOUNT_ID'
+        - $ref: '../oas3-parameters.yml#/QUEUE_ID'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              description: One agent's tier in this queue
+              properties:
+                id:
+                  description: The user who becomes an agent in this queue
+                  type: string
+                level:
+                  default: 1
+                  description: Agents at lower levels are offered a caller first
+                  minimum: 1
+                  type: integer
+                position:
+                  default: 1
+                  description: Order within the level
+                  minimum: 1
+                  type: integer
+              required:
+                - id
+              type: object
+      responses:
+        200:
+          description: Successful operation
+        403:
+          description: Not an account administrator or a superduper administrator
+      summary: Add a tier to queues
+      tags:
+        - queues
+  /accounts/{ACCOUNT_ID}/queues/{QUEUE_ID}/agents/{USER_ID}:
+    delete:
+      operationId: DeleteAccountsAccountIdQueuesQueueIdAgentsUserId
+      parameters:
+        - $ref: '../oas3-parameters.yml#/auth_token_header'
+        - $ref: '../oas3-parameters.yml#/ACCOUNT_ID'
+        - $ref: '../oas3-parameters.yml#/QUEUE_ID'
+        - $ref: '../oas3-parameters.yml#/USER_ID'
+      responses:
+        200:
+          description: Successful operation
+        403:
+          description: Not an account administrator or a superduper administrator
+      summary: Remove a tier from queues
+      tags:
+        - queues
+    patch:
+      operationId: PatchAccountsAccountIdQueuesQueueIdAgentsUserId
+      parameters:
+        - $ref: '../oas3-parameters.yml#/auth_token_header'
+        - $ref: '../oas3-parameters.yml#/ACCOUNT_ID'
+        - $ref: '../oas3-parameters.yml#/QUEUE_ID'
+        - $ref: '../oas3-parameters.yml#/USER_ID'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              description: The parts of a tier that can be changed
+              properties:
+                level:
+                  description: Agents at lower levels are offered a caller first
+                  minimum: 1
+                  type: integer
+                position:
+                  description: Order within the level
+                  minimum: 1
+                  type: integer
+              type: object
+      responses:
+        200:
+          description: Successful operation
+        403:
+          description: Not an account administrator or a superduper administrator
+      summary: Patch specific fields of a tier of queues
       tags:
         - queues
   /accounts/{ACCOUNT_ID}/queues/{QUEUE_ID}/eavesdrop:
@@ -126,40 +200,43 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '../oas3-schemas.yml#/queues'
+              description: The supervisor's phone, and the call to listen to
+              properties:
+                call_id:
+                  description: Call-ID of the call to listen to
+                  type: string
+                device_id:
+                  description: The supervisor's own device
+                  maxLength: 32
+                  minLength: 32
+                  type: string
+                mode:
+                  default: listen
+                  description: What the supervisor may be heard by
+                  enum:
+                    - listen
+                    - whisper
+                    - full
+                  type: string
+                user_id:
+                  description: The supervisor, whose every device rings
+                  maxLength: 32
+                  minLength: 32
+                  type: string
+              required:
+                - call_id
+              type: object
       responses:
         200:
           description: Successful operation
-      summary: Add an instance of queues
+        403:
+          description: Not an account administrator or a superduper administrator
+      summary: Eavesdrop on a call of queues
       tags:
         - queues
-  /accounts/{ACCOUNT_ID}/queues/{QUEUE_ID}/roster:
-    delete:
-      operationId: DeleteAccountsAccountIdQueuesQueueIdRoster
-      parameters:
-        - $ref: '../oas3-parameters.yml#/auth_token_header'
-        - $ref: '../oas3-parameters.yml#/ACCOUNT_ID'
-        - $ref: '../oas3-parameters.yml#/QUEUE_ID'
-      responses:
-        200:
-          description: Successful operation
-      summary: Delete an instance of queues
-      tags:
-        - queues
-    get:
-      operationId: GetAccountsAccountIdQueuesQueueIdRoster
-      parameters:
-        - $ref: '../oas3-parameters.yml#/auth_token_header'
-        - $ref: '../oas3-parameters.yml#/ACCOUNT_ID'
-        - $ref: '../oas3-parameters.yml#/QUEUE_ID'
-      responses:
-        200:
-          description: Successful operation
-      summary: Get roster of queues
-      tags:
-        - queues
-    post:
-      operationId: PostAccountsAccountIdQueuesQueueIdRoster
+  /accounts/{ACCOUNT_ID}/queues/{QUEUE_ID}/pickup:
+    put:
+      operationId: PutAccountsAccountIdQueuesQueueIdPickup
       parameters:
         - $ref: '../oas3-parameters.yml#/auth_token_header'
         - $ref: '../oas3-parameters.yml#/ACCOUNT_ID'
@@ -168,10 +245,42 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '../oas3-schemas.yml#/queues'
+              description: The supervisor's phone, and the waiting caller to take
+              properties:
+                call_id:
+                  description: Call-ID of the waiting caller
+                  type: string
+                device_id:
+                  description: The supervisor's own device
+                  maxLength: 32
+                  minLength: 32
+                  type: string
+                user_id:
+                  description: The supervisor, whose every device rings
+                  maxLength: 32
+                  minLength: 32
+                  type: string
+              required:
+                - call_id
+              type: object
       responses:
         200:
           description: Successful operation
-      summary: Update an instance of queues
+        403:
+          description: Not an account administrator or a superduper administrator
+      summary: Pick up a waiting caller of queues
+      tags:
+        - queues
+  /accounts/{ACCOUNT_ID}/queues/{QUEUE_ID}/status:
+    get:
+      operationId: GetAccountsAccountIdQueuesQueueIdStatus
+      parameters:
+        - $ref: '../oas3-parameters.yml#/auth_token_header'
+        - $ref: '../oas3-parameters.yml#/ACCOUNT_ID'
+        - $ref: '../oas3-parameters.yml#/QUEUE_ID'
+      responses:
+        200:
+          description: Successful operation
+      summary: Get status of queues
       tags:
         - queues

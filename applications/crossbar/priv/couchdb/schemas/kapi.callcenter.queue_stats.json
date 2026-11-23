@@ -1,0 +1,52 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.queue_stats",
+    "description": "A queue's waiting count, longest wait and available agents",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Agents-Available": {
+            "description": "How many agents could be offered a caller",
+            "type": "integer"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "queue_stats"
+            ],
+            "type": "string"
+        },
+        "Longest-Wait": {
+            "description": "How long the longest-waiting caller has been waiting, in seconds",
+            "type": "integer"
+        },
+        "Queue-ID": {
+            "description": "Queue the event belongs to",
+            "type": "string"
+        },
+        "Timestamp": {
+            "description": "When this was true, in Gregorian seconds",
+            "type": "integer"
+        },
+        "Waiting": {
+            "description": "How many callers are waiting",
+            "type": "integer"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Queue-ID",
+        "Waiting",
+        "Longest-Wait",
+        "Agents-Available",
+        "Timestamp"
+    ],
+    "type": "object"
+}

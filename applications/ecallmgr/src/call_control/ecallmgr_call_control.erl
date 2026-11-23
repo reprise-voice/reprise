@@ -62,6 +62,16 @@
 -export([fs_nodeup/2]).
 -export([fs_nodedown/2]).
 
+-ifdef(TEST).
+%% The command queue's rules, which are what a caller on hold music and an
+%% application that wants to bridge them both depend on.
+-export([insert_command/3
+        ,running/3
+        ,with_queue/2
+        ,queued_applications/1
+        ]).
+-endif.
+
 %% gen_server callbacks
 -export([handle_call/3
         ,handle_cast/2
@@ -76,7 +86,7 @@
 
 -define(KEEP_ALIVE, 2 * ?MILLISECONDS_IN_SECOND).
 
--type insert_at_options() :: 'now' | 'head' | 'tail' | 'flush'.
+-type insert_at_options() :: 'now' | 'head' | 'tail' | 'flush' | 'interrupt'.
 
 -record(state, {node :: atom()
                ,call_id :: kz_term:api_ne_binary()
@@ -798,6 +808,31 @@ handle_dialplan(JObj, #state{call_id=CallId
                        }
     end.
 
+-ifdef(TEST).
+%% @doc A control process for `CallId' on `Node' whose switch is running
+%% `CurrentApp' for it, or nothing.
+-spec running(atom(), kz_term:ne_binary(), kz_term:api_ne_binary()) -> state().
+running(Node, CallId, 'undefined') ->
+    #state{node=Node, call_id=CallId};
+running(Node, CallId, CurrentApp) ->
+    #state{node=Node
+          ,call_id=CallId
+          ,current_app=CurrentApp
+          ,current_cmd_uuid=kz_binary:rand_hex(16)
+          }.
+
+%% @doc The same process with these commands already waiting: what a flush
+%% leaves behind before the advance it sent itself has been handled.
+-spec with_queue(state(), queue:queue()) -> state().
+with_queue(State, Queue) ->
+    State#state{command_q=Queue}.
+
+%% @doc What is waiting in a command queue, in the order it will run.
+-spec queued_applications(queue:queue()) -> kz_term:ne_binaries().
+queued_applications(Queue) ->
+    [kapi_dialplan:application_name(JObj) || JObj <- queue:to_list(Queue)].
+-endif.
+
 %% execute all commands in JObj immediately, regardless of what is running (if anything).
 -spec insert_command(state(), insert_at_options(), kz_json:object()) -> queue:queue().
 insert_command(#state{node=Node
@@ -848,6 +883,24 @@ insert_command(#state{node=Node
     _ = freeswitch:api(Node, 'uuid_break', <<CallId/binary, " all">>),
     _ = maybe_force_queue_advance(CallId, CurrCmdId, queue:is_empty(CmdQ)),
     insert_command_into_queue(queue:new(), 'tail', JObj);
+%% `interrupt' is a flush that will not break into a bridge, running or
+%% waiting. The one thing a running bridge cannot afford is a command
+%% executed on top of it: the switch runs it nested inside the bridge, and a
+%% playback started that way carries on into the answered call. A waiting
+%% bridge is one a flush has just put there: the flush sends this process an
+%% advance and returns, and until that advance is handled the old
+%% application is still the current one, so a command that looked only at
+%% that would throw the bridge away and nothing would ring. Either way the
+%% command goes behind the bridge and runs when the bridge is over -- and
+%% otherwise it is the flush it asked for.
+insert_command(State, 'interrupt', JObj) ->
+    case has_bridge(State) of
+        'true' ->
+            lager:debug("a bridge is running or about to: the interrupting command waits behind it"),
+            insert_command(State, 'tail', JObj);
+        'false' ->
+            insert_command(State, 'flush', JObj)
+    end;
 insert_command(#state{command_q=CommandQ}, 'head', JObj) ->
     insert_command_into_queue(CommandQ, 'head', JObj);
 insert_command(#state{command_q=CommandQ}, 'tail', JObj) ->
@@ -855,6 +908,13 @@ insert_command(#state{command_q=CommandQ}, 'tail', JObj) ->
 insert_command(Q, Pos, _) ->
     lager:debug("received command for an unknown queue position: ~p", [Pos]),
     Q.
+
+-spec has_bridge(state()) -> boolean().
+has_bridge(#state{current_app = <<"bridge">>}) -> 'true';
+has_bridge(#state{command_q=CommandQ}) ->
+    lists:any(fun(JObj) -> kapi_dialplan:application_name(JObj) =:= <<"bridge">> end
+             ,queue:to_list(CommandQ)
+             ).
 
 maybe_force_queue_advance(_CallId, 'undefined', 'true') -> 'ok';
 maybe_force_queue_advance(CallId, _, _) ->

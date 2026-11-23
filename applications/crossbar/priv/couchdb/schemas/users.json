@@ -43,6 +43,63 @@
             },
             "type": "array"
         },
+        "call_center": {
+            "description": "Call center agent attributes, which make this user an agent; a user who is not an agent has no call_center object at all",
+            "properties": {
+                "agent_id": {
+                    "description": "Login id for the agent feature code, when it differs from the user id",
+                    "maxLength": 15,
+                    "type": "string"
+                },
+                "busy_delay": {
+                    "default": 0,
+                    "description": "Seconds before this agent is offered another caller after their phone answered busy",
+                    "minimum": 0,
+                    "type": "integer"
+                },
+                "max_no_answer": {
+                    "default": 0,
+                    "description": "Missed offers before the agent is moved to the queue's agent_no_answer_status, 0 for no limit",
+                    "minimum": 0,
+                    "type": "integer"
+                },
+                "no_answer_delay": {
+                    "default": 0,
+                    "description": "Seconds before this agent is offered another caller after their phone did not answer",
+                    "minimum": 0,
+                    "type": "integer"
+                },
+                "pin": {
+                    "description": "PIN for the agent feature code",
+                    "maxLength": 15,
+                    "minLength": 4,
+                    "pattern": "^[0-9]+$",
+                    "type": "string"
+                },
+                "record": {
+                    "default": false,
+                    "description": "Record this agent's legs, through the account's own recording storage",
+                    "type": "boolean"
+                },
+                "reject_delay": {
+                    "default": 0,
+                    "description": "Seconds before this agent is offered another caller after their phone rejected one",
+                    "minimum": 0,
+                    "type": "integer"
+                },
+                "ring_timeout": {
+                    "description": "Seconds this agent's phones ring on an offer, overriding the queue's agent_ring_timeout",
+                    "minimum": 1,
+                    "type": "integer"
+                },
+                "wrapup_time": {
+                    "description": "Seconds this agent is left alone after a queue call, overriding the queue's agent_wrapup_time",
+                    "minimum": 0,
+                    "type": "integer"
+                }
+            },
+            "type": "object"
+        },
         "call_failover": {
             "$ref": "call_failover"
         },

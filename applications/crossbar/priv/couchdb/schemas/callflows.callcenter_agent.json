@@ -1,0 +1,42 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "callflows.callcenter_agent",
+    "description": "Validator for the callcenter_agent callflow data object",
+    "properties": {
+        "action": {
+            "description": "Which change to make to the calling user's availability. toggle_login on the pattern ^\\*22([0-9]*)$ toggles the agent whose presence_id is the captured extension instead: the caller's own, or anybody's when the caller is an account admin",
+            "enum": [
+                "login",
+                "logout",
+                "toggle_login",
+                "break",
+                "resume",
+                "toggle_break"
+            ],
+            "type": "string"
+        },
+        "presence_id": {
+            "description": "Presence id of the BLF key that shows this agent's login; remembered for later changes. Empty uses <prefix><presence_id>",
+            "type": "string"
+        },
+        "require_pin": {
+            "default": false,
+            "description": "Ask for an agent id and a PIN even when the call carries an owner, so that the agent who types them is the one whose availability changes rather than the phone's owner",
+            "type": "boolean"
+        },
+        "skip_module": {
+            "description": "When set to true this callflow action is skipped, advancing to the wildcard branch (if any)",
+            "type": "boolean"
+        },
+        "timeout": {
+            "default": 0,
+            "description": "Seconds the agent stays on break before returning to their previous availability, 0 for no limit",
+            "minimum": 0,
+            "type": "integer"
+        }
+    },
+    "required": [
+        "action"
+    ],
+    "type": "object"
+}

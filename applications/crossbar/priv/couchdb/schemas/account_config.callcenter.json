@@ -1,0 +1,14 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "account_config.callcenter",
+    "description": "Schema for callcenter account_config",
+    "properties": {
+        "agent_presence_prefix": {
+            "default": "*22",
+            "description": "Prefix of the agent login lamp's presence id: an agent_login key watches <prefix><user presence_id>. Overrides system_config/callcenter.agent_presence_prefix for the account",
+            "pattern": "^[0-9*#]{1,10}$",
+            "type": "string"
+        }
+    },
+    "type": "object"
+}

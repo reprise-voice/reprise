@@ -129,7 +129,6 @@
 -type open_cache_doc_options() :: [open_cache_doc_option()].
 
 -type db_classification() :: 'account' |
-                             'acdc' |
                              'aggregate' |
                              'application' |
                              'deprecated' |

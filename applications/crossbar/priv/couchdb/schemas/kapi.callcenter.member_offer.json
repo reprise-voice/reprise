@@ -1,0 +1,54 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.member_offer",
+    "description": "A waiting caller is being offered to agents, whose phones are ringing",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Agent-IDs": {
+            "description": "The agents whose phones are ringing for the caller",
+            "items": {
+                "type": "string"
+            },
+            "type": "array"
+        },
+        "Call-ID": {
+            "description": "Call-ID of the caller's channel",
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "member_offer"
+            ],
+            "type": "string"
+        },
+        "Joined-Timestamp": {
+            "description": "When the caller entered the queue, in Gregorian seconds: which of the call's passages through the queue this is about",
+            "type": "integer"
+        },
+        "Offer-Timeout": {
+            "description": "Seconds the agents' phones ring before the offer is given up on",
+            "type": "integer"
+        },
+        "Queue-ID": {
+            "description": "Queue the event belongs to",
+            "type": "string"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Queue-ID",
+        "Call-ID",
+        "Agent-IDs",
+        "Offer-Timeout"
+    ],
+    "type": "object"
+}

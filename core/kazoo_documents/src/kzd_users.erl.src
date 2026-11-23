@@ -29,6 +29,16 @@
 -export([addresses_emergency_street_type/1, addresses_emergency_street_type/2, set_addresses_emergency_street_type/2]).
 -export([addresses_vcard/1, addresses_vcard/2, set_addresses_vcard/2]).
 -export([allowed_proxy_ips/1, allowed_proxy_ips/2, set_allowed_proxy_ips/2]).
+-export([call_center/1, call_center/2, set_call_center/2]).
+-export([call_center_agent_id/1, call_center_agent_id/2, set_call_center_agent_id/2]).
+-export([call_center_busy_delay/1, call_center_busy_delay/2, set_call_center_busy_delay/2]).
+-export([call_center_max_no_answer/1, call_center_max_no_answer/2, set_call_center_max_no_answer/2]).
+-export([call_center_no_answer_delay/1, call_center_no_answer_delay/2, set_call_center_no_answer_delay/2]).
+-export([call_center_pin/1, call_center_pin/2, set_call_center_pin/2]).
+-export([call_center_record/1, call_center_record/2, set_call_center_record/2]).
+-export([call_center_reject_delay/1, call_center_reject_delay/2, set_call_center_reject_delay/2]).
+-export([call_center_ring_timeout/1, call_center_ring_timeout/2, set_call_center_ring_timeout/2]).
+-export([call_center_wrapup_time/1, call_center_wrapup_time/2, set_call_center_wrapup_time/2]).
 -export([call_failover/1, call_failover/2, set_call_failover/2]).
 -export([call_forward/1, call_forward/2, set_call_forward/2]).
 -export([call_limits/1, call_limits/2, set_call_limits/2]).
@@ -369,6 +379,126 @@ allowed_proxy_ips(Doc, Default) ->
 -spec set_allowed_proxy_ips(doc(), kz_term:ne_binaries()) -> doc().
 set_allowed_proxy_ips(Doc, AllowedProxyIps) ->
     kz_json:set_value([<<"allowed_proxy_ips">>], AllowedProxyIps, Doc).
+
+-spec call_center(doc()) -> kz_term:api_object().
+call_center(Doc) ->
+    call_center(Doc, 'undefined').
+
+-spec call_center(doc(), Default) -> kz_json:object() | Default.
+call_center(Doc, Default) ->
+    kz_json:get_json_value([<<"call_center">>], Doc, Default).
+
+-spec set_call_center(doc(), kz_json:object()) -> doc().
+set_call_center(Doc, CallCenter) ->
+    kz_json:set_value([<<"call_center">>], CallCenter, Doc).
+
+-spec call_center_agent_id(doc()) -> kz_term:api_binary().
+call_center_agent_id(Doc) ->
+    call_center_agent_id(Doc, 'undefined').
+
+-spec call_center_agent_id(doc(), Default) -> binary() | Default.
+call_center_agent_id(Doc, Default) ->
+    kz_json:get_binary_value([<<"call_center">>, <<"agent_id">>], Doc, Default).
+
+-spec set_call_center_agent_id(doc(), binary()) -> doc().
+set_call_center_agent_id(Doc, CallCenterAgentId) ->
+    kz_json:set_value([<<"call_center">>, <<"agent_id">>], CallCenterAgentId, Doc).
+
+-spec call_center_busy_delay(doc()) -> integer().
+call_center_busy_delay(Doc) ->
+    call_center_busy_delay(Doc, 0).
+
+-spec call_center_busy_delay(doc(), Default) -> integer() | Default.
+call_center_busy_delay(Doc, Default) ->
+    kz_json:get_integer_value([<<"call_center">>, <<"busy_delay">>], Doc, Default).
+
+-spec set_call_center_busy_delay(doc(), integer()) -> doc().
+set_call_center_busy_delay(Doc, CallCenterBusyDelay) ->
+    kz_json:set_value([<<"call_center">>, <<"busy_delay">>], CallCenterBusyDelay, Doc).
+
+-spec call_center_max_no_answer(doc()) -> integer().
+call_center_max_no_answer(Doc) ->
+    call_center_max_no_answer(Doc, 0).
+
+-spec call_center_max_no_answer(doc(), Default) -> integer() | Default.
+call_center_max_no_answer(Doc, Default) ->
+    kz_json:get_integer_value([<<"call_center">>, <<"max_no_answer">>], Doc, Default).
+
+-spec set_call_center_max_no_answer(doc(), integer()) -> doc().
+set_call_center_max_no_answer(Doc, CallCenterMaxNoAnswer) ->
+    kz_json:set_value([<<"call_center">>, <<"max_no_answer">>], CallCenterMaxNoAnswer, Doc).
+
+-spec call_center_no_answer_delay(doc()) -> integer().
+call_center_no_answer_delay(Doc) ->
+    call_center_no_answer_delay(Doc, 0).
+
+-spec call_center_no_answer_delay(doc(), Default) -> integer() | Default.
+call_center_no_answer_delay(Doc, Default) ->
+    kz_json:get_integer_value([<<"call_center">>, <<"no_answer_delay">>], Doc, Default).
+
+-spec set_call_center_no_answer_delay(doc(), integer()) -> doc().
+set_call_center_no_answer_delay(Doc, CallCenterNoAnswerDelay) ->
+    kz_json:set_value([<<"call_center">>, <<"no_answer_delay">>], CallCenterNoAnswerDelay, Doc).
+
+-spec call_center_pin(doc()) -> kz_term:api_ne_binary().
+call_center_pin(Doc) ->
+    call_center_pin(Doc, 'undefined').
+
+-spec call_center_pin(doc(), Default) -> kz_term:ne_binary() | Default.
+call_center_pin(Doc, Default) ->
+    kz_json:get_ne_binary_value([<<"call_center">>, <<"pin">>], Doc, Default).
+
+-spec set_call_center_pin(doc(), kz_term:ne_binary()) -> doc().
+set_call_center_pin(Doc, CallCenterPin) ->
+    kz_json:set_value([<<"call_center">>, <<"pin">>], CallCenterPin, Doc).
+
+-spec call_center_record(doc()) -> boolean().
+call_center_record(Doc) ->
+    call_center_record(Doc, 'false').
+
+-spec call_center_record(doc(), Default) -> boolean() | Default.
+call_center_record(Doc, Default) ->
+    kz_json:get_boolean_value([<<"call_center">>, <<"record">>], Doc, Default).
+
+-spec set_call_center_record(doc(), boolean()) -> doc().
+set_call_center_record(Doc, CallCenterRecord) ->
+    kz_json:set_value([<<"call_center">>, <<"record">>], CallCenterRecord, Doc).
+
+-spec call_center_reject_delay(doc()) -> integer().
+call_center_reject_delay(Doc) ->
+    call_center_reject_delay(Doc, 0).
+
+-spec call_center_reject_delay(doc(), Default) -> integer() | Default.
+call_center_reject_delay(Doc, Default) ->
+    kz_json:get_integer_value([<<"call_center">>, <<"reject_delay">>], Doc, Default).
+
+-spec set_call_center_reject_delay(doc(), integer()) -> doc().
+set_call_center_reject_delay(Doc, CallCenterRejectDelay) ->
+    kz_json:set_value([<<"call_center">>, <<"reject_delay">>], CallCenterRejectDelay, Doc).
+
+-spec call_center_ring_timeout(doc()) -> kz_term:api_integer().
+call_center_ring_timeout(Doc) ->
+    call_center_ring_timeout(Doc, 'undefined').
+
+-spec call_center_ring_timeout(doc(), Default) -> integer() | Default.
+call_center_ring_timeout(Doc, Default) ->
+    kz_json:get_integer_value([<<"call_center">>, <<"ring_timeout">>], Doc, Default).
+
+-spec set_call_center_ring_timeout(doc(), integer()) -> doc().
+set_call_center_ring_timeout(Doc, CallCenterRingTimeout) ->
+    kz_json:set_value([<<"call_center">>, <<"ring_timeout">>], CallCenterRingTimeout, Doc).
+
+-spec call_center_wrapup_time(doc()) -> kz_term:api_integer().
+call_center_wrapup_time(Doc) ->
+    call_center_wrapup_time(Doc, 'undefined').
+
+-spec call_center_wrapup_time(doc(), Default) -> integer() | Default.
+call_center_wrapup_time(Doc, Default) ->
+    kz_json:get_integer_value([<<"call_center">>, <<"wrapup_time">>], Doc, Default).
+
+-spec set_call_center_wrapup_time(doc(), integer()) -> doc().
+set_call_center_wrapup_time(Doc, CallCenterWrapupTime) ->
+    kz_json:set_value([<<"call_center">>, <<"wrapup_time">>], CallCenterWrapupTime, Doc).
 
 -spec call_failover(doc()) -> kz_term:api_object().
 call_failover(Doc) ->
