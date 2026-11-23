@@ -271,7 +271,7 @@ jobs:
             docker buildx create --name reprise --driver docker-container --use >/dev/null
             docker buildx build --platform linux/amd64 --target build \
               --file docker/freeswitch/Dockerfile \
-              --cache-from type=registry,ref=ghcr.io/reprise-voice/reprise-freeswitch:buildcache-amd64 \
+              --cache-from "type=registry,ref=$(.circleci/scripts/images.sh registry)/reprise-freeswitch:buildcache-amd64" \
               --tag reprise/reprise-freeswitch-dev:dev --load .
           no_output_timeout: 60m
       - run:

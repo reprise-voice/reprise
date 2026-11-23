@@ -2,6 +2,7 @@
 # Image build and publishing for .circleci/config.yml.
 #
 #   images.sh tags                    print the version and the tags this pipeline publishes
+#   images.sh registry                print the registry namespace the images go to
 #   images.sh login                   docker login ghcr.io with GHCR_USER / GHCR_TOKEN
 #   images.sh build <image> <arch>    build one image for linux/<arch>, push <ref>:sha-<short>-<arch>
 #   images.sh promote                 the candidates -> the published tags
@@ -13,11 +14,18 @@
 # Tags: a push to main publishes edge and sha-<short>; a tag v<X.Y.Z> (which
 # must equal the VERSION file) publishes X.Y.Z, and for a release without a
 # pre-release suffix also X.Y and latest, plus sha-<short>.
+#
+# The registry namespace is ghcr.io/<owner of the repository being built>
+# (CircleCI's CIRCLE_PROJECT_USERNAME, lower case as the registry requires),
+# so a fork's pipeline pushes to the fork owner's packages and cannot
+# overwrite the images of the repository it was forked from. Outside
+# CircleCI it is ghcr.io/reprise-voice. REGISTRY overrides both.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-REGISTRY=${REGISTRY:-ghcr.io/reprise-voice}
+OWNER=$(printf '%s' "${CIRCLE_PROJECT_USERNAME:-reprise-voice}" | tr '[:upper:]' '[:lower:]')
+REGISTRY=${REGISTRY:-ghcr.io/$OWNER}
 SHA=${CIRCLE_SHA1:-$(git rev-parse HEAD)}
 SHORT=${SHA:0:7}
 GIT_TAG=${CIRCLE_TAG:-}
@@ -114,8 +122,9 @@ cmd_promote() {
 
 case "${1:-}" in
   tags) cmd_tags ;;
+  registry) echo "$REGISTRY" ;;
   login) cmd_login ;;
   build) shift; cmd_build "$@" ;;
   promote) cmd_promote ;;
-  *) sed -n '2,9p' "$0" >&2; exit 2 ;;
+  *) sed -n '2,10p' "$0" >&2; exit 2 ;;
 esac
