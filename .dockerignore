@@ -1,0 +1,43 @@
+# docker build context is the repository root (docker/<image>/Dockerfile);
+# keep the sources, drop build output and the history
+.git
+.gitignore
+**/.git
+_rel/
+deps/
+**/ebin/
+**/*.beam
+**/*.o
+**/*.so
+**/*.plt
+**/.erlang.mk/
+erlang.mk
+TAGS
+docker/**/*.tar
+
+# erlang.mk's "this is already fetched/built" stamps. deps/ and ebin/ are
+# excluded above, so a stamp left behind by a build on the host would make the
+# image skip fetching the dependencies and then fail to compile.
+**/.deps.mk.*
+**/.apps.mk.*
+**/.deps.rules
+**/.test.deps
+
+# eunit's JUnit/surefire XML, written next to each application
+**/test-results/
+
+# the Gleam build trees (hex sources and compiled output): the image builds
+# them
+applications/*/build/
+core/kazoo_gleam/build/
+.test-compiled/
+
+# Local credentials and developer state must never enter the build context.
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.sample
+**/.ssh
+**/.aws
+**/.kube
+**/erl_crash.dump

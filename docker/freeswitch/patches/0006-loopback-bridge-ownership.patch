@@ -1,0 +1,34 @@
+--- a/src/switch_ivr_bridge.c
++++ b/src/switch_ivr_bridge.c
+@@ -433,7 +433,10 @@
+ 	switch_channel_wait_for_flag(chan_b, CF_BRIDGED, SWITCH_TRUE, 10000, chan_a);
+ 
+ 	if (!switch_channel_test_flag(chan_b, CF_BRIDGED)) {
+-		if (!(switch_channel_test_flag(chan_b, CF_TRANSFER) || switch_channel_test_flag(chan_b, CF_REDIRECT)
++		/* Bowout may reset and park the real peer before this retiring
++		 * loopback bridge observes BRIDGED. It no longer owns that peer. */
++		if (!(switch_channel_get_cause(chan_a) == SWITCH_CAUSE_BOWOUT ||
++			  switch_channel_test_flag(chan_b, CF_TRANSFER) || switch_channel_test_flag(chan_b, CF_REDIRECT)
+ 			  || switch_channel_get_state(chan_b) == CS_RESET)) {
+ 			switch_channel_hangup(chan_b, SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER);
+ 		}
+--- a/src/include/switch_types.h
++++ b/src/include/switch_types.h
+@@ -1653,7 +1653,7 @@
+ } switch_channel_flag_t;
+ 
+ #define SWITCH_KAZOO_SESSION_SWAP_VERSION 1
+-#define SWITCH_KAZOO_INTERCEPT_VERSION 3
++#define SWITCH_KAZOO_INTERCEPT_VERSION 4
+ 
+ typedef struct switch_vid_params_s {
+ 	uint32_t width;
+--- a/src/switch_channel.c
++++ b/src/switch_channel.c
+@@ -5796,3 +5796,6 @@
+ 
+ /* Event profile flag filters are part of the transfer compatibility unit. */
+ SWITCH_DECLARE(void) switch_kazoo_intercept_v3(void) {}
++
++/* Retired loopback bridges cannot tear down a replacement owner. */
++SWITCH_DECLARE(void) switch_kazoo_intercept_v4(void) {}

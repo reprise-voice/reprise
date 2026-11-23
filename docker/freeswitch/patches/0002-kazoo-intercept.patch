@@ -1,0 +1,43 @@
+--- a/src/include/switch_types.h
++++ b/src/include/switch_types.h
+@@ -1645,12 +1645,14 @@
+ 	CF_SESSION_SWAP,
+ 	CF_DISABLE_ON_API,
+ 	CF_DISABLE_ON_EXEC,
++	CF_GROUP_ACCEPTED,
+ 	/* WARNING: DO NOT ADD ANY FLAGS BELOW THIS LINE */
+ 	/* IF YOU ADD NEW ONES CHECK IF THEY SHOULD PERSIST OR ZERO THEM IN switch_core_session.c switch_core_session_request_xml() */
+ 	CF_FLAG_MAX
+ } switch_channel_flag_t;
+ 
+ #define SWITCH_KAZOO_SESSION_SWAP_VERSION 1
++#define SWITCH_KAZOO_INTERCEPT_VERSION 1
+ 
+ typedef struct switch_vid_params_s {
+ 	uint32_t width;
+--- a/src/switch_ivr_originate.c
++++ b/src/switch_ivr_originate.c
+@@ -197,6 +197,14 @@
+ 	channel = switch_core_session_get_channel(collect->session);
+ 	if (switch_core_session_read_lock(collect->session) != SWITCH_STATUS_SUCCESS) {
+ 		return NULL;
++	}
++
++	/* A pickup accepts this originating leg without confirmation DTMF.
++	 * This is the matching distributed mod_kazoo intercept contract. */
++	if (switch_channel_test_flag(channel, CF_GROUP_ACCEPTED)) {
++		switch_channel_set_flag(channel, CF_WINNER);
++		switch_channel_set_variable(channel, "group_dial_status", "winner");
++		goto wbreak;
+ 	}
+ 
+ 	switch_ivr_sleep(collect->session, 0, SWITCH_TRUE, NULL);
+--- a/src/switch_channel.c
++++ b/src/switch_channel.c
+@@ -5593,3 +5593,6 @@
+ 
+ /* Link-time guard: the endpoint must load with its matching core. */
+ SWITCH_DECLARE(void) switch_kazoo_session_swap_v1(void) {}
++
++/* Link-time guard for mod_kazoo pickup confirmation semantics. */
++SWITCH_DECLARE(void) switch_kazoo_intercept_v1(void) {}

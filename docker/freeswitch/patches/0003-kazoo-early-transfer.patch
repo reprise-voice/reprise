@@ -1,0 +1,125 @@
+--- a/src/include/switch_types.h
++++ b/src/include/switch_types.h
+@@ -1646,13 +1646,14 @@
+ 	CF_DISABLE_ON_API,
+ 	CF_DISABLE_ON_EXEC,
+ 	CF_GROUP_ACCEPTED,
++	CF_ORIGINATING_XFER,
+ 	/* WARNING: DO NOT ADD ANY FLAGS BELOW THIS LINE */
+ 	/* IF YOU ADD NEW ONES CHECK IF THEY SHOULD PERSIST OR ZERO THEM IN switch_core_session.c switch_core_session_request_xml() */
+ 	CF_FLAG_MAX
+ } switch_channel_flag_t;
+ 
+ #define SWITCH_KAZOO_SESSION_SWAP_VERSION 1
+-#define SWITCH_KAZOO_INTERCEPT_VERSION 1
++#define SWITCH_KAZOO_INTERCEPT_VERSION 2
+ 
+ typedef struct switch_vid_params_s {
+ 	uint32_t width;
+--- a/src/switch_ivr_originate.c
++++ b/src/switch_ivr_originate.c
+@@ -3777,6 +3777,12 @@
+ 						oglobals.session = NULL;
+ 						session = NULL;
+ 						switch_core_session_rwunlock(peer_session);
++					} else if (caller_channel && switch_channel_test_flag(caller_channel, CF_ORIGINATING_XFER)) {
++                        /* Pickup or another replacement owns the saved caller. */
++                        if (peer_channel) {
++                            switch_channel_hangup(peer_channel, SWITCH_CAUSE_ATTENDED_TRANSFER);
++                            switch_core_session_rwunlock(peer_session);
++                        }
+ 					} else {
+ 						switch_core_session_t *holding_session;
+ 
+@@ -4274,8 +4280,18 @@
+ 		switch_channel_execute_on(caller_channel, SWITCH_CHANNEL_EXECUTE_ON_POST_ORIGINATE_VARIABLE);
+ 		switch_channel_api_on(caller_channel, SWITCH_CHANNEL_API_ON_POST_ORIGINATE_VARIABLE);
+ 
+ 		switch_channel_clear_flag(caller_channel, CF_ORIGINATOR);
+ 		switch_channel_clear_flag(caller_channel, CF_XFER_ZOMBIE);
++
++		{
++			/* A consultation leg whose SIP dialog ended during this originate
++			 * deferred its hangup until CF_ORIGINATOR cleared (see mod_sofia). */
++			const char *deferred = switch_channel_get_variable(caller_channel, "kz_originating_xfer_cause");
++			if (!zstr(deferred)) {
++				switch_channel_set_variable(caller_channel, "kz_originating_xfer_cause", NULL);
++				switch_channel_hangup(caller_channel, switch_channel_str2cause(deferred));
++			}
++		}
+ 
+ 		if (hangup_on_single_reject) {
+ 			switch_channel_hangup(caller_channel, *cause);
+--- a/src/switch_channel.c
++++ b/src/switch_channel.c
+@@ -5596,3 +5596,6 @@
+ 
+ /* Link-time guard for mod_kazoo pickup confirmation semantics. */
+ SWITCH_DECLARE(void) switch_kazoo_intercept_v1(void) {}
++
++/* Matching Sofia originating-transfer lifecycle and pickup support. */
++SWITCH_DECLARE(void) switch_kazoo_intercept_v2(void) {}
+--- a/src/mod/endpoints/mod_sofia/sofia.c
++++ b/src/mod/endpoints/mod_sofia/sofia.c
+@@ -8751,7 +8751,18 @@
+ 			}
+ 			switch_snprintf(st, sizeof(st), "%d", cause);
+ 			switch_channel_set_variable(channel, "sip_term_cause", st);
+-			switch_channel_hangup(channel, cause);
++			if (switch_channel_test_flag(channel, CF_ORIGINATING_XFER) && switch_channel_test_flag(channel, CF_ORIGINATOR)) {
++				/* Consultation originator: keep the leg until originate completes.
++				 * switch_ivr_originate hangs it up with this cause when it clears
++				 * CF_ORIGINATOR; re-check in case that already happened. The
++				 * numeric form survives Q.850 codes that have no name. */
++				switch_channel_set_variable(channel, "kz_originating_xfer_cause", st);
++				if (!switch_channel_test_flag(channel, CF_ORIGINATOR)) {
++					switch_channel_hangup(channel, cause);
++				}
++			} else {
++				switch_channel_hangup(channel, cause);
++			}
+ 			ss_state = nua_callstate_terminated;
+ 		}
+ 
+@@ -9157,6 +9168,12 @@
+ 						switch_channel_set_variable(channel_b, SWITCH_HOLDING_UUID_VARIABLE, br_a);
+ 						switch_channel_set_flag(channel_b, CF_XFER_ZOMBIE);
+ 						switch_channel_set_flag(channel_b, CF_TRANSFER);
++						switch_channel_set_flag(channel_b, CF_ORIGINATING_XFER);
++                        switch_channel_set_variable(channel_b, "SATT_UUID", br_a);
++                        switch_channel_set_variable(channel_b, SWITCH_SIGNAL_BOND_VARIABLE, NULL);
++                        switch_channel_set_variable(channel_b, SWITCH_ORIGINATE_SIGNAL_BOND_VARIABLE, NULL);
++                        switch_channel_set_variable(channel_b, "kz_originate_aleg_uuid", NULL);
++                        sofia_set_flag_locked(b_tech_pvt, TFLAG_BYE);
+ 
+ 
+ 						if ((a_session = switch_core_session_locate(br_a))) {
+--- a/src/mod/endpoints/mod_sofia/mod_sofia.c
++++ b/src/mod/endpoints/mod_sofia/mod_sofia.c
+@@ -1377,7 +1377,7 @@
+ 	}
+ 
+ 
+-	if (switch_channel_down(channel) || sofia_test_flag(tech_pvt, TFLAG_BYE)) {
++	if (switch_channel_down(channel) || (sofia_test_flag(tech_pvt, TFLAG_BYE) && !switch_channel_test_flag(channel, CF_ORIGINATING_XFER))) {
+ 		status = SWITCH_STATUS_FALSE;
+ 		goto end;
+ 	}
+@@ -1554,7 +1554,7 @@
+ 	switch_core_session_lock_codec_write(session);
+ 	switch_mutex_lock(tech_pvt->sofia_mutex);
+ 
+-	if (switch_channel_down(channel) || sofia_test_flag(tech_pvt, TFLAG_BYE)) {
++	if (switch_channel_down(channel) || (sofia_test_flag(tech_pvt, TFLAG_BYE) && !switch_channel_test_flag(channel, CF_ORIGINATING_XFER))) {
+ 		status = SWITCH_STATUS_FALSE;
+ 		goto end_lock;
+ 	}
+@@ -2745,7 +2745,7 @@
+ 
+   end:
+ 
+-	if (switch_channel_down(channel) || sofia_test_flag(tech_pvt, TFLAG_BYE)) {
++	if (switch_channel_down(channel) || (sofia_test_flag(tech_pvt, TFLAG_BYE) && !switch_channel_test_flag(channel, CF_ORIGINATING_XFER))) {
+ 		status = SWITCH_STATUS_FALSE;
+ 	}
+ 

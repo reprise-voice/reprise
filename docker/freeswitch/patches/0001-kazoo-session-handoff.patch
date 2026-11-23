@@ -1,0 +1,106 @@
+--- a/src/include/switch_types.h
++++ b/src/include/switch_types.h
+@@ -1641,10 +1641,16 @@
+ 	CF_VIDEO_READ_TAPPED,
+ 	CF_VIDEO_WRITE_TAPPED,
+ 	CF_DEVICES_CHANGED,
++	/* Reprise: mod_kazoo pending-channel handoff and lifecycle guards. */
++	CF_SESSION_SWAP,
++	CF_DISABLE_ON_API,
++	CF_DISABLE_ON_EXEC,
+ 	/* WARNING: DO NOT ADD ANY FLAGS BELOW THIS LINE */
+ 	/* IF YOU ADD NEW ONES CHECK IF THEY SHOULD PERSIST OR ZERO THEM IN switch_core_session.c switch_core_session_request_xml() */
+ 	CF_FLAG_MAX
+ } switch_channel_flag_t;
++
++#define SWITCH_KAZOO_SESSION_SWAP_VERSION 1
+ 
+ typedef struct switch_vid_params_s {
+ 	uint32_t width;
+@@ -2264,7 +2270,9 @@
+ 	SWITCH_CAUSE_UNSUPPORTED_CERTIFICATE = 822,
+ 	SWITCH_CAUSE_INVALID_IDENTITY = 823,
+ 	SWITCH_CAUSE_STALE_DATE = 824,
+-	SWITCH_CAUSE_REJECT_ALL = 825
++	SWITCH_CAUSE_REJECT_ALL = 825,
++	SWITCH_CAUSE_SWAPPED = 826,
++	SWITCH_CAUSE_SUBSCRIBER_DND = 827
+ } switch_call_cause_t;
+ 
+ typedef enum {
+--- a/src/switch_channel.c
++++ b/src/switch_channel.c
+@@ -117,6 +117,8 @@
+ 	{"USER_CHALLENGE", SWITCH_CAUSE_USER_CHALLENGE},
+ 	{"MEDIA_TIMEOUT", SWITCH_CAUSE_MEDIA_TIMEOUT},
+ 	{"PICKED_OFF", SWITCH_CAUSE_PICKED_OFF},
++	{"SWAPPED", SWITCH_CAUSE_SWAPPED},
++	{"SUBSCRIBER_DND", SWITCH_CAUSE_SUBSCRIBER_DND},
+ 	{"USER_NOT_REGISTERED", SWITCH_CAUSE_USER_NOT_REGISTERED},
+ 	{"PROGRESS_TIMEOUT", SWITCH_CAUSE_PROGRESS_TIMEOUT},
+ 	{"INVALID_GATEWAY", SWITCH_CAUSE_INVALID_GATEWAY},
+@@ -3705,6 +3707,8 @@
+ 	switch_event_header_t *hp;
+ 	switch_event_t *event;
+ 	int x = 0;
++	if (switch_channel_test_flag(channel, CF_DISABLE_ON_API)) return SWITCH_STATUS_FALSE;
++
+ 
+ 
+ 	switch_channel_get_variables(channel, &event);
+@@ -3783,6 +3787,8 @@
+ 	switch_event_header_t *hp;
+ 	switch_event_t *event, *cevent;
+ 	int x = 0;
++	if (switch_channel_test_flag(channel, CF_DISABLE_ON_EXEC)) return SWITCH_STATUS_FALSE;
++
+ 
+ 	switch_core_get_variables(&event);
+ 	switch_channel_get_variables(channel, &cevent);
+@@ -5584,3 +5590,6 @@
+  * For VIM:
+  * vim:set softtabstop=4 shiftwidth=4 tabstop=4 noet:
+  */
++
++/* Link-time guard: the endpoint must load with its matching core. */
++SWITCH_DECLARE(void) switch_kazoo_session_swap_v1(void) {}
+--- a/src/switch_ivr_originate.c
++++ b/src/switch_ivr_originate.c
+@@ -490,6 +490,37 @@
+ 		}
+ 	}
+ 
++
++
++	/* A pending kz endpoint completed. This is a session handoff, not pickup.
++	 * Keep the existing CF_CHANNEL_SWAP pickup path and its hooks unchanged. */
++	for (i = 0; i < len; i++) {
++		switch_channel_t *old_channel = oglobals->originate_status[i].peer_channel;
++		if (old_channel && switch_channel_test_flag(old_channel, CF_SESSION_SWAP)) {
++			const char *key = switch_channel_get_variable(old_channel, "channel_swap_uuid");
++			switch_core_session_t *replacement = zstr(key) ? NULL : switch_core_session_locate(key);
++			switch_core_session_t *old_session = oglobals->originate_status[i].peer_session;
++			switch_channel_clear_flag(old_channel, CF_SESSION_SWAP);
++			/* Standard locate deliberately refuses an already hung-up winner. */
++			if (replacement && replacement != old_session && !switch_channel_down_nosig(old_channel)) {
++				switch_channel_t *replacement_channel = switch_core_session_get_channel(replacement);
++				oglobals->originate_status[i].peer_session = replacement;
++				oglobals->originate_status[i].peer_channel = replacement_channel;
++				oglobals->originate_status[i].caller_profile = switch_channel_get_caller_profile(replacement_channel);
++				switch_channel_set_flag(replacement_channel, CF_ORIGINATING);
++				switch_channel_set_variable(replacement_channel, "swapped_uuid", switch_core_session_get_uuid(old_session));
++				switch_channel_set_variable(old_channel, "swapped_uuid", switch_core_session_get_uuid(replacement));
++				switch_channel_execute_on(replacement_channel, "execute_on_session_swap");
++				switch_channel_api_on(replacement_channel, "api_on_session_swap");
++				switch_channel_hangup(old_channel, SWITCH_CAUSE_SWAPPED);
++				switch_core_session_rwunlock(old_session);
++				break;
++			}
++			if (replacement) switch_core_session_rwunlock(replacement);
++			/* A missing winner is a failure, never a successful handoff. */
++			switch_channel_hangup(old_channel, SWITCH_CAUSE_DESTINATION_OUT_OF_ORDER);
++		}
++	}
+ 
+ 	for (i = 0; i < len; i++) {
+ 		if (oglobals->originate_status[i].peer_channel && switch_channel_test_flag(oglobals->originate_status[i].peer_channel, CF_CHANNEL_SWAP)) {

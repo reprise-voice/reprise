@@ -1,0 +1,240 @@
+--- a/src/include/switch_types.h
++++ b/src/include/switch_types.h
+@@ -1653,7 +1653,7 @@
+ } switch_channel_flag_t;
+ 
+ #define SWITCH_KAZOO_SESSION_SWAP_VERSION 1
+-#define SWITCH_KAZOO_INTERCEPT_VERSION 2
++#define SWITCH_KAZOO_INTERCEPT_VERSION 3
+ 
+ typedef struct switch_vid_params_s {
+ 	uint32_t width;
+--- a/src/switch_channel.c
++++ b/src/switch_channel.c
+@@ -2657,6 +2657,206 @@
+ 	switch_mutex_unlock(channel->thread_mutex);
+ }
+ 
++/* Kazoo event profiles evaluate symbolic channel flags. Capture them while
++ * building the event, before asynchronous dispatch can change channel state. */
++static void kazoo_channel_flags_string(switch_channel_t *channel, char *buf, size_t buflen)
++{
++ static const char *names[CF_FLAG_MAX] = {
++		[CF_ANSWERED] = "ANSWERED",
++		[CF_OUTBOUND] = "OUTBOUND",
++		[CF_EARLY_MEDIA] = "EARLY_MEDIA",
++		[CF_BRIDGE_ORIGINATOR] = "BRIDGE_ORIGINATOR",
++		[CF_UUID_BRIDGE_ORIGINATOR] = "UUID_BRIDGE_ORIGINATOR",
++		[CF_TRANSFER] = "TRANSFER",
++		[CF_ACCEPT_CNG] = "ACCEPT_CNG",
++		[CF_REDIRECT] = "REDIRECT",
++		[CF_BRIDGED] = "BRIDGED",
++		[CF_HOLD] = "HOLD",
++		[CF_HOLD_BLEG] = "HOLD_BLEG",
++		[CF_SERVICE] = "SERVICE",
++		[CF_TAGGED] = "TAGGED",
++		[CF_WINNER] = "WINNER",
++		[CF_REUSE_CALLER_PROFILE] = "REUSE_CALLER_PROFILE",
++		[CF_CONTROLLED] = "CONTROLLED",
++		[CF_PROXY_MODE] = "PROXY_MODE",
++		[CF_PROXY_OFF] = "PROXY_OFF",
++		[CF_SUSPEND] = "SUSPEND",
++		[CF_EVENT_PARSE] = "EVENT_PARSE",
++		[CF_GEN_RINGBACK] = "GEN_RINGBACK",
++		[CF_RING_READY] = "RING_READY",
++		[CF_BREAK] = "BREAK",
++		[CF_BROADCAST] = "BROADCAST",
++		[CF_UNICAST] = "UNICAST",
++		[CF_VIDEO] = "VIDEO",
++		[CF_EVENT_LOCK] = "EVENT_LOCK",
++		[CF_EVENT_LOCK_PRI] = "EVENT_LOCK_PRI",
++		[CF_RESET] = "RESET",
++		[CF_ORIGINATING] = "ORIGINATING",
++		[CF_STOP_BROADCAST] = "STOP_BROADCAST",
++		[CF_PROXY_MEDIA] = "PROXY_MEDIA",
++		[CF_INNER_BRIDGE] = "INNER_BRIDGE",
++		[CF_REQ_MEDIA] = "REQ_MEDIA",
++		[CF_VERBOSE_EVENTS] = "VERBOSE_EVENTS",
++		[CF_PAUSE_BUGS] = "PAUSE_BUGS",
++		[CF_DIVERT_EVENTS] = "DIVERT_EVENTS",
++		[CF_BLOCK_STATE] = "BLOCK_STATE",
++		[CF_FS_RTP] = "FS_RTP",
++		[CF_REPORTING] = "REPORTING",
++		[CF_PARK] = "PARK",
++		[CF_TIMESTAMP_SET] = "TIMESTAMP_SET",
++		[CF_ORIGINATOR] = "ORIGINATOR",
++		[CF_XFER_ZOMBIE] = "XFER_ZOMBIE",
++		[CF_MEDIA_ACK] = "MEDIA_ACK",
++		[CF_THREAD_SLEEPING] = "THREAD_SLEEPING",
++		[CF_DISABLE_RINGBACK] = "DISABLE_RINGBACK",
++		[CF_NOT_READY] = "NOT_READY",
++		[CF_SIGNAL_BRIDGE_TTL] = "SIGNAL_BRIDGE_TTL",
++		[CF_MEDIA_BRIDGE_TTL] = "MEDIA_BRIDGE_TTL",
++		[CF_BYPASS_MEDIA_AFTER_BRIDGE] = "BYPASS_MEDIA_AFTER_BRIDGE",
++		[CF_LEG_HOLDING] = "LEG_HOLDING",
++		[CF_BROADCAST_DROP_MEDIA] = "BROADCAST_DROP_MEDIA",
++		[CF_EARLY_HANGUP] = "EARLY_HANGUP",
++		[CF_MEDIA_SET] = "MEDIA_SET",
++		[CF_CONSUME_ON_ORIGINATE] = "CONSUME_ON_ORIGINATE",
++		[CF_PASSTHRU_PTIME_MISMATCH] = "PASSTHRU_PTIME_MISMATCH",
++		[CF_BRIDGE_NOWRITE] = "BRIDGE_NOWRITE",
++		[CF_RECOVERED] = "RECOVERED",
++		[CF_JITTERBUFFER] = "JITTERBUFFER",
++		[CF_JITTERBUFFER_PLC] = "JITTERBUFFER_PLC",
++		[CF_DIALPLAN] = "DIALPLAN",
++		[CF_BLEG] = "BLEG",
++		[CF_BLOCK_BROADCAST_UNTIL_MEDIA] = "BLOCK_BROADCAST_UNTIL_MEDIA",
++		[CF_CNG_PLC] = "CNG_PLC",
++		[CF_ATTENDED_TRANSFER] = "ATTENDED_TRANSFER",
++		[CF_LAZY_ATTENDED_TRANSFER] = "LAZY_ATTENDED_TRANSFER",
++		[CF_SIGNAL_DATA] = "SIGNAL_DATA",
++		[CF_SIMPLIFY] = "SIMPLIFY",
++		[CF_ZOMBIE_EXEC] = "ZOMBIE_EXEC",
++		[CF_INTERCEPT] = "INTERCEPT",
++		[CF_INTERCEPTED] = "INTERCEPTED",
++		[CF_VIDEO_REFRESH_REQ] = "VIDEO_REFRESH_REQ",
++		[CF_MANUAL_VID_REFRESH] = "MANUAL_VID_REFRESH",
++		[CF_MANUAL_MEDIA_PARAMS] = "MANUAL_MEDIA_PARAMS",
++		[CF_SERVICE_AUDIO] = "SERVICE_AUDIO",
++		[CF_SERVICE_VIDEO] = "SERVICE_VIDEO",
++		[CF_CHANNEL_SWAP] = "CHANNEL_SWAP",
++		[CF_DEVICE_LEG] = "DEVICE_LEG",
++		[CF_FINAL_DEVICE_LEG] = "FINAL_DEVICE_LEG",
++		[CF_PICKUP] = "PICKUP",
++		[CF_CONFIRM_BLIND_TRANSFER] = "CONFIRM_BLIND_TRANSFER",
++		[CF_NO_PRESENCE] = "NO_PRESENCE",
++		[CF_CONFERENCE] = "CONFERENCE",
++		[CF_CONFERENCE_ADV] = "CONFERENCE_ADV",
++		[CF_RECOVERING] = "RECOVERING",
++		[CF_RECOVERING_BRIDGE] = "RECOVERING_BRIDGE",
++		[CF_TRACKED] = "TRACKED",
++		[CF_TRACKABLE] = "TRACKABLE",
++		[CF_NO_CDR] = "NO_CDR",
++		[CF_EARLY_OK] = "EARLY_OK",
++		[CF_MEDIA_TRANS] = "MEDIA_TRANS",
++		[CF_HOLD_ON_BRIDGE] = "HOLD_ON_BRIDGE",
++		[CF_SECURE] = "SECURE",
++		[CF_LIBERAL_DTMF] = "LIBERAL_DTMF",
++		[CF_SLA_BARGE] = "SLA_BARGE",
++		[CF_SLA_BARGING] = "SLA_BARGING",
++		[CF_PROTO_HOLD] = "PROTO_HOLD",
++		[CF_HOLD_LOCK] = "HOLD_LOCK",
++		[CF_VIDEO_POSSIBLE] = "VIDEO_POSSIBLE",
++		[CF_NOTIMER_DURING_BRIDGE] = "NOTIMER_DURING_BRIDGE",
++		[CF_PASS_RFC2833] = "PASS_RFC2833",
++		[CF_T38_PASSTHRU] = "T38_PASSTHRU",
++		[CF_DROP_DTMF] = "DROP_DTMF",
++		[CF_REINVITE] = "REINVITE",
++		[CF_NOSDP_REINVITE] = "NOSDP_REINVITE",
++		[CF_AUTOFLUSH_DURING_BRIDGE] = "AUTOFLUSH_DURING_BRIDGE",
++		[CF_RTP_NOTIMER_DURING_BRIDGE] = "RTP_NOTIMER_DURING_BRIDGE",
++		[CF_AVPF] = "AVPF",
++		[CF_AVPF_MOZ] = "AVPF_MOZ",
++		[CF_ICE] = "ICE",
++		[CF_DTLS] = "DTLS",
++		[CF_VERBOSE_SDP] = "VERBOSE_SDP",
++		[CF_DTLS_OK] = "DTLS_OK",
++		[CF_3PCC] = "3PCC",
++		[CF_VIDEO_PASSIVE] = "VIDEO_PASSIVE",
++		[CF_NOVIDEO] = "NOVIDEO",
++		[CF_VIDEO_BITRATE_UNMANAGABLE] = "VIDEO_BITRATE_UNMANAGABLE",
++		[CF_VIDEO_ECHO] = "VIDEO_ECHO",
++		[CF_VIDEO_BLANK] = "VIDEO_BLANK",
++		[CF_VIDEO_WRITING] = "VIDEO_WRITING",
++		[CF_SLA_INTERCEPT] = "SLA_INTERCEPT",
++		[CF_VIDEO_BREAK] = "VIDEO_BREAK",
++		[CF_AUDIO_PAUSE_READ] = "AUDIO_PAUSE_READ",
++		[CF_AUDIO_PAUSE_WRITE] = "AUDIO_PAUSE_WRITE",
++		[CF_VIDEO_PAUSE_READ] = "VIDEO_PAUSE_READ",
++		[CF_VIDEO_PAUSE_WRITE] = "VIDEO_PAUSE_WRITE",
++		[CF_BYPASS_MEDIA_AFTER_HOLD] = "BYPASS_MEDIA_AFTER_HOLD",
++		[CF_HANGUP_HELD] = "HANGUP_HELD",
++		[CF_CONFERENCE_RESET_MEDIA] = "CONFERENCE_RESET_MEDIA",
++		[CF_VIDEO_DECODED_READ] = "VIDEO_DECODED_READ",
++		[CF_VIDEO_DEBUG_READ] = "VIDEO_DEBUG_READ",
++		[CF_VIDEO_DEBUG_WRITE] = "VIDEO_DEBUG_WRITE",
++		[CF_NO_RECOVER] = "NO_RECOVER",
++		[CF_VIDEO_READY] = "VIDEO_READY",
++		[CF_VIDEO_MIRROR_INPUT] = "VIDEO_MIRROR_INPUT",
++		[CF_VIDEO_READ_FILE_ATTACHED] = "VIDEO_READ_FILE_ATTACHED",
++		[CF_VIDEO_WRITE_FILE_ATTACHED] = "VIDEO_WRITE_FILE_ATTACHED",
++		[CF_3P_MEDIA_REQUESTED] = "3P_MEDIA_REQUESTED",
++		[CF_3P_NOMEDIA_REQUESTED] = "3P_NOMEDIA_REQUESTED",
++		[CF_3P_NOMEDIA_REQUESTED_BLEG] = "3P_NOMEDIA_REQUESTED_BLEG",
++		[CF_IMAGE_SDP] = "IMAGE_SDP",
++		[CF_VIDEO_SDP_RECVD] = "VIDEO_SDP_RECVD",
++		[CF_TEXT_SDP_RECVD] = "TEXT_SDP_RECVD",
++		[CF_HAS_TEXT] = "HAS_TEXT",
++		[CF_TEXT_POSSIBLE] = "TEXT_POSSIBLE",
++		[CF_TEXT_PASSIVE] = "TEXT_PASSIVE",
++		[CF_TEXT_ECHO] = "TEXT_ECHO",
++		[CF_TEXT_ACTIVE] = "TEXT_ACTIVE",
++		[CF_TEXT_IDLE] = "TEXT_IDLE",
++		[CF_TEXT_LINE_BASED] = "TEXT_LINE_BASED",
++		[CF_QUEUE_TEXT_EVENTS] = "QUEUE_TEXT_EVENTS",
++		[CF_FIRE_TEXT_EVENTS] = "FIRE_TEXT_EVENTS",
++		[CF_MSRP] = "MSRP",
++		[CF_MSRPS] = "MSRPS",
++		[CF_WANT_MSRP] = "WANT_MSRP",
++		[CF_WANT_MSRPS] = "WANT_MSRPS",
++		[CF_RTT] = "RTT",
++		[CF_WANT_RTT] = "WANT_RTT",
++		[CF_AUDIO] = "AUDIO",
++		[CF_AWAITING_STREAM_CHANGE] = "AWAITING_STREAM_CHANGE",
++		[CF_PROCESSING_STREAM_CHANGE] = "PROCESSING_STREAM_CHANGE",
++		[CF_STREAM_CHANGED] = "STREAM_CHANGED",
++		[CF_ARRANGED_BRIDGE] = "ARRANGED_BRIDGE",
++		[CF_STATE_REPEAT] = "STATE_REPEAT",
++		[CF_WANT_DTLSv1_2] = "WANT_DTLSv1_2",
++		[CF_RFC7329_COMPAT] = "RFC7329_COMPAT",
++		[CF_REATTACHED] = "REATTACHED",
++		[CF_VIDEO_READ_TAPPED] = "VIDEO_READ_TAPPED",
++		[CF_VIDEO_WRITE_TAPPED] = "VIDEO_WRITE_TAPPED",
++		[CF_DEVICES_CHANGED] = "DEVICES_CHANGED",
++		[CF_SESSION_SWAP] = "SESSION_SWAP",
++		[CF_DISABLE_ON_API] = "DISABLE_ON_API",
++		[CF_DISABLE_ON_EXEC] = "DISABLE_ON_EXEC",
++		[CF_GROUP_ACCEPTED] = "GROUP_ACCEPTED",
++		[CF_ORIGINATING_XFER] = "ORIGINATING_XFER",
++ };
++ size_t used = 0;
++ int i;
++ /* Nothing allocates under flag_mutex: the caller supplies the buffer. */
++ buf[0] = '\0';
++ switch_mutex_lock(channel->flag_mutex);
++ for (i = 0; i < CF_FLAG_MAX; i++) {
++  size_t len;
++  if (!channel->flags[i] || !names[i]) continue;
++  len = strlen(names[i]);
++  if (used + len + 2 > buflen) break;
++  if (used) buf[used++] = '|';
++  memcpy(buf + used, names[i], len);
++  used += len;
++  buf[used] = '\0';
++ }
++ switch_mutex_unlock(channel->flag_mutex);
++}
++
+ SWITCH_DECLARE(void) switch_channel_event_set_basic_data(switch_channel_t *channel, switch_event_t *event)
+ {
+ 	switch_caller_profile_t *caller_profile, *originator_caller_profile = NULL, *originatee_caller_profile = NULL;
+@@ -2672,6 +2872,12 @@
+ 	}
+ 
+ 	switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel-State", switch_channel_state_name(channel->running_state));
++	{
++		/* every flag name plus separators fits well within this */
++		char flags[4096];
++		kazoo_channel_flags_string(channel, flags, sizeof(flags));
++		switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel-Flags", flags);
++	}
+ 	switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel-Call-State", switch_channel_callstate2str(channel->callstate));
+ 	switch_snprintf(state_num, sizeof(state_num), "%d", channel->state);
+ 	switch_event_add_header_string(event, SWITCH_STACK_BOTTOM, "Channel-State-Number", state_num);
+@@ -5599,3 +5805,6 @@
+ 
+ /* Matching Sofia originating-transfer lifecycle and pickup support. */
+ SWITCH_DECLARE(void) switch_kazoo_intercept_v2(void) {}
++
++/* Event profile flag filters are part of the transfer compatibility unit. */
++SWITCH_DECLARE(void) switch_kazoo_intercept_v3(void) {}
