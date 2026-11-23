@@ -1,154 +1,403 @@
----
+# Reprise CI. What the owner sets up once is in .circleci/README.md.
+#
+# Workflows
+#   checks         every branch, pull request and v* tag: lint, the Gleam
+#                  packages, the Erlang build (warnings are errors, xref,
+#                  elvis on the changed files), eunit, and the
+#                  generated API/schema files being up to date.
+#   images         main, v* tags, or a pipeline run with images=true: the four
+#                  images for linux/amd64, pushed as sha-<short>-amd64
+#                  candidates; mod_reprise's tests; the compose smoke test
+#                  (bootstrap, two registrations, a call); then, on main and
+#                  tags only, the published tags (images.sh tags).
 version: 2.1
 
-orbs:
-  kazoo: official-2600hz/kazoo@0.4.1
-
-filters: &on-tagging-only
-  tags:
-    only: /^\d+\.\d+\.\d+(\.\d+)?$/
-  branches:
-    ignore: /.*/
-
-# Find the docker image tag to use from:
-# https://hub.docker.com/r/2600hz/kazoo-circleci/tags
-# https://hub.docker.com/r/2600hz/kazoo-packager/tags
 parameters:
-  otp-version:
-    type: string
-    default: '26.2.5'
+  images:
+    type: boolean
+    default: false
+    description: Build, smoke-test (and on main/tags publish) the images on this branch too.
 
+executors:
+  # The same moving tag the release's build stage starts from
+  # (docker/reprise/Dockerfile), so the tests run on the OTP the image is
+  # built with. Change the tag here and there together.
+  erlang:
+    docker:
+      - image: erlang:28
+    resource_class: large
+    environment:
+      CI: "true"
+      ELIXIR: disable
+      JOBS: "1"
+  base:
+    docker:
+      - image: cimg/base:2026.11
+    resource_class: medium
+  machine-amd64:
+    machine:
+      image: ubuntu-2404:current
+    resource_class: large
+
+commands:
+  erlang-prerequisites:
+    steps:
+      - run:
+          name: Build prerequisites (as in docker/reprise/Dockerfile)
+          command: |
+            apt-get update -qq
+            apt-get install -y -qq --no-install-recommends \
+              build-essential git curl wget ca-certificates zip unzip cpio jq \
+              libssl-dev libncurses-dev zlib1g-dev libexpat1-dev libxslt1-dev \
+              python3 python3-jsbeautifier >/dev/null
+
+  # kazoo_convert's kz_convert_tests run the fax converter's real commands
+  # (core/kazoo_convert/src/kz_fax_converter.hrl): tiff2pdf and tiffinfo
+  # (libtiff-tools), gs (ghostscript), convert (imagemagick) and, for the
+  # .docx fixtures through kz_openoffice_server, libreoffice (writer). The
+  # packages are the release image's (docker/reprise/Dockerfile), less what no
+  # test calls: sox and the calc/impress components.
+  fax-conversion-tools:
+    steps:
+      - run:
+          name: Fax conversion tools (kazoo_convert's tests)
+          command: |
+            # after erlang-prerequisites, which ran apt-get update
+            apt-get install -y -qq --no-install-recommends \
+              ghostscript imagemagick libtiff-tools \
+              libreoffice-writer fonts-liberation >/dev/null
+            command -v tiff2pdf tiffinfo gs convert libreoffice
+
+  install-gleam:
+    steps:
+      - run:
+          name: Gleam 1.18.1 (the pinned release docker/reprise/Dockerfile uses)
+          command: |
+            GLEAM_VERSION=1.18.1
+            tarball="gleam-v${GLEAM_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+            curl -fsSL -o "/tmp/$tarball" \
+              "https://github.com/gleam-lang/gleam/releases/download/v${GLEAM_VERSION}/$tarball"
+            echo "4955a38c2e8c99457458e2471472ccd5ee3c45bd7637a315ce33bccf0dd75d9e  /tmp/$tarball" | sha256sum -c -
+            tar -xzf "/tmp/$tarball" -C /usr/local/bin gleam
+            gleam --version
+
+  changed-files:
+    steps:
+      - run:
+          name: Files changed on this branch
+          command: |
+            # The Makefile reads CHANGED as given when CIRCLECI is set. Compare
+            # with the merge base of .base_branch, or of origin/main where
+            # that branch does not exist; main itself checks nothing extra.
+            base=$(cat .base_branch)
+            git fetch -q origin "${base#origin/}" 2>/dev/null || true
+            git fetch -q origin main 2>/dev/null || true
+            git rev-parse -q --verify "$base" >/dev/null || base=origin/main
+            changed=""
+            if mb=$(git merge-base HEAD "$base" 2>/dev/null); then
+              changed=$(git diff --name-only --diff-filter=d "$mb" HEAD | sed "s|^|$PWD/|" | tr '\n' ' ')
+            fi
+            echo "base $base: $(echo "$changed" | wc -w) changed files"
+            echo "export CHANGED='$changed'" >> "$BASH_ENV"
+
+  ghcr-login:
+    steps:
+      - run:
+          name: Log in to ghcr.io (context ghcr)
+          command: .circleci/scripts/images.sh login
+
+jobs:
+  lint:
+    executor: base
+    steps:
+      - checkout
+      - run:
+          name: Tools
+          command: |
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq shellcheck libxml2-utils >/dev/null
+            if ! docker compose version >/dev/null 2>&1; then
+              mkdir -p ~/.docker/cli-plugins
+              curl -fsSL -o ~/.docker/cli-plugins/docker-compose \
+                https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64
+              chmod +x ~/.docker/cli-plugins/docker-compose
+            fi
+            shellcheck --version | head -2; docker compose version
+      - run:
+          name: shellcheck
+          command: |
+            shellcheck docker/build.sh docker/test-security.sh docker/*/*.sh \
+              deploy/compose/*.sh deploy/compose/smoke/*.sh .circleci/scripts/*.sh
+      - run:
+          name: Compose files resolve (each variant)
+          command: |
+            cd deploy/compose
+            ./init-env.sh --force 192.0.2.10 >/dev/null
+            docker compose -f compose.yaml config -q
+            docker compose -f compose.yaml -f compose.build.yaml config -q
+            docker compose -f compose.yaml -f compose.host-network.yaml config -q
+      - run:
+          name: sipp scenarios are well-formed
+          command: xmllint --noout --nonet deploy/compose/smoke/*.xml
+      - run:
+          name: Image build tags agree with VERSION
+          command: .circleci/scripts/images.sh tags
+      - run:
+          name: Docs checks that need no build
+          command: |
+            bash scripts/check-scripts-readme.bash
+            bash scripts/empty_schema_descriptions.bash
+
+  gleam:
+    executor: erlang
+    steps:
+      - checkout
+      - install-gleam
+      - restore_cache:
+          keys:
+            - gleam-v1-{{ checksum "core/kazoo_gleam/manifest.toml" }}-{{ checksum "applications/callcenter/manifest.toml" }}-{{ checksum "applications/stir/manifest.toml" }}
+      - run:
+          name: make gleam-check (manifests agree, format, tests)
+          command: make gleam-check
+      - save_cache:
+          key: gleam-v1-{{ checksum "core/kazoo_gleam/manifest.toml" }}-{{ checksum "applications/callcenter/manifest.toml" }}-{{ checksum "applications/stir/manifest.toml" }}
+          paths:
+            - ~/.cache/gleam
+
+  erlang-build:
+    executor: erlang
+    steps:
+      - checkout
+      - erlang-prerequisites
+      - install-gleam
+      - changed-files
+      - restore_cache:
+          keys:
+            - deps-v2-{{ arch }}-{{ checksum "make/deps.mk" }}-{{ checksum "make/repos.mk" }}-{{ checksum "make/erlang_version" }}
+      - run:
+          name: make prerequisites deps
+          command: make prerequisites deps
+      - save_cache:
+          # before core/apps: the Gleam applications install into deps/
+          key: deps-v2-{{ arch }}-{{ checksum "make/deps.mk" }}-{{ checksum "make/repos.mk" }}-{{ checksum "make/erlang_version" }}
+          paths:
+            - deps
+            - erlang.mk
+            - .erlang.mk
+            - .rebar
+            - make/.deps.mk.*
+      - run:
+          name: make core apps (warnings are errors, make/kz.mk)
+          command: make core apps
+          no_output_timeout: 30m
+      - run:
+          name: make xref
+          command: make xref
+      # `make fmt` is not run here: it formats with Emacs' erlang-mode, which
+      # this image does not have, so the step would pass without checking
+      # anything. Format locally before pushing.
+      - run:
+          name: elvis on the changed files
+          command: |
+            # erlang.mk packs the elvis escript with 7z unless told otherwise;
+            # zip is what erlang-prerequisites installs
+            if printf '%s\n' $CHANGED | grep -q '\.erl$'; then ESCRIPT_ZIP="zip -q -r" make elvis; else echo "no changed .erl files"; fi
+      - persist_to_workspace:
+          root: .
+          paths: [.]
+
+  eunit:
+    executor: erlang
+    steps:
+      - erlang-prerequisites
+      - fax-conversion-tools
+      - attach_workspace:
+          at: .
+      - run:
+          # -k: a failing application does not stop the others, so a red job
+          # reports every failing suite to test-results/ (core/Makefile still
+          # runs kazoo_stdlib, kazoo_amqp and kazoo_data before the rest of
+          # core, so a failure there skips the remaining core suites)
+          name: make -k eunit
+          command: make -k eunit
+          no_output_timeout: 30m
+      - store_test_results:
+          path: test-results
+
+  schemas:
+    executor: erlang
+    steps:
+      - erlang-prerequisites
+      - attach_workspace:
+          at: .
+      - run:
+          name: Generated API docs, schemas and kzd builders are committed (make apis)
+          # CHANGED is not set here, so make apis regenerates from every
+          # module, not only the changed ones. check-unstaged.bash ignores
+          # untracked files; a schema or template the generator creates
+          # for the first time shows up only as one.
+          command: |
+            make apis
+            scripts/check-unstaged.bash
+            untracked=$(git status --porcelain --untracked-files=normal -- applications core | grep '^??' || true)
+            if [ -n "$untracked" ]; then
+              echo "Generated files that are not committed:"
+              echo "$untracked"
+              exit 1
+            fi
+
+  image-amd64:
+    executor: machine-amd64
+    parameters:
+      image:
+        type: enum
+        enum: [reprise, freeswitch, kamailio, monster-ui]
+    steps:
+      - checkout
+      - ghcr-login
+      - run:
+          name: Build << parameters.image >> (linux/amd64), push the candidate
+          command: .circleci/scripts/images.sh build << parameters.image >> amd64
+          no_output_timeout: 60m
+
+  mod-reprise-tests:
+    executor: machine-amd64
+    steps:
+      - checkout
+      - ghcr-login
+      - run:
+          name: freeswitch-dev (the freeswitch image's build stage, from its build cache)
+          command: |
+            docker buildx create --name reprise --driver docker-container --use >/dev/null
+            docker buildx build --platform linux/amd64 --target build \
+              --file docker/freeswitch/Dockerfile \
+              --cache-from type=registry,ref=ghcr.io/reprise-voice/reprise-freeswitch:buildcache-amd64 \
+              --tag reprise/reprise-freeswitch-dev:dev --load .
+          no_output_timeout: 60m
+      - run:
+          name: mod_reprise builds and passes make test-call-paths (freeswitch/mod_reprise/ci)
+          command: |
+            docker build --build-arg BASE=reprise/reprise-freeswitch-dev:dev \
+              -f freeswitch/mod_reprise/ci/Dockerfile freeswitch/mod_reprise
+
+  smoke:
+    executor: machine-amd64
+    steps:
+      - checkout
+      - ghcr-login
+      - run:
+          name: sipp, jq
+          command: |
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq sip-tester jq >/dev/null
+            sipp -v | head -2 || true
+      - run:
+          name: Image security preflights (docker/test-security.sh)
+          command: .circleci/scripts/compose-smoke.sh security
+      - run:
+          name: docker compose up (deploy/compose, candidate images)
+          command: .circleci/scripts/compose-smoke.sh up
+      - run:
+          name: bootstrap.sh
+          command: .circleci/scripts/compose-smoke.sh bootstrap
+          no_output_timeout: 20m
+      - run:
+          name: Two registrations and a call (deploy/compose/smoke)
+          command: .circleci/scripts/compose-smoke.sh sip
+      # kept for a passing run too: what the services log on a clean start
+      # and a good call is worth reading
+      - run:
+          name: Collect logs
+          when: always
+          command: .circleci/scripts/compose-smoke.sh logs /tmp/artifacts
+      - store_artifacts:
+          path: /tmp/artifacts
+      - store_artifacts:
+          path: /tmp/smoke-logs
+
+  publish:
+    executor: machine-amd64
+    resource_class: medium
+    steps:
+      - checkout
+      - ghcr-login
+      - run:
+          name: Promote the smoke-tested candidates to the published tags
+          command: |
+            .circleci/scripts/images.sh tags
+            .circleci/scripts/images.sh promote
+
+# Jobs run on tag pipelines only when their filters name tags: every job of
+# the images workflow carries the v* filter (anchored at its first use,
+# CircleCI allowing no extra top-level keys), and publish is limited to main
+# besides.
 workflows:
-  version: 2
-  build_branch:
+  # Pull requests and branch pushes: the checks alone.
+  checks:
+    unless: &images-wanted
+      or:
+        - equal: [main, << pipeline.git.branch >>]
+        - matches: { pattern: "^v.+$", value: << pipeline.git.tag >> }
+        - << pipeline.parameters.images >>
     jobs:
-      - kazoo/build-preparation:
-          context: Private-Builds
-          otp-version: << pipeline.parameters.otp-version >>
-          platform: << matrix.platform >>
-          name: preparation-<< matrix.platform >>
-          target-type: kazoo
-          matrix:
-            parameters:
-              platform: [centos-7, rockylinux-8, rockylinux-9]
-      - kazoo/build:
-          context: Private-Builds
-          otp-version: << pipeline.parameters.otp-version >>
-          platform: << matrix.platform >>
-          name: beams-<< matrix.platform >>
-          matrix:
-            parameters:
-              platform: [centos-7, rockylinux-8, rockylinux-9]
-          requires:
-            - preparation-<< matrix.platform >>
-      - kazoo/eunit-tests:
-          context: Private-Builds
-          otp-version: << pipeline.parameters.otp-version >>
-          requires:
-            - preparation-rockylinux-9
-      - kazoo/code-checks:
-          otp-version: << pipeline.parameters.otp-version >>
-          requires:
-            - beams-rockylinux-9
-      - kazoo/docs:
-          otp-version: << pipeline.parameters.otp-version >>
-          requires:
-            - beams-rockylinux-9
-      - kazoo/analyze:
-          otp-version: << pipeline.parameters.otp-version >>
-          requires:
-            - beams-rockylinux-9
-      - kazoo/integration-test:
-          otp-version: << pipeline.parameters.otp-version >>
-          requires:
-            - beams-rockylinux-9
-      - kazoo/build-centos7:
-          context: Private-Builds
-          otp-version: << pipeline.parameters.otp-version >>
-          target-type: kazoo
-          requires:
-            - beams-centos-7
-      - kazoo/build-rockylinux8:
-          context: Private-Builds
-          otp-version: << pipeline.parameters.otp-version >>
-          target-type: kazoo
-          requires:
-            - beams-rockylinux-8
-      - kazoo/build-rockylinux9:
-          context: Private-Builds
-          otp-version: << pipeline.parameters.otp-version >>
-          target-type: kazoo
-          requires:
-            - beams-rockylinux-9
+      - lint
+      - gleam
+      - erlang-build
+      - eunit:
+          requires: [erlang-build]
+      - schemas:
+          requires: [erlang-build]
 
-  build_release:
+  # main, release tags and runs with the images parameter: the same checks,
+  # the images and the smoke test in one workflow, so that publish can
+  # require all of them for the commit it promotes.
+  images:
+    when: *images-wanted
     jobs:
-      - kazoo/build-preparation:
-          context: Private-Builds
-          otp-version: << pipeline.parameters.otp-version >>
-          platform: << matrix.platform >>
-          name: preparation-<< matrix.platform >>
-          target-type: kazoo
+      - lint: &all-and-release-tags
+          filters:
+            tags:
+              only: /^v.*/
+      - gleam:
+          <<: *all-and-release-tags
+      - erlang-build:
+          <<: *all-and-release-tags
+      - eunit:
+          <<: *all-and-release-tags
+          requires: [erlang-build]
+      - schemas:
+          <<: *all-and-release-tags
+          requires: [erlang-build]
+      - image-amd64:
+          <<: *all-and-release-tags
+          name: image-amd64-<< matrix.image >>
+          context: ghcr
           matrix:
             parameters:
-              platform: [centos-7, rockylinux-8, rockylinux-9]
-          for-packager: "true"
-          filters: *on-tagging-only
-      - kazoo/build:
-          context: Private-Builds
-          otp-version: << pipeline.parameters.otp-version >>
-          platform: << matrix.platform >>
-          name: beams-<< matrix.platform >>
-          matrix:
-            parameters:
-              platform: [centos-7, rockylinux-8, rockylinux-9]
+              image: [reprise, freeswitch, kamailio, monster-ui]
+      - mod-reprise-tests:
+          <<: *all-and-release-tags
+          context: ghcr
+          requires: [image-amd64-freeswitch]
+      - smoke:
+          <<: *all-and-release-tags
+          context: ghcr
           requires:
-            - preparation-<< matrix.platform >>
-          filters: *on-tagging-only
-      - kazoo/eunit-tests:
-          context: Private-Builds
-          otp-version: << pipeline.parameters.otp-version >>
+            - image-amd64-reprise
+            - image-amd64-freeswitch
+            - image-amd64-kamailio
+            - image-amd64-monster-ui
+      - publish:
+          filters: &main-and-release-tags-filters
+            branches:
+              only: main
+            tags:
+              only: /^v.*/
+          context: ghcr
           requires:
-            - preparation-rockylinux-9
-          filters: *on-tagging-only
-      - kazoo/code-checks:
-          otp-version: << pipeline.parameters.otp-version >>
-          requires:
-            - beams-rockylinux-9
-          filters: *on-tagging-only
-      - kazoo/docs:
-          otp-version: << pipeline.parameters.otp-version >>
-          requires:
-            - beams-rockylinux-9
-          filters: *on-tagging-only
-      - kazoo/analyze:
-          otp-version: << pipeline.parameters.otp-version >>
-          requires:
-            - beams-rockylinux-9
-          filters: *on-tagging-only
-      - kazoo/integration-test:
-          otp-version: << pipeline.parameters.otp-version >>
-          requires:
-            - beams-rockylinux-9
-          filters: *on-tagging-only
-      - kazoo/build-centos7:
-          context: Private-Builds
-          otp-version: << pipeline.parameters.otp-version >>
-          target-type: kazoo
-          requires:
-            - beams-centos-7
-          filters: *on-tagging-only
-      - kazoo/build-rockylinux8:
-          context: Private-Builds
-          otp-version: << pipeline.parameters.otp-version >>
-          target-type: kazoo
-          requires:
-            - beams-rockylinux-8
-          filters: *on-tagging-only
-      - kazoo/build-rockylinux9:
-          context: Private-Builds
-          otp-version: << pipeline.parameters.otp-version >>
-          target-type: kazoo
-          requires:
-            - beams-rockylinux-9
-          filters: *on-tagging-only
+            - lint
+            - gleam
+            - eunit
+            - schemas
+            - mod-reprise-tests
+            - smoke
