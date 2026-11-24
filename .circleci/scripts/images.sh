@@ -3,7 +3,7 @@
 #
 #   images.sh tags                    print the version and the tags this pipeline publishes
 #   images.sh registry                print the registry namespace the images go to
-#   images.sh login                   docker login ghcr.io with GHCR_USER / GHCR_TOKEN
+#   images.sh login                   docker login to the registry's host (see below)
 #   images.sh build <image> <arch>    build one image for linux/<arch>, push <ref>:sha-<short>-<arch>
 #   images.sh promote                 the candidates -> the published tags
 #
@@ -19,7 +19,11 @@
 # (CircleCI's CIRCLE_PROJECT_USERNAME, lower case as the registry requires),
 # so a fork's pipeline pushes to the fork owner's packages and cannot
 # overwrite the images of the repository it was forked from. Outside
-# CircleCI it is ghcr.io/reprise-voice. REGISTRY overrides both.
+# CircleCI it is ghcr.io/reprise-voice. REGISTRY overrides both, and may name
+# any registry (gcr.io/<project>, <region>-docker.pkg.dev/<project>/<repo>).
+#
+# login signs in to the host part of REGISTRY with REGISTRY_USER and
+# REGISTRY_TOKEN, or with GHCR_USER and GHCR_TOKEN when those are not set.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -73,10 +77,12 @@ cmd_tags() {
 }
 
 cmd_login() {
-  : "${GHCR_USER:?GHCR_USER is not set (CircleCI context ghcr)}"
-  : "${GHCR_TOKEN:?GHCR_TOKEN is not set (CircleCI context ghcr)}"
-  printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null
-  echo "logged in to ghcr.io as $GHCR_USER"
+  local host=${REGISTRY%%/*}
+  local user=${REGISTRY_USER:-${GHCR_USER:-}} token=${REGISTRY_TOKEN:-${GHCR_TOKEN:-}}
+  [ -n "$user" ] || die "no registry user: set GHCR_USER (context ghcr) or REGISTRY_USER"
+  [ -n "$token" ] || die "no registry token: set GHCR_TOKEN (context ghcr) or REGISTRY_TOKEN"
+  printf '%s' "$token" | docker login "$host" -u "$user" --password-stdin >/dev/null
+  echo "logged in to $host as $user"
 }
 
 ensure_builder() {

@@ -103,7 +103,7 @@ commands:
   ghcr-login:
     steps:
       - run:
-          name: Log in to ghcr.io (context ghcr)
+          name: Log in to the image registry (context ghcr)
           command: .circleci/scripts/images.sh login
 
 jobs:
