@@ -29,6 +29,12 @@
 # RELEASE_REGISTRY, when set, takes the place of REGISTRY for every command
 # (candidates, cache, smoke test, published tags), with RELEASE_REGISTRY_USER
 # and RELEASE_REGISTRY_TOKEN if they differ from the ones above.
+#
+# A fork that releases its own builds of an upstream version sets
+# RELEASE_SUFFIX (say acme). Its releases are then the tags
+# v<VERSION>-acme.<N>, each published as <VERSION>-acme.<N> and nothing
+# else: no X.Y, no latest. A plain v<VERSION> tag is not a release there, so
+# an upstream tag that reaches the fork publishes nothing.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
@@ -61,14 +67,32 @@ image_name() {
 }
 
 # The tags to publish, one per line; sha-<short> comes last on purpose.
-publish_tags() {
-  if [ -n "$GIT_TAG" ]; then
+# The version a tag pipeline releases. Fails when the tag is not a release
+# of this project.
+release_version() {
+  local suffix=${RELEASE_SUFFIX:-} build
+  if [ -z "$suffix" ]; then
     [ "$GIT_TAG" = "v$VERSION" ] \
       || die "tag $GIT_TAG does not match VERSION ($VERSION): tag v$VERSION, or fix VERSION"
     echo "$VERSION"
-    case "$VERSION" in
-      *-*) ;;  # a pre-release: no moving tags
-      *) echo "${VERSION%.*}"; echo latest ;;
+    return
+  fi
+  build=${GIT_TAG#"v$VERSION-$suffix."}
+  case "$build" in
+    "$GIT_TAG"|""|*[!0-9]*)
+      die "tag $GIT_TAG is not a release here: tag v$VERSION-$suffix.<N> (VERSION is $VERSION, RELEASE_SUFFIX is $suffix)" ;;
+  esac
+  echo "$VERSION-$suffix.$build"
+}
+
+publish_tags() {
+  local release
+  if [ -n "$GIT_TAG" ]; then
+    release=$(release_version) || exit 1
+    echo "$release"
+    case "$release" in
+      *-*) ;;  # a pre-release or a suffixed build: no moving tags
+      *) echo "${release%.*}"; echo latest ;;
     esac
   elif [ "$BRANCH" = main ]; then
     echo edge
@@ -77,7 +101,12 @@ publish_tags() {
 }
 
 image_version() {
-  if [ -n "$GIT_TAG" ]; then echo "$VERSION"; else echo "$VERSION-dev.$SHORT"; fi
+  if [ -n "$GIT_TAG" ]; then release_version; else echo "$VERSION-dev.$SHORT"; fi
+}
+
+# what the Erlang release calls itself: the release on a tag, VERSION otherwise
+kz_version() {
+  if [ -n "$GIT_TAG" ]; then release_version; else echo "$VERSION"; fi
 }
 
 cmd_tags() {
@@ -107,9 +136,9 @@ cmd_build() {
   local image=${1:?image} arch=${2:?arch} name
   name=$(image_name "$image")
   local ref="$REGISTRY/$name" args=()
-  [ "$image" = reprise ] && args+=(--build-arg "KZ_VERSION=$VERSION")
   # make sure a tag build fails before an hour of compiling, not after
   publish_tags >/dev/null
+  [ "$image" = reprise ] && args+=(--build-arg "KZ_VERSION=$(kz_version)")
   ensure_builder
   echo "building $ref:sha-$SHORT-$arch ($(image_version))"
   docker buildx build \
