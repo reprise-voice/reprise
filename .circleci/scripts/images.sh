@@ -24,15 +24,27 @@
 #
 # login signs in to the host part of REGISTRY with REGISTRY_USER and
 # REGISTRY_TOKEN, or with GHCR_USER and GHCR_TOKEN when those are not set.
+#
+# Releases can go to a registry of their own: in a v* tag pipeline
+# RELEASE_REGISTRY, when set, takes the place of REGISTRY for every command
+# (candidates, cache, smoke test, published tags), with RELEASE_REGISTRY_USER
+# and RELEASE_REGISTRY_TOKEN if they differ from the ones above.
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
 OWNER=$(printf '%s' "${CIRCLE_PROJECT_USERNAME:-reprise-voice}" | tr '[:upper:]' '[:lower:]')
 REGISTRY=${REGISTRY:-ghcr.io/$OWNER}
+REGISTRY_USER=${REGISTRY_USER:-${GHCR_USER:-}}
+REGISTRY_TOKEN=${REGISTRY_TOKEN:-${GHCR_TOKEN:-}}
 SHA=${CIRCLE_SHA1:-$(git rev-parse HEAD)}
 SHORT=${SHA:0:7}
 GIT_TAG=${CIRCLE_TAG:-}
+if [ -n "$GIT_TAG" ] && [ -n "${RELEASE_REGISTRY:-}" ]; then
+  REGISTRY=$RELEASE_REGISTRY
+  REGISTRY_USER=${RELEASE_REGISTRY_USER:-$REGISTRY_USER}
+  REGISTRY_TOKEN=${RELEASE_REGISTRY_TOKEN:-$REGISTRY_TOKEN}
+fi
 BRANCH=${CIRCLE_BRANCH:-}
 VERSION=$(tr -d '[:space:]' < VERSION)
 IMAGES=(reprise freeswitch kamailio monster-ui)
@@ -78,11 +90,10 @@ cmd_tags() {
 
 cmd_login() {
   local host=${REGISTRY%%/*}
-  local user=${REGISTRY_USER:-${GHCR_USER:-}} token=${REGISTRY_TOKEN:-${GHCR_TOKEN:-}}
-  [ -n "$user" ] || die "no registry user: set GHCR_USER (context ghcr) or REGISTRY_USER"
-  [ -n "$token" ] || die "no registry token: set GHCR_TOKEN (context ghcr) or REGISTRY_TOKEN"
-  printf '%s' "$token" | docker login "$host" -u "$user" --password-stdin >/dev/null
-  echo "logged in to $host as $user"
+  [ -n "$REGISTRY_USER" ] || die "no registry user: set GHCR_USER (context ghcr) or REGISTRY_USER"
+  [ -n "$REGISTRY_TOKEN" ] || die "no registry token: set GHCR_TOKEN (context ghcr) or REGISTRY_TOKEN"
+  printf '%s' "$REGISTRY_TOKEN" | docker login "$host" -u "$REGISTRY_USER" --password-stdin >/dev/null
+  echo "logged in to $host as $REGISTRY_USER"
 }
 
 ensure_builder() {

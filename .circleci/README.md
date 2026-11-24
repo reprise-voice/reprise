@@ -53,6 +53,14 @@ login then goes to that host with `REGISTRY_USER` and `REGISTRY_TOKEN`
 three as project variables; the `ghcr` context's own variables are only
 used when `REGISTRY_USER` and `REGISTRY_TOKEN` are absent.
 
+Releases can go to a registry of their own. When `RELEASE_REGISTRY` is set,
+a `v*` tag pipeline uses it in place of `REGISTRY` for everything it does
+(candidates, build cache, smoke test, published tags), with
+`RELEASE_REGISTRY_USER` and `RELEASE_REGISTRY_TOKEN` if the credentials
+differ. Builds of `main` and of branches stay in `REGISTRY`. A release then
+builds without the cache of the `main` builds, since that lives in the
+other registry.
+
 The images are `reprise`, `reprise-freeswitch`, `reprise-kamailio` and
 `reprise-monster-ui`. Their `org.opencontainers.image.source` label links each
 package to this repository.
