@@ -46,6 +46,13 @@ images go to `ghcr.io/reprise-voice`, and a fork's pipeline pushes to the
 fork owner's packages, never to these. `REGISTRY` (a project or context
 variable) overrides it; `images.sh registry` prints the result.
 
+`REGISTRY` can name another registry altogether, for example
+`gcr.io/<project>` or `<region>-docker.pkg.dev/<project>/<repository>`. The
+login then goes to that host with `REGISTRY_USER` and `REGISTRY_TOKEN`
+(for Google's registries: `_json_key` and a service account key). Set the
+three as project variables; the `ghcr` context's own variables are only
+used when `REGISTRY_USER` and `REGISTRY_TOKEN` are absent.
+
 The images are `reprise`, `reprise-freeswitch`, `reprise-kamailio` and
 `reprise-monster-ui`. Their `org.opencontainers.image.source` label links each
 package to this repository.
