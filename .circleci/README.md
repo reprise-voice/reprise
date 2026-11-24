@@ -37,7 +37,15 @@
 | tag `vX.Y.Z` | `X.Y.Z`, `X.Y`, `latest`, `sha-<short>` (a pre-release `vX.Y.Z-rc.N` gets only its own tag and `sha-<short>`) |
 
 The tag must equal `v` + the `VERSION` file, or every image job fails before
-building. Candidates (`sha-<short>-amd64`) and the `buildcache-*`
+building.
+
+A fork that releases its own builds of an upstream version sets
+`RELEASE_SUFFIX`, for example `acme`. Its releases are then the tags
+`v<VERSION>-acme.<N>`: `v5.4.2-acme.1`, `v5.4.2-acme.2` and so on while
+`VERSION` stays the upstream `5.4.2`. Each publishes `<VERSION>-acme.<N>`
+and `sha-<short>` only, and the Erlang release reports that version. A plain
+`v<VERSION>` tag fails the image jobs there, so an upstream tag that reaches
+the fork publishes nothing. Candidates (`sha-<short>-amd64`) and the `buildcache-*`
 tags also live in the packages; prune them with GHCR's retention settings if
 they pile up.
 
