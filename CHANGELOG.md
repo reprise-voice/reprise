@@ -6,6 +6,8 @@ All notable changes to Reprise are recorded here. The format follows
 
 ## [Unreleased]
 
+## [5.4.0] - 2026-11-24
+
 The initial public release. Reprise is based on Kazoo 5.4 (`VERSION`
 5.4.0); this entry describes what differs from Kazoo 5.4 as 2600Hz
 published it. See [doc/upgrading-from-kazoo.md](doc/upgrading-from-kazoo.md)
