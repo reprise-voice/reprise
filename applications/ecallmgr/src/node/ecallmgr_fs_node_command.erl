@@ -112,9 +112,22 @@ send_http_cb('error', Reply, FSProps, [JobId, JObj, _File, _Node, Channel]) ->
     Props = ecallmgr_util:unserialize_fs_props(FSProps),
     reply_error(Reply, kz_json:from_list(Props), JObj).
 
+%% Whether an application may run a dialplan application on a call by uuid.
+%% system_config/ecallmgr `node_call_command_allowed_applications.<sender>.<app>'
+%% decides, true or false; with no value there, only the pairs in
+%% `default_call_command_allowed/2' are allowed.
 -spec call_command_allowed(kz_term:ne_binary(), kz_term:ne_binary()) -> boolean().
 call_command_allowed(SenderApplication, CommandApplication) ->
-    kz_app_config:is_true(?APP, [<<"node_call_command_allowed_applications">>, SenderApplication, CommandApplication]).
+    kz_app_config:is_true(?APP
+                         ,[<<"node_call_command_allowed_applications">>, SenderApplication, CommandApplication]
+                         ,default_call_command_allowed(SenderApplication, CommandApplication)
+                         ).
+
+%% The call centre calls an offer off by hanging the agent's ringing leg up
+%% by uuid; refused, that phone keeps ringing after the caller has moved on.
+-spec default_call_command_allowed(kz_term:ne_binary(), kz_term:ne_binary()) -> boolean().
+default_call_command_allowed(<<"callcenter">>, <<"hangup">>) -> 'true';
+default_call_command_allowed(_SenderApplication, _CommandApplication) -> 'false'.
 
 call_command(Node, Cmd, JObj) ->
     freeswitch:call_cmd_sync(true),
