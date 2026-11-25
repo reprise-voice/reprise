@@ -40,7 +40,7 @@
 ////   "^sip_h_[Ii]dentity$". Passthrough has the same shape, with the
 ////   inbound call's own Identity value as the header and
 ////   "STIR-Attest" => "passthru" in the channel variables: FreeSWITCH
-////   1.11.3 has nothing behind `sip_identity_passthru`, so carrying the
+////   1.11.4 has nothing behind `sip_identity_passthru`, so carrying the
 ////   header through means answering it here for Erlang to place.
 ////
 //// What is a failure and what is not. Signing turned off, a resource

@@ -76,7 +76,7 @@ events are off by default (nothing in Kazoo reads them).
   synthetic document and on the served one, `tests/fixtures`), routing
   keys, templates and the presence-dialog derivation, against
   libfreeswitch's minimal core with the in-tree test framework
-- `ci/` — compile check + unit tests against FS 1.11.3 in the
+- `ci/` — compile check + unit tests against FS 1.11.4 in the
   `reprise-freeswitch-dev` image (what CI runs); `ci/smoke/` the in-cluster
   smoke harness (image, sipp scenarios, load scripts, command escript)
 

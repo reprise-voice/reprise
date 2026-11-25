@@ -310,7 +310,7 @@ from [reprise-voice/kazoo-sounds](https://github.com/reprise-voice/kazoo-sounds)
   FreeSWITCH to Kazoo over AMQP through `mod_com_kazoo`, which was never
   published. `freeswitch/mod_reprise` is an open module that speaks the
   same wire contract, and `applications/ecallmgr_extension` answers it on
-  the Kazoo side. The FreeSWITCH image builds FreeSWITCH v1.11.3 with the
+  the Kazoo side. The FreeSWITCH image builds FreeSWITCH v1.11.4 with the
   patches in `docker/freeswitch/patches`.
 - **Erlang/OTP 28**, with the dependencies moved to versions that build on
   it.
@@ -339,7 +339,7 @@ docker/build.sh reprise freeswitch kamailio monster-ui
 | Image | Contents |
 |---|---|
 | `reprise` | The Erlang release. One image runs both node types (`KAZOO_NODE=kazoo_apps` or `ecallmgr`). |
-| `reprise-freeswitch` | Patched FreeSWITCH v1.11.3 with `mod_reprise` and `configs/freeswitch`. |
+| `reprise-freeswitch` | Patched FreeSWITCH v1.11.4 with `mod_reprise` and `configs/freeswitch`. |
 | `reprise-kamailio` | Kamailio from the fork with `configs/kamailio`. |
 | `reprise-monster-ui` | Monster UI and its apps behind nginx, on port 8080. |
 

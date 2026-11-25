@@ -1,6 +1,6 @@
 # FreeSWITCH patches
 
-The FreeSWITCH image builds FreeSWITCH v1.11.3 with these patches, applied
+The FreeSWITCH image builds FreeSWITCH v1.11.4 with these patches, applied
 in order. They add behaviour that ecallmgr and `mod_reprise` rely on and
 that stock FreeSWITCH does not have. Patches 0001 to 0005 and 0007 follow
 the FreeSWITCH build 2600Hz distributed with Kazoo (20.23.6); 0006 is a fix

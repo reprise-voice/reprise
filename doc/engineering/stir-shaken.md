@@ -106,7 +106,7 @@ Per call:
 - An inbound `Identity` is never copied to the B leg by accident
   (`sip_copy_custom_headers` does not cover it). Passthrough on a
   forwarded call is explicit: `stir/outbound` answers the inbound call's
-  own `Identity` as the outbound header. FreeSWITCH 1.11.3 has nothing
+  own `Identity` as the outbound header. FreeSWITCH 1.11.4 has nothing
   behind `sip_identity_passthru`, so that variable is not used.
 
 ### 2.3 How calls reach carriers
