@@ -19,6 +19,7 @@
                        ,'crossbar'
                        ,'fax'
                        ,'hangups'
+                       ,'konami'
                        ,'media_mgr'
                        ,'milliwatt'
                        ,'omnipresence'

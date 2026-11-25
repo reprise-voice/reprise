@@ -60,13 +60,20 @@ takes a few minutes; `bootstrap.sh` waits for it. It is safe to run again. It:
 3. has FreeSWITCH fetch prompts and other media through the media proxy
    (`system_config/kazoo_couch.use_bigcouch_direct` off), so it is never
    handed a CouchDB URL with the password in it,
-4. imports the system prompts, unless they are there: US English, or the
-   languages in `PROMPT_LANGUAGES` (`en-us,fr-ca`, or `all` for every
+4. on a new cluster, keeps call recordings: with no storage plan Kazoo
+   stores one only when `system_config/media.store_recordings` is true,
+   which it is not by default, so this sets it and recordings go to the
+   account's database; on a cluster created by earlier images, starts konami
+   (in-call feature codes and attended transfers) and the recordings API,
+   which later images run by default,
+5. imports the system prompts, unless all of them are there: US English, or
+   the languages in `PROMPT_LANGUAGES` (`en-us,fr-ca`, or `all` for every
    language the image ships), set in `.env` or for one run as
-   `PROMPT_LANGUAGES=all ./bootstrap.sh`,
-5. registers the Monster UI apps with the API,
-6. waits until ecallmgr has adopted FreeSWITCH,
-7. allows Kamailio as the SBC in ecallmgr's ACLs,
+   `PROMPT_LANGUAGES=all ./bootstrap.sh`; an import cut short is finished
+   on the next run,
+6. registers the Monster UI apps with the API,
+7. waits until ecallmgr has adopted FreeSWITCH,
+8. allows Kamailio as the SBC in ecallmgr's ACLs,
 
 and then prints the UI address, the account and user name, and the softphone
 settings. The password is not printed: it is `ADMIN_PASSWORD` in `.env`.

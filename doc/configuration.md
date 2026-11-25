@@ -131,11 +131,12 @@ by anything else, and without it the node cannot control a FreeSWITCH running
 | `LOCAL_IP` | detected | Address FreeSWITCH binds and uses toward Kamailio. Detected from the GCE metadata server when there is one, else `hostname -i`. |
 | `PUBLIC_IP` | none (GCE metadata if present) | When set, written as `ext-sip-ip` and `ext-rtp-ip` of `sipinterface_1`, for 1:1 NAT. |
 | `EXT_SIP_IP`, `EXT_RTP_IP` | `PUBLIC_IP` | Set one to advertise a different address for signalling or for media. `EXT_SIP_IP` is the address ecallmgr reports to Kamailio's dispatcher, so Kamailio must be able to reach it; `EXT_RTP_IP` goes into the SDP. The Compose quick start sets them apart: signalling on the bridge network, media on the host address. |
+| `LOCAL_NETWORK_ACL` | `loopback.auto` | `local-network-acl` of `sipinterface_1`: a call from an address in it gets `LOCAL_IP` in the SDP instead of `EXT_RTP_IP`. FreeSWITCH judges by the INVITE's source, which is always Kamailio, so the default advertises `EXT_RTP_IP` to all but this machine. `localnet.auto` (the shipped configuration's value) suits only phones that send SIP to FreeSWITCH directly. |
 | `KAZOO_TRANSPORT` | `amqp` | Only `amqp` is accepted; the image ships no `mod_kazoo`. |
 
 The media server's node name is `freeswitch@<hostname -f>`, so give the
 container an FQDN hostname too. The RTP port range (16384-32768) is set in
-`autoload_configs/switch.conf.xml` and has no environment variable.
+`autoload_configs/switch.conf.xml`; `RTP_START_PORT` and `RTP_END_PORT` narrow it.
 
 ### reprise-kamailio (`docker/kamailio`)
 
@@ -179,11 +180,16 @@ first of:
    one;
 4. `kapps` in the default section of `system_config/kapps_controller`, else
    the built-in list in `core/kazoo_apps/src/kazoo_apps.hrl`: blackhole,
-   callcenter, callflow, cdr, conference, crossbar, fax, hangups, media_mgr,
-   milliwatt, omnipresence, pivot, registrar, reorder, stepswitch, sysconf,
-   tasks, teletype, trunkstore, webhooks.
+   callcenter, callflow, cdr, conference, crossbar, fax, hangups, konami,
+   media_mgr, milliwatt, omnipresence, pivot, registrar, reorder,
+   stepswitch, sysconf, tasks, teletype, trunkstore, webhooks.
 
-`konami`, `stir`, `jonny5`, `hotornot`, `doodle`, `pusher`, `stats` and
+The default section is written with the built-in list the first time a node
+reads it, so a cluster created before an application joined the list does
+not run it: `sup kazoo_apps_maintenance start <app>` starts it and adds it
+to the stored list.
+
+`stir`, `jonny5`, `hotornot`, `doodle`, `pusher`, `stats` and
 `call_inspector` are not in the built-in list. Add them to
 `KAZOO_APPS` or start them on a running node with
 `sup kapps_controller start_app <app>`. At every start a node also runs

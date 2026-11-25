@@ -104,6 +104,7 @@
                          ,'cb_presence'
                          ,'cb_quickcall'
                          ,'cb_rates'
+                         ,'cb_recordings'
                          ,'cb_registrations'
                          ,'cb_resource_templates'
                          ,'cb_resources'
