@@ -180,11 +180,16 @@ first of:
    one;
 4. `kapps` in the default section of `system_config/kapps_controller`, else
    the built-in list in `core/kazoo_apps/src/kazoo_apps.hrl`: blackhole,
-   callcenter, callflow, cdr, conference, crossbar, fax, hangups, media_mgr,
-   milliwatt, omnipresence, pivot, registrar, reorder, stepswitch, sysconf,
-   tasks, teletype, trunkstore, webhooks.
+   callcenter, callflow, cdr, conference, crossbar, fax, hangups, konami,
+   media_mgr, milliwatt, omnipresence, pivot, registrar, reorder,
+   stepswitch, sysconf, tasks, teletype, trunkstore, webhooks.
 
-`konami`, `stir`, `jonny5`, `hotornot`, `doodle`, `pusher`, `stats` and
+The default section is written with the built-in list the first time a node
+reads it, so a cluster created before an application joined the list does
+not run it: `sup kazoo_apps_maintenance start <app>` starts it and adds it
+to the stored list.
+
+`stir`, `jonny5`, `hotornot`, `doodle`, `pusher`, `stats` and
 `call_inspector` are not in the built-in list. Add them to
 `KAZOO_APPS` or start them on a running node with
 `sup kapps_controller start_app <app>`. At every start a node also runs

@@ -12,13 +12,15 @@
 #     when one does, runs the database migration instead, for a cluster that
 #     has come back up on newer images
 #  3. has FreeSWITCH fetch media through the media proxy, not from CouchDB
-#  4. imports the system prompts of PROMPT_LANGUAGES (en-us unless set),
-#     unless they are there
-#  5. registers the Monster UI apps with crossbar (copied out of the
+#  4. on a new cluster, keeps call recordings (store_recordings); on one
+#     created by earlier images, starts konami and the recordings API
+#  5. imports the system prompts of PROMPT_LANGUAGES (en-us unless set),
+#     unless all of them are there
+#  6. registers the Monster UI apps with crossbar (copied out of the
 #     monster-ui container)
-#  6. waits until ecallmgr has adopted FreeSWITCH
-#  7. allows Kamailio as the SBC in ecallmgr's ACLs and reloads them
-#  8. prints where to log in and how to register two phones
+#  7. waits until ecallmgr has adopted FreeSWITCH
+#  8. allows Kamailio as the SBC in ecallmgr's ACLs and reloads them
+#  9. prints where to log in and how to register two phones
 #
 # BOOTSTRAP_TIMEOUT (seconds, default 900) bounds each wait.
 # PROMPT_LANGUAGES, here or in .env: en-us,fr-ca or `all`.
@@ -87,12 +89,21 @@ shipped_languages() {
   dc exec -T kazoo-apps sh -c \
     'cd /opt/kazoo/sounds && for d in */*/; do echo "${d%/}"; done' | tr '/' '-'
 }
-# prompts_imported <language>: prompt documents are named <language>/<prompt>
-# in system_media ("0" is the character after "/")
-prompts_imported() {
+# prompts_shipped <dir>: how many prompts the image has in <dir>, one per
+# name (import_prompts takes *.wav and *.mp3, and a prompt's document is
+# named after the file without its extension)
+prompts_shipped() {
+  # shellcheck disable=SC2016  # expanded by the shell in the container
+  dc exec -T kazoo-apps sh -c \
+    'cd "$1" && for f in *.wav *.mp3; do [ -e "$f" ] && echo "${f%.*}"; done | sort -u | wc -l' \
+    sh "$1" | tr -d ' \r'
+}
+# prompts_stored <language>: how many prompt documents system_media holds for
+# it; they are named <language>/<prompt> ("0" is the character after "/")
+prompts_stored() {
   dc exec -T couchdb curl -fsS -u "$COUCHDB_USER:$COUCHDB_PASSWORD" \
-    "http://127.0.0.1:5984/system_media/_all_docs?start_key=%22$1%2F%22&end_key=%22${1}0%22&limit=1" \
-    2>/dev/null | grep -q "\"id\":\"$1/"
+    "http://127.0.0.1:5984/system_media/_all_docs?start_key=%22$1%2F%22&end_key=%22${1}0%22" \
+    2>/dev/null | { grep -o "\"id\":\"$1/" || true; } | wc -l | tr -d ' '
 }
 
 for svc in couchdb broker kazoo-apps ecallmgr freeswitch kamailio monster-ui; do
@@ -138,6 +149,24 @@ step "media through the media proxy"
 # on every request, so nothing restarts.
 sup_apps kapps_config set_boolean kazoo_couch use_bigcouch_direct false
 
+step "call recordings and transfers"
+# A setting Kazoo has read is written back with its default, so a stored
+# value cannot tell an operator's choice from one nobody made. These are set
+# once, on the run that creates the cluster, or brought along on the run
+# after an upgrade, and left alone after that.
+if [ "$CREATED" = yes ]; then
+  # With no storage plan, Kazoo keeps a call recording only when this is
+  # true (it is false by default) and otherwise drops it; here they go to
+  # the account's database.
+  sup_apps kapps_config set_boolean media store_recordings true
+else
+  # Defaults a cluster created on earlier images does not have: konami
+  # (in-call feature codes and attended transfers) and the recordings API.
+  # Both commands add to the stored lists only what is missing from them.
+  sup_apps kazoo_apps_maintenance start konami
+  sup_apps crossbar_maintenance start_module cb_recordings
+fi
+
 step "system prompts"
 if [ "$PROMPT_LANGUAGES" = all ]; then
   languages=$(shipped_languages)
@@ -160,9 +189,14 @@ for language in $languages; do
     echo "the image has no $language prompts; it has: $(shipped_languages | tr '\n' ' ')" >&2
     exit 1
   fi
-  if prompts_imported "$language"; then
-    echo "$language prompts already imported"
+  # Every prompt, not just one: an import cut short leaves some behind, and
+  # importing again overwrites the ones already there.
+  shipped=$(prompts_shipped "$dir")
+  stored=$(prompts_stored "$language")
+  if [ "$stored" -ge "$shipped" ]; then
+    echo "$language prompts already imported ($stored)"
   else
+    echo "$language: $stored of $shipped prompts imported; importing"
     sup_apps kazoo_media_maintenance import_prompts "$dir" "$language"
   fi
 done
