@@ -5,7 +5,9 @@
 import callcenter/dispatcher
 import callcenter/dispatcher/offers
 import callcenter/records
-import callcenter/types.{Answered, Failed, OfferNoAnswer, OfferRinging, Transfer}
+import callcenter/types.{
+  Answered, Completed, Ended, Failed, OfferNoAnswer, OfferRinging, Transfer,
+}
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{None, Some}
@@ -49,12 +51,11 @@ fn two_queues() -> cluster.Cluster {
 
 // --- A queue deleted under a caller who has moved on ------------------------
 
-/// Support is deleted while Ann rings for the caller, so the ring is called
-/// off and the caller is to leave once it is over. Before it is, their
-/// member for the overflow arrives: they timed out of support on their own.
-/// The call-off's reply ends the support ring, and the caller -- now the
-/// overflow's -- is not taken out as `queue_deleted`: they wait on in the
-/// overflow and are offered to Bob.
+/// Support is deleted while Ann rings for the caller: the ring is called off
+/// and the caller leaves support at once, their actor handing them back on
+/// `no_agents`. Their callflow sends them on to the overflow, a passage of
+/// its own, offered to Bob; the support ring's late word is about an offer
+/// this dispatcher no longer holds.
 pub fn a_deletion_does_not_follow_the_caller_into_the_next_queue_test() {
   let c = two_queues()
   cluster.arrive(c, "call-one", "support", 0, 0)
@@ -62,29 +63,28 @@ pub fn a_deletion_does_not_follow_the_caller_into_the_next_queue_test() {
   process.send(c.dispatcher, dispatcher.QueueDeleted("support"))
   cluster.sync(c)
   assert cluster.called_off(c) == ["call-one"]
-  assert cluster.waiting(c) == ["call-one"]
+  assert cluster.waiting(c) == []
+  assert cluster.settled(c) == ["call-one"]
 
+  cluster.reply(c, "call-one", Failed("called_off"))
   cluster.arrive(c, "call-one", "overflow", 0, 30)
-  cluster.reply(c, "call-one", Failed("originator_cancel"))
 
-  assert cluster.settled(c) == []
+  assert cluster.settled(c) == ["call-one"]
   assert cluster.waiting(c) == ["call-one"]
   assert cluster.ringing(c, "call-one") == ["bob"]
   let assert Ok(last) = fake_offer.last(c.offers)
   assert last.member.queue_id == "overflow"
 }
 
-/// The same deletion with the caller still in support: they leave once the
-/// ring is over, as before.
+/// The same deletion with nowhere else for the caller to go: they are out
+/// of the queue at once, settled once.
 pub fn a_deletion_takes_out_the_passage_it_was_for_test() {
   let c = two_queues()
   cluster.arrive(c, "call-one", "support", 0, 0)
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
   process.send(c.dispatcher, dispatcher.QueueDeleted("support"))
   cluster.sync(c)
-  // The same queue again, the callflow run again: the same passage.
-  cluster.arrive(c, "call-one", "support", 0, 0)
-  cluster.reply(c, "call-one", Failed("originator_cancel"))
+  cluster.reply(c, "call-one", Failed("called_off"))
 
   assert cluster.settled(c) == ["call-one"]
   assert cluster.waiting(c) == []
@@ -158,7 +158,8 @@ pub fn a_miss_after_the_caller_moved_on_leaves_them_waiting_test() {
 }
 
 /// Ann answers the support caller after they moved on to the overflow: the
-/// caller is settled once, on the delivery held now, and waits no more.
+/// caller waits no more, and is settled once, when the call ends, on the
+/// delivery held at the answer.
 pub fn an_answer_after_the_caller_moved_on_connects_them_test() {
   let c = two_queues()
   cluster.arrive(c, "call-one", "support", 0, 0)
@@ -170,7 +171,9 @@ pub fn an_answer_after_the_caller_moved_on_connects_them_test() {
     Answered("ann", "ann-leg", cluster.start_of_time + 31),
   )
 
-  assert cluster.settled(c) == ["call-one"]
+  assert cluster.settled(c) == []
   assert cluster.waiting(c) == []
   assert cluster.ringing(c, "call-one") == ["ann"]
+  cluster.reply(c, "call-one", Ended(Completed, cluster.start_of_time + 90))
+  assert cluster.settled(c) == ["call-one"]
 }

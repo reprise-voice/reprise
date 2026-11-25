@@ -8929,9 +8929,15 @@
     'cancelled':
       'description': When the caller left without being connected, in Gregorian seconds
       'type': integer
+    'control_queue':
+      'description': The control queue the caller's channel is commanded through, for a node that takes the answered call over
+      'type': string
     'ended':
       'description': When the call finished, in Gregorian seconds
       'type': integer
+    'handoff_id':
+      'description': The passage's handoff id, which the caller's actor and the callflow that sent them know it by
+      'type': string
     'joined':
       'description': When the caller entered the queue, in Gregorian seconds
       'type': integer
@@ -11130,6 +11136,13 @@
       'default': 30
       'description': Seconds between periodic announcements when a queue does not set its own
       'minimum': 15
+      'type': integer
+    'call_publishers':
+      'default': 16
+      'description': |-
+        How many processes on each node publish what the call actors send, each on an AMQP channel of its own; all of one call's messages go through the same one. Read as the application starts
+      'maximum': 256
+      'minimum': 1
       'type': integer
     'default_agent_no_answer_status':
       'default': on_break

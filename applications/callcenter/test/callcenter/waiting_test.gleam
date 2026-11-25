@@ -10,7 +10,6 @@ fn wait(call_id: String, queue_id: String, priority: Int, joined: Int) -> Wait {
     member: cluster.member(call_id, queue_id, priority, joined),
     position: 0,
     announced_at: 0,
-    rerun: False,
     tried: [],
   )
 }

@@ -7,7 +7,6 @@
 
 -export([new/0]).
 -export([account_id/1, account_id/2, set_account_id/2]).
--export([caller_delivery/1, caller_delivery/2, set_caller_delivery/2]).
 -export([event_category/1, event_category/2, set_event_category/2]).
 -export([event_name/1, event_name/2, set_event_name/2]).
 -export([node/1, node/2, set_node/2]).
@@ -38,18 +37,6 @@ account_id(Doc, Default) ->
 -spec set_account_id(doc(), binary()) -> doc().
 set_account_id(Doc, AccountId) ->
     kz_json:set_value([<<"Account_ID">>], AccountId, Doc).
-
--spec caller_delivery(doc()) -> kz_term:api_binary().
-caller_delivery(Doc) ->
-    caller_delivery(Doc, 'undefined').
-
--spec caller_delivery(doc(), Default) -> binary() | Default.
-caller_delivery(Doc, Default) ->
-    kz_json:get_binary_value([<<"Caller_Delivery">>], Doc, Default).
-
--spec set_caller_delivery(doc(), binary()) -> doc().
-set_caller_delivery(Doc, CallerDelivery) ->
-    kz_json:set_value([<<"Caller_Delivery">>], CallerDelivery, Doc).
 
 -spec event_category(doc()) -> kz_term:api_binary().
 event_category(Doc) ->

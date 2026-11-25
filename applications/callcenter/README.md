@@ -52,9 +52,10 @@ in that one process, so an agent who is in two queues is never rung for two
 callers at once. Each pass orders all of the account's waiting callers by
 priority and then by how long they have waited, works out which tier levels
 each caller may be offered to, and asks the caller's queue strategy which
-agents to ring. The ringing itself is done by an offer process
-(`callcenter/offer`), which bridges the agents' devices from the caller's
-own channel. A member is acknowledged only once the caller has an agent or
+agents to ring. The ringing itself is done by the caller's own actor
+(`callcenter/call/actor`), one per waiting caller, which bridges the agents'
+devices from the caller's channel and, when a node dies, is started again on
+the node that takes the caller's shard and finds them where they stand. A member is acknowledged only once the caller has an agent or
 has left, so a node failure redelivers every caller still waiting.
 
 **Agents.** An agent has two independent values. *Availability* is what the
@@ -386,13 +387,13 @@ subscriptions). The AMQP API is `kapi_callcenter`.
 | `callcenter/dispatcher` and `callcenter/dispatcher/*` | one account's waiting callers, offers, timers and events; `pass` and `plan` decide who is offered |
 | `callcenter/strategy`, `callcenter/strategies/*` | the strategy interface and one module per strategy |
 | `callcenter/tiers`, `callcenter/tier_check` | tier rules, and validation of tier writes |
-| `callcenter/offer` | one offer: the endpoints, the bridge, and what the switch reports |
-| `callcenter/takeover` | watching a ring or call left by a node that died |
+| `callcenter/call/*` | the call path: each waiting caller's actor, the pure core it runs, its media, originates and conversations, the publishers every actor publishes through, and finding a caller handed over by a node that died |
+| `callcenter/stall` | whether a node that stood still may still act for its shards |
 | `callcenter/activity` | agents' phone activity, derived from channel events |
 | `callcenter/availability`, `callcenter/agent_state`, `callcenter/breaks` | the agent document, availability changes, and breaks with an end |
 | `callcenter/dnd` | do-not-disturb, disabled and deleted users |
 | `callcenter/presence`, `callcenter/lamp_probe` | the login lamp and Kamailio dialog probes |
-| `callcenter/records`, `callcenter/recording` | `queue_call` and `agent_status_change` documents, and queue call recording |
+| `callcenter/records`, `callcenter/records/backlog`, `callcenter/recording` | `queue_call` and `agent_status_change` documents, the writes held while the database is away, and queue call recording |
 | `callcenter/reconcile`, `callcenter/closed` | the reconciliation sweep |
 | `callcenter/status`, `callcenter/status_query`, `callcenter/pickup` | live status and pickup requests answered by the shard holder |
 | `callcenter/supervisor_actions`, `callcenter/permission` | eavesdrop and pickup in Crossbar, and who may use the API |

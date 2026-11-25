@@ -10,11 +10,12 @@
 -module(queue_runtime_ffi).
 -export([init/2, now_ms/0, next/1, publish/3, publications/0,
          destroyed/1, fail_publication/0, hangup_on_publication/0,
-         continue_branch/2, continued_with/0]).
+         continue_branch/2, continued_with/0, replied/1, replies/0]).
 
 init(Script, Now) ->
     put(?MODULE, #{script => Script, now => Now, publications => [],
-                   destroyed => false, fail => false, hangup => false}),
+                   destroyed => false, fail => false, hangup => false,
+                   replies => []}),
     nil.
 
 state() -> get(?MODULE).
@@ -24,6 +25,8 @@ destroyed(_) -> maps:get(destroyed, state()).
 fail_publication() -> set(fail, true).
 hangup_on_publication() -> set(hangup, true).
 publications() -> lists:reverse(maps:get(publications, state())).
+replied(Payload) -> set(replies, [Payload | maps:get(replies, state())]).
+replies() -> lists:reverse(maps:get(replies, state())).
 
 next(Timeout) when Timeout > 0 ->
     case maps:get(script, state()) of

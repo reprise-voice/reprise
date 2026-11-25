@@ -17,8 +17,8 @@ import callcenter/types.{
   type Activity, type Availability, type CancelReason, type EndResult,
   AgentHangup, Answered, Available, AvailableOnDemand, CallerHangup, Completed,
   Ended, ExitKey, FailedBridge, Hangup, Idle, LoggedOut, NoAgentTimeout, OnBreak,
-  OnCall, QueueDeleted, QueueFull, Ringing, Timeout, Transfer, Transferred,
-  WrappingUp,
+  OnCall, Quarantined, QueueDeleted, QueueFull, Ringing, Timeout, Transfer,
+  Transferred, WrappingUp,
 }
 import callcenter_maintenance
 import cf_callcenter
@@ -51,10 +51,20 @@ fn every_reason() -> List(CancelReason) {
       | ExitKey
       | QueueFull
       | Transfer
-      | QueueDeleted -> Nil
+      | QueueDeleted
+      | Quarantined -> Nil
     }
   }
-  [Hangup, Timeout, NoAgentTimeout, ExitKey, QueueFull, Transfer, QueueDeleted]
+  [
+    Hangup,
+    Timeout,
+    NoAgentTimeout,
+    ExitKey,
+    QueueFull,
+    Transfer,
+    QueueDeleted,
+    Quarantined,
+  ]
 }
 
 fn every_availability() -> List(Availability) {
@@ -132,18 +142,15 @@ pub fn results_are_the_definitions_test() {
 }
 
 /// Why a caller left: `Transfer` included, which a supervisor's pickup sent
-/// before it became an offer and a node of that release may still send.
-/// Both spellings of it -- the record's and the callflow action's -- are the
-/// definition's.
+/// before it became an offer and a node of that release may still send. The
+/// record's spelling of every one is the definition's.
 pub fn cancel_reasons_are_the_definitions_test() {
   let platform = platform_start()
   let values = allowed("member_cancel", "Reason")
   platform_stop(platform)
 
   assert same(list.map(every_reason(), records.reason_to_string), values)
-  assert same(list.map(every_reason(), cf_callcenter.reason_name), values)
   list.each(every_reason(), fn(reason) {
-    assert records.reason_to_string(reason) == cf_callcenter.reason_name(reason)
     assert records.reason_from_string(records.reason_to_string(reason))
       == reason
   })
@@ -188,8 +195,8 @@ const queue_id = "37139638ff5b68f155d8445178524df1"
 
 const call_id = "3c2a1f.9e@pbx.example.com"
 
-/// What the callflow action sends to the shard's queue when a caller joins
-/// and when one leaves, for every reason one can leave for.
+/// What the callflow action sends to the shard's queue when a caller joins,
+/// and its answer to the caller's actor when the caller is handed back.
 pub fn the_callflow_actions_messages_are_the_definitions_test() {
   let platform = platform_start()
   let joined =
@@ -204,25 +211,19 @@ pub fn the_callflow_actions_messages_are_the_definitions_test() {
       caller_id_name: Some("A Caller"),
       caller_id_number: None,
       shards: Some(64),
+      handoff_id: "handoff-1",
+      branches: doc.object([
+        #("_", doc.object([#("module", doc.String("voicemail"))])),
+      ]),
     )
   let joined_valid = valid("member_call", doc.to_string(joined))
-  let left =
-    list.map(every_reason(), fn(reason) {
-      cf_callcenter.member_cancel(
-        account_id: account_id,
-        queue_id: queue_id,
-        call_id: call_id,
-        reason: reason,
-        joined: 63_900_000_000,
-        cancelled_at: 63_900_000_060,
-      )
-      |> doc.to_string
-      |> valid("member_cancel", _)
-    })
+  let continuing =
+    cf_callcenter.member_continuing(call_id: call_id, handoff_id: "handoff-1")
+  let continuing_valid = valid("member_continuing", doc.to_string(continuing))
   platform_stop(platform)
 
   assert joined_valid
-  assert list.all(left, fn(ok) { ok })
+  assert continuing_valid
 }
 
 /// What the maintenance commands put on a shard's queue.
@@ -313,10 +314,11 @@ pub fn every_dispatcher_event_is_the_definitions_test() {
   )
 }
 
-/// A caller taken out of a queue that was deleted is told so, at their
-/// callflow and on the exchange, with a `member_result` whose result is
-/// `queue_deleted` and which the definition accepts: the action leaves on
-/// `no_agents` when it hears it, and a webhook sees the passage end.
+/// A caller taken out of a queue that was deleted is published so, on the
+/// exchange, with a `member_result` whose result is `queue_deleted` and
+/// which the definition accepts: a webhook sees the passage end. The caller
+/// is told by their actor, which hands them back on `no_agents`; nothing
+/// goes to their callflow from the dispatcher.
 pub fn a_deleted_queues_result_is_the_definitions_test() {
   let platform = platform_start()
   let c =
@@ -360,7 +362,7 @@ pub fn a_deleted_queues_result_is_the_definitions_test() {
 
   assert rejected == []
   assert list.contains(results, #("exchange", "queue_deleted"))
-  assert list.contains(results, #("caller", "queue_deleted"))
+  assert !list.contains(results, #("caller", "queue_deleted"))
 }
 
 /// An availability change, from wherever it came.

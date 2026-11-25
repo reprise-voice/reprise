@@ -119,7 +119,9 @@ fn read(state: State) -> #(State, Reading) {
 
 /// Every caller without an offer, in the account's order, offered what the
 /// plan says: each offer is sent before the next caller is decided, because
-/// one that could not be started leaves its agents for the next.
+/// one that could not be started leaves its agents for the next. A caller
+/// handed over whose actor has not yet said where they stand is not
+/// offered: their phones may be ringing already (`arrival.present`).
 fn offer_all(
   state: State,
   snapshot: plan.Snapshot,
@@ -128,7 +130,11 @@ fn offer_all(
   list.fold(order, #(state, snapshot), fn(acc, wait) {
     let #(state, snapshot) = acc
     let call_id = wait.member.call_id
-    case dict.has_key(state.offers, call_id) {
+    let presenting = case dict.get(state.presenting, call_id) {
+      Ok(until) -> until > snapshot.now
+      Error(Nil) -> False
+    }
+    case dict.has_key(state.offers, call_id) || presenting {
       True -> acc
       False ->
         case plan.decide(snapshot, wait) {

@@ -65,6 +65,7 @@
 ////
 //// No answer from the switches is a refusal and not a permission.
 
+import callcenter/call/originate
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
@@ -77,7 +78,6 @@ import kazoo/events.{type Channel}
 import kazoo/kazoo.{type Kazoo}
 
 import callcenter/dispatcher/pickup as dispatch
-import callcenter/offer
 import callcenter/permission
 import callcenter/pickup
 import callcenter/system
@@ -765,7 +765,10 @@ fn phones(
 ) -> List(String) {
   let #(call, props) = case queue {
     None -> #(synthetic(account_id), props())
-    Some(queue_id) -> #(synthetic_in(account_id, queue_id), offer.properties())
+    Some(queue_id) -> #(
+      synthetic_in(account_id, queue_id),
+      originate.properties(),
+    )
   }
   case target.endpoint_type {
     "user" ->

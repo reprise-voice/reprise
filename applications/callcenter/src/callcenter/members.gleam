@@ -9,11 +9,12 @@
 //// has lost its shards and its membership in the same instant, whether it
 //// died, froze or was cut off, and every other node sees both at once.
 ////
-//// `kz_nodes` only says which names to ask about. It hears of a node dying
-//// 12 to 45 seconds late and of a node starting 15 to 40 seconds late, which
-//// is too slow to decide anything with: a count of nodes read from it is
-//// what used to leave a node that had just died with a share of the shards
-//// nobody took, and a node that had just come back with none.
+//// `kz_nodes` only says which names to ask about, with the members at the
+//// last look. It hears of a node dying 12 to 45 seconds late and of a node
+//// starting 15 to 40 seconds late, which is too slow to decide anything
+//// with: a count of nodes read from it is what used to leave a node that
+//// had just died with a share of the shards nobody took, and a node that
+//// had just come back with none.
 ////
 //// The same queue is the node's inbox. A node that is assigned a shard
 //// somebody else is consuming asks every other member for it (`want`), and
@@ -122,9 +123,9 @@ pub fn decode_want(value: Value) -> Result(#(String, List(Int)), Nil) {
   }
 }
 
-/// The nodes worth asking about: every node in this zone that `kz_nodes`
-/// has heard running the application, and this one, which `kz_nodes` only
-/// lists fifteen seconds after it starts.
+/// The nodes `kz_nodes` names: every node in this zone that it has heard
+/// running the application, and this one, which `kz_nodes` only lists
+/// fifteen seconds after it starts.
 pub fn candidates(self: String) -> List(String) {
   let zone = nodes.local_zone()
   nodes.nodes()
@@ -152,7 +153,27 @@ pub fn present(names: List(String)) -> Result(List(String), String) {
   |> result.map(list.reverse)
 }
 
-/// The members right now: `present(candidates(self))`.
-pub fn now(self: String) -> Result(List(String), String) {
-  present(candidates(self))
+/// The names worth asking the broker about: those `kz_nodes` names, and
+/// every member at the last look (`known`).
+///
+/// The members are kept on because `kz_nodes` can forget a node that is
+/// there. A node that restarts is one name with two lives. `kz_nodes`
+/// drops the name when the first life's heartbeats run out, 12 to 45 s
+/// after it stopped, and takes it back when it hears the second, 15 to 40 s
+/// after it started. When the second life's queue is consumed before the
+/// first's entry runs out, the name drops out of the ones asked about in
+/// between, and every other node sees a member leave and come back: a
+/// returned node can be out for several seconds, and its shards go back to the node that had given them up
+/// before they came to it. A name the broker says is a member stays worth
+/// asking about until the broker says its queue has no consumer.
+pub fn worth_asking(
+  candidates: List(String),
+  known: List(String),
+) -> List(String) {
+  list.unique(list.append(candidates, known))
+}
+
+/// The members right now, `known` being the members at the last look.
+pub fn now(self: String, known: List(String)) -> Result(List(String), String) {
+  present(worth_asking(candidates(self), known))
 }

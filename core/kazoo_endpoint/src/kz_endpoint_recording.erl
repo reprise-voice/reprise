@@ -70,7 +70,7 @@ maybe_record_outbound(ToNetwork, Endpoint, Call, Data) ->
             EndpointId = kzd_endpoint:id(Endpoint),
             lager:debug("starting endpoint ~s recording (~s outbound)", [EndpointId, ToNetwork]),
             kapps_call:start_recording(
-              Data
+              kapps_call_recording:start_on_answer_by_default(Data, Call)
              ,kapps_call:kvs_store('recording_follow_transfer', 'false', Call)
              )
     end.

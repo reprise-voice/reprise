@@ -36,7 +36,6 @@
         ,register_views_now/0
         ,is_exit_from/2
         ,monotonic_ms/0
-        ,mailbox_has_event/1
         ,leg_prefix/1
         ,no_return/0
         ,broker_available/0
@@ -46,7 +45,29 @@
         ,log_debug/1
         ,callflow_executor/1
         ,callflow_queue/0
-        ,recording_file_name/2
+        ]).
+
+%% The call actor's reach: see `callcenter/call/actor'.
+-export([bind_call/1
+        ,unbind_call/1
+        ,kapi_payload/1
+        ,reply_address/0
+        ,send_command/2
+        ,callflow_branches/2
+        ]).
+
+%% The call publishers': see `callcenter/call/publishers'.
+-export([ensure_channel/0
+        ,publish_here/3
+        ,publish_here_to/4
+        ,run_guarded/1
+        ]).
+
+%% The node's stall watch: see `callcenter/stall'.
+-export([stall_note/2
+        ,stall_watch/0
+        ,high_priority/0
+        ,is_shutdown/1
         ]).
 
 %%------------------------------------------------------------------------------
@@ -447,32 +468,15 @@ monotonic_ms() ->
     erlang:monotonic_time('millisecond').
 
 %%------------------------------------------------------------------------------
-%% @doc Whether an event of this name is waiting in the calling process's
-%% mailbox, in the `{amqp_msg, JObj}' shape `kapps_call_command:relay_event/2'
-%% sends and `receive_event/1' reads. Nothing is taken out of the mailbox: an
-%% offer asks this before it sends its bridge, and reads the same event again
-%% in its loop if it sends one after all.
-%% @end
-%%------------------------------------------------------------------------------
--spec mailbox_has_event(binary()) -> boolean().
-mailbox_has_event(EventName) ->
-    {'messages', Messages} = erlang:process_info(self(), 'messages'),
-    lists:any(fun({'amqp_msg', {Props}}) when is_list(Props) ->
-                      proplists:get_value(<<"Event-Name">>, Props) =:= EventName;
-                 (_Other) -> 'false'
-              end
-             ,Messages
-             ).
-
-%%------------------------------------------------------------------------------
 %% @doc Twenty-four lower-case hex characters: the part every call id an offer
 %% gives its legs starts with, worked out from the reference the dispatcher
 %% made for that offer.
 %%
 %% A reference is unique to the node and its incarnation, so no two offers
 %% anywhere share a prefix; and it is a function of the reference, so the
-%% dispatcher can write on the caller's record the prefix the offer's process
-%% rings with, for whoever takes the caller over to read.
+%% dispatcher can write on the caller's record the prefix the caller's actor
+%% rings with, for whoever takes the caller over to read. A callflow action
+%% names a passage the same way.
 %% @end
 %%------------------------------------------------------------------------------
 -spec leg_prefix(reference()) -> binary().
@@ -519,6 +523,173 @@ log_debug(Message) ->
     'nil'.
 
 %%%=============================================================================
+%%% The call actor
+%%%=============================================================================
+
+%%------------------------------------------------------------------------------
+%% @doc Hear every event of a call id from now on, in the calling process's
+%% mailbox, as `{kapi, Msg}': `kz_events:bind_call_id/1', the node's pooled
+%% call events. The caller's own events and each of its offer's legs are
+%% bound one by one, by the actor that commands them. Nothing where there
+%% are no call events to bind to: the test suite, which hands the actor its
+%% events itself.
+%% @end
+%%------------------------------------------------------------------------------
+-spec bind_call(binary()) -> 'nil'.
+bind_call(CallId) ->
+    try kz_events:bind_call_id(CallId)
+    catch _E:_R -> 'ok'
+    end,
+    'nil'.
+
+%%------------------------------------------------------------------------------
+%% @doc Stop hearing a call id. `gproc' refuses to take back what was never
+%% registered, and a leg unbound twice is nothing.
+%% @end
+%%------------------------------------------------------------------------------
+-spec unbind_call(binary()) -> 'nil'.
+unbind_call(CallId) ->
+    try kz_events:unbind_call_id(CallId)
+    catch _E:_R -> 'ok'
+    end,
+    'nil'.
+
+%%------------------------------------------------------------------------------
+%% @doc The message a `{kapi, Msg}' carries, as a map for `kazoo/doc': a call
+%% event from `kz_events', or a reply `gen_listener' handed straight to the
+%% pid its `Deliver-To-PID' named. `nil' for anything else of that shape.
+%% @end
+%%------------------------------------------------------------------------------
+-spec kapi_payload(any()) -> {'ok', map()} | {'error', 'nil'}.
+kapi_payload({'kapi', {_Delivery, _Type, Map}}) when is_map(Map) -> {'ok', Map};
+kapi_payload({'kapi', {_Delivery, _Type, JObj}}) ->
+    try {'ok', kz_json:to_map(JObj)}
+    catch _E:_R -> {'error', 'nil'}
+    end;
+kapi_payload(_Other) -> {'error', 'nil'}.
+
+%%------------------------------------------------------------------------------
+%% @doc Where a reply to the calling process goes: `pid://<self>/<queue>',
+%% the queue of this node's call reply listener (`callcenter/call/replies'),
+%% which hands whatever carries that address straight to this pid. `nil'
+%% until the listener has said what its queue is.
+%% @end
+%%------------------------------------------------------------------------------
+-spec reply_address() -> {'ok', binary()} | {'error', 'nil'}.
+reply_address() ->
+    case node_term(<<"call_replies_queue">>) of
+        {'ok', Queue} when is_binary(Queue), Queue =/= <<>> ->
+            {'ok', kapi:encode_pid(Queue, self())};
+        _ -> {'error', 'nil'}
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Send one command to a call's control queue from the calling process,
+%% as `kapps_call_command:send_command/2' sends every command: the call's
+%% `Call-ID' and the caller's own headers added. `Json' is the command's
+%% fields. Anything `kazoo_gleam' has no function for -- a `noop' with a
+%% known `Msg-ID', `connect_leg', a `set' run at once -- goes this way.
+%% On a node with a broker the calling process is the call's publisher
+%% (`callcenter/call/publishers'), running what the call's actor handed it,
+%% and never the actor.
+%% @end
+%%------------------------------------------------------------------------------
+-spec send_command(any(), binary()) -> {'ok', 'nil'} | {'error', binary()}.
+send_command(Call, Json) ->
+    case code:ensure_loaded('kapps_call_command') of
+        {'module', 'kapps_call_command'} ->
+            try kapps_call_command:send_command(kz_json:to_proplist(kz_json:decode(Json)), Call) of
+                _ -> {'ok', 'nil'}
+            catch
+                _E:R -> {'error', reason(R)}
+            end;
+        _ -> {'ok', 'nil'}
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Make sure the calling process has an AMQP channel of its own, so that
+%% everything it publishes goes out on one channel, in the order it was
+%% sent. `False' where there is no broker, or none within five seconds: the
+%% request stands, and `kz_amqp_assignments' hands the process a channel
+%% when it has one.
+%%
+%% A call publisher's (`callcenter/call/publishers'), asked once as it
+%% starts. `kz_amqp_assignments' gives every process that publishes a
+%% channel of its own for the rest of its life, whether it asks here or
+%% not, which is why a call actor publishes nothing itself.
+%% @end
+%%------------------------------------------------------------------------------
+-spec ensure_channel() -> boolean().
+ensure_channel() -> channel(5000).
+
+%%------------------------------------------------------------------------------
+%% @doc Publish through `kapi_<Module>:publish_<Function>/1' from the calling
+%% process, on the calling process's own channel.
+%%
+%% `kazoo/amqp' publishes through `kz_amqp_worker', which hands each message
+%% to whichever worker of the node's pool is free, on that worker's channel:
+%% two messages published one after the other may go out on two channels,
+%% and nothing orders two channels. A call's publisher
+%% (`callcenter/call/publishers') sends everything of one call on its one
+%% channel, and this is how the call's `originate_req', its legs' hangups and
+%% its `callflow.resume' get there. What the `kapi' function refuses or the
+%% channel throws is an error, as it is from the pool; no platform -- the
+%% test suite -- is `unavailable', as it is there.
+%% @end
+%%------------------------------------------------------------------------------
+-spec publish_here(binary(), binary(), binary()) -> {'ok', 'nil'} | {'error', binary()}.
+publish_here(Module, Function, Json) ->
+    publish_with(Module, Function, 1, fun(Publish, Payload) -> Publish(Payload) end, Json).
+
+%%------------------------------------------------------------------------------
+%% @doc The same through `kapi_<Module>:publish_<Function>/2', at one queue:
+%% how a call's `member_continue' reaches the callflow action's
+%% Controller-Queue.
+%% @end
+%%------------------------------------------------------------------------------
+-spec publish_here_to(binary(), binary(), binary(), binary()) -> {'ok', 'nil'} | {'error', binary()}.
+publish_here_to(Target, Module, Function, Json) ->
+    publish_with(Module, Function, 2, fun(Publish, Payload) -> Publish(Target, Payload) end, Json).
+
+%%------------------------------------------------------------------------------
+%% @doc Run a function and answer what it threw rather than throwing it.
+%%
+%% A call publisher runs every call's work queued on it in turn, and one
+%% call's crash must not take the work of the calls behind it down with the
+%% publisher's mailbox.
+%% @end
+%%------------------------------------------------------------------------------
+-spec run_guarded(fun(() -> any())) -> {'ok', 'nil'} | {'error', binary()}.
+run_guarded(Fun) ->
+    try Fun() of
+        _ -> {'ok', 'nil'}
+    catch
+        Class:Reason ->
+            {'error', iolist_to_binary(io_lib:format("~s: ~0P", [Class, Reason, 30]))}
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc The flows the callflow running a call would go on into on each of
+%% `Keys', as its executor says (`cf_exe:next/2': the branch's own child, or
+%% the default child when it has none), as a map. A key with neither is left
+%% out, and so is everything where there is no executor to ask.
+%% @end
+%%------------------------------------------------------------------------------
+-spec callflow_branches(any(), [binary()]) -> map().
+callflow_branches(Call, Keys) ->
+    lists:foldl(fun(Key, Acc) ->
+                        try cf_exe:next(Key, Call) of
+                            'undefined' -> Acc;
+                            Flow -> Acc#{Key => kz_json:to_map(Flow)}
+                        catch
+                            _E:_R -> Acc
+                        end
+                end
+               ,#{}
+               ,Keys
+               ).
+
+%%%=============================================================================
 %%% Internal functions
 %%%=============================================================================
 
@@ -540,27 +711,120 @@ assigned(Timeout) ->
         _E:_R -> 'false'
     end.
 
+-spec publish_with(binary(), binary(), 1 | 2, fun((fun(), any()) -> any()), binary()) ->
+          {'ok', 'nil'} | {'error', binary()}.
+publish_with(Module, Function, Arity, Apply, Json) ->
+    case kapi_publisher(Module, Function, Arity) of
+        {'error', _Reason}=Error -> Error;
+        {'ok', Publish} ->
+            %% Decoded as `kazoo_gleam' decodes a payload for `kazoo/amqp'.
+            try Apply(Publish, kz_json:from_map(json:decode(Json))) of
+                'ok' -> {'ok', 'nil'};
+                {'error', Reason} -> {'error', reason(Reason)};
+                Other -> {'error', reason(Other)}
+            catch
+                _E:R -> {'error', reason(R)}
+            end
+    end.
+
+%% @doc `fun kapi_<Module>:publish_<Function>/Arity', when the platform is
+%% here to publish with and there is one.
+-spec kapi_publisher(binary(), binary(), 1 | 2) -> {'ok', fun()} | {'error', binary()}.
+kapi_publisher(Module, Function, Arity) ->
+    case code:ensure_loaded('kz_json') of
+        {'error', _Reason} -> {'error', <<"unavailable">>};
+        {'module', 'kz_json'} ->
+            Kapi = binary_to_atom(<<"kapi_", Module/binary>>, 'utf8'),
+            case code:ensure_loaded(Kapi) of
+                {'error', _Reason} -> {'error', <<"unavailable">>};
+                {'module', Kapi} -> exported_publisher(Kapi, <<"publish_", Function/binary>>, Arity)
+            end
+    end.
+
+-spec exported_publisher(atom(), binary(), 1 | 2) -> {'ok', fun()} | {'error', binary()}.
+exported_publisher(Kapi, Function, Arity) ->
+    try binary_to_existing_atom(Function, 'utf8') of
+        Publish ->
+            case erlang:function_exported(Kapi, Publish, Arity) of
+                'true' -> {'ok', fun Kapi:Publish/Arity};
+                'false' -> {'error', <<"no_such_publisher">>}
+            end
+    catch
+        'error':'badarg' -> {'error', <<"no_such_publisher">>}
+    end.
+
 -spec reason(any()) -> binary().
 reason(Reason) when is_binary(Reason) -> Reason;
 reason(Reason) when is_atom(Reason) -> atom_to_binary(Reason, 'utf8');
 reason(Reason) -> iolist_to_binary(io_lib:format("~p", [Reason])).
 
 %%------------------------------------------------------------------------------
-%% @doc The file a recording called `Name' is written to, for the `format' an
-%% account's recording settings give (`<<>>' for none): the extension
-%% `kapps_call_recording' puts on the name when it starts one, so that a
-%% `record_call' stop names the same file. Without it -- the test suite --
-%% the system's default, `mp3'.
+%% @doc The stall watch's notes: an `atomics' array of two, the last note and
+%% the last stall, in the VM's monotonic milliseconds, found through a
+%% persistent term put once in the node's life. A watch started again keeps
+%% the array, and with it the last stall.
+%%
+%% A stall is written before the note that saw it, and read after: whoever
+%% reads the new note reads the stall with it.
 %% @end
 %%------------------------------------------------------------------------------
--spec recording_file_name(binary(), binary()) -> binary().
-recording_file_name(Name, Format) ->
-    case code:ensure_loaded('kapps_call_recording') of
-        {'module', 'kapps_call_recording'} ->
-            Given = case Format of <<>> -> 'undefined'; _ -> Format end,
-            Ext = kapps_call_recording:get_format(Given),
-            kapps_call_recording:get_media_name(Name, Ext);
-        _ ->
-            Ext = case Format of <<>> -> <<"mp3">>; _ -> Format end,
-            <<Name/binary, ".", Ext/binary>>
+-define(STALL_WATCH, {'callcenter', 'stall_watch'}).
+
+-spec stall_note(integer(), boolean()) -> 'nil'.
+stall_note(Now, Stalled) ->
+    Ref = stall_array(Now),
+    case Stalled of
+        'true' -> atomics:put(Ref, 2, Now);
+        'false' -> 'ok'
+    end,
+    atomics:put(Ref, 1, Now),
+    'nil'.
+
+stall_array(Now) ->
+    case persistent_term:get(?STALL_WATCH, 'undefined') of
+        'undefined' ->
+            Ref = atomics:new(2, [{'signed', 'true'}]),
+            %% No stall yet: anything started from now on is fresh.
+            atomics:put(Ref, 2, Now - 1),
+            persistent_term:put(?STALL_WATCH, Ref),
+            Ref;
+        Ref -> Ref
     end.
+
+%%------------------------------------------------------------------------------
+%% @doc The watch's last note and last stall, while the watch runs: an array
+%% whose watch has ended says nothing, or every shard would be fenced for good.
+%% @end
+%%------------------------------------------------------------------------------
+-spec stall_watch() -> {'ok', {integer(), integer()}} | {'error', 'nil'}.
+stall_watch() ->
+    case whereis('callcenter_stall') of
+        'undefined' -> {'error', 'nil'};
+        _Watch ->
+            case persistent_term:get(?STALL_WATCH, 'undefined') of
+                'undefined' -> {'error', 'nil'};
+                Ref ->
+                    Last = atomics:get(Ref, 1),
+                    Stalled = atomics:get(Ref, 2),
+                    {'ok', {Last, Stalled}}
+            end
+    end.
+
+%%------------------------------------------------------------------------------
+%% @doc Run this process ahead of the node's others: the stall watch, which
+%% has to be among the first to run when the node moves again.
+%% @end
+%%------------------------------------------------------------------------------
+-spec high_priority() -> 'nil'.
+high_priority() ->
+    _ = process_flag('priority', 'high'),
+    'nil'.
+
+%%------------------------------------------------------------------------------
+%% @doc Whether a process ended because its supervisor shut it down.
+%% @end
+%%------------------------------------------------------------------------------
+-spec is_shutdown(any()) -> boolean().
+is_shutdown('shutdown') -> 'true';
+is_shutdown({'shutdown', _}) -> 'true';
+is_shutdown(_) -> 'false'.

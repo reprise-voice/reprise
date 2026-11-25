@@ -7,27 +7,17 @@
 //// Nothing here reads or changes the dispatcher's state: the account is all
 //// a payload needs of it.
 ////
-//// The four about one caller go out twice. Once on the exchange, under
+//// The four about one caller go out on the exchange, under
 //// `callcenter.call.<account>.<call>`, for whoever watches: webhooks,
-//// blackhole's sockets, the wallboard. And once to the callflow holding the
-//// caller, at the `Controller-Queue` their call carries, which is how the
-//// callflow action hears them: it binds nothing of its own.
+//// blackhole's sockets, the wallboard. The caller hears nothing of them:
+//// what they need, their actor is told directly (`callcenter/call/actor`),
+//// and the callflow action waits only for the caller to be handed back.
 
-import callcenter/member as member_message
 import callcenter/system
 import callcenter/types.{type Member}
 import gleam/list
 import gleam/option.{type Option, None, Some}
-import kazoo/amqp
 import kazoo/doc.{type Value}
-
-/// Where an event about one caller goes.
-pub type Target {
-  /// The `callcenter` exchange, under the call's routing key.
-  Exchange
-  /// The callflow holding the caller, through the queue it was routed on.
-  Caller(queue: String)
-}
 
 /// An event about one agent, on the agent's routing key.
 pub fn agent(
@@ -49,19 +39,19 @@ pub fn agent(
 }
 
 /// An event about one waiting caller: `member_offer`, `member_position`,
-/// `member_connected` or `member_result`, to each of `call_targets`.
+/// `member_connected` or `member_result`, on the exchange.
 ///
 /// Every one says which passage it is about, as `Joined-Timestamp`: a caller
 /// sent from a queue straight back into it is the same call in the same
-/// queue, and the action tells the passage it is running from the one it
-/// left by the join.
+/// queue, and whoever watches tells one passage from the next by the join.
 pub fn call(
   account_id: String,
   event_name: String,
   member: Member,
   fields: List(#(String, Value)),
 ) -> Nil {
-  let payload =
+  system.publish(
+    event_name,
     doc.merge(
       doc.object([
         #("Account-ID", doc.String(account_id)),
@@ -70,60 +60,12 @@ pub fn call(
         #("Joined-Timestamp", doc.Int(member.joined)),
       ]),
       doc.object(fields),
-    )
-  list.each(call_targets(member), fn(target) {
-    case target {
-      Exchange -> system.publish(event_name, payload)
-      Caller(queue) -> to_caller(queue, event_name, payload)
-    }
-  })
-}
-
-/// Where the events about one caller go: always the exchange, and the
-/// caller's own callflow when their call says where that is.
-///
-/// All four go to both. `member_position`, `member_connected` and
-/// `member_result` are what webhooks and the wallboard read. `member_offer`
-/// is read by nobody but the action, but blackhole relays everything under
-/// the call's key to a socket subscribed to it, and a node of the release
-/// before this one runs an action that hears the dispatcher only on the
-/// exchange: an offer it did not hear lets the no-agent clock run while the
-/// phones ring. One more publish per offer is what that costs.
-///
-/// A call with no `Controller-Queue` -- a stub, or a caller rebuilt from
-/// their record after a failover -- is not a callflow anybody can reach.
-pub fn call_targets(member: Member) -> List(Target) {
-  case member_message.controller_queue(member.call) {
-    Some(queue) -> [Exchange, Caller(queue)]
-    None -> [Exchange]
-  }
-}
-
-/// One event to the callflow holding the caller, through
-/// `kapi_callcenter:publish_caller_event/2`.
-///
-/// Not `mandatory`, and nothing is waited for: a callflow node that has gone
-/// took its queue with it, and the broker drops what nobody can route, which
-/// is right, since the caller went with the node. The publish is on a pooled
-/// channel like every other event here.
-fn to_caller(queue: String, event_name: String, payload: Value) -> Nil {
-  let _ =
-    amqp.publish_to(
-      target: queue,
-      module: system.category,
-      function: "caller_event",
-      payload: doc.merge(
-        amqp.default_headers(system.category, system.category, event_name),
-        payload,
-      ),
-    )
-  Nil
+    ),
+  )
 }
 
 /// `member_position`: where one caller stands in their queue, and whether
-/// an offer is in flight for them (`position.ringing_for`). `Offered` false
-/// is what ends an action's belief in a ring whose end its channel never
-/// showed: the dispatcher holds no offer for the caller any more.
+/// an offer is in flight for them (`position.ringing_for`).
 /// `Agents-Available` is left out when `available` is `None`: a count the
 /// dispatcher cannot vouch for is not said, rather than said as zero.
 pub fn position(

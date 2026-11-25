@@ -1,10 +1,15 @@
 //// The caller's own record, read back: the only thing about a caller that
 //// survives the node which was dispatching for them.
 
+import callcenter/recording
 import callcenter/records
 import callcenter/types.{CallerHangup, Completed, QueueDeleted, Transferred}
+import gleam/int
+import gleam/list
 import gleam/option.{None, Some}
+import gleam/result
 import kazoo/doc
+import kazoo/kazoo.{Datamgr, Invalid, Kazoo, NotFound, Unavailable}
 import support/cluster
 
 const joined_at = 63_800_000_000
@@ -179,6 +184,51 @@ pub fn an_end_is_written_test() {
   assert doc.get_string(closed, ["result"]) == Ok("completed")
 }
 
+/// A passage cancelled already keeps its second and its reason when it is
+/// cancelled again -- a node taking a caller over on their way out does,
+/// later, and on a branch that may not say which reason it was -- and its
+/// offers are settled all the same.
+pub fn a_cancel_is_not_moved_by_a_second_test() {
+  let first =
+    records.cancellation(
+      record([offer("ann", joined_at + 5, None)]),
+      types.Quarantined,
+      joined_at + 30,
+    )
+  let again = records.cancellation(first, QueueDeleted, joined_at + 90)
+  assert doc.get_int(again, ["cancelled"]) == Ok(joined_at + 30)
+  assert doc.get_string(again, ["cancel_reason"]) == Ok("quarantined")
+  assert again == first
+}
+
+/// A passage that ended -- an answered call -- is not cancelled after: a
+/// member redelivered after the end was written is a caller the queue has
+/// finished with.
+pub fn an_ended_passage_is_not_cancelled_test() {
+  let ended = records.closed(record([]), Completed, joined_at + 90)
+  let again = records.cancellation(ended, types.Hangup, joined_at + 140)
+  assert doc.get_int(again, ["cancelled"]) == Error(Nil)
+  assert again == ended
+}
+
+/// A record names how its caller is reached: the passage's handoff id, and
+/// the control queue their channel is commanded through when the call
+/// says it -- written as they join, and again as they join again.
+pub fn a_record_names_how_its_caller_is_reached_test() {
+  let member =
+    cluster.member("call-one", "support", 0, joined_at)
+    |> cluster.with_control_queue("pid://<0.4.0>/control")
+  let reached = records.reached_by(record([]), member)
+  assert doc.get_string(reached, ["handoff_id"]) == Ok(member.handoff_id)
+  assert doc.get_string(reached, ["control_queue"])
+    == Ok("pid://<0.4.0>/control")
+
+  let unreachable = cluster.member("call-one", "support", 0, joined_at)
+  let reached = records.reached_by(record([]), unreachable)
+  assert doc.get_string(reached, ["handoff_id"]) == Ok(unreachable.handoff_id)
+  assert doc.get_string(reached, ["control_queue"]) |> result.is_error
+}
+
 /// A caller the dispatcher took out of a deleted queue is a cancelled
 /// passage like any other, and says why: `queue_deleted`, which reads back
 /// as itself. The offers made for them keep their own outcomes.
@@ -197,6 +247,38 @@ pub fn a_deleted_queue_is_a_cancel_reason_of_its_own_test() {
   assert doc.get_string(kept, ["outcome"]) == Ok("cancelled")
 }
 
+/// A recorded call's record names its recording, as `media_mgr` names the
+/// `call_recording` document.
+pub fn a_recording_is_named_on_the_record_test() {
+  let named =
+    records.recording_named(
+      record([]),
+      recording.name("queue-one", "call-one", joined_at + 20),
+    )
+  assert doc.get_string(named, ["recording"])
+    == Ok("queue-queue-one-call-one-" <> int.to_string(joined_at + 20))
+}
+
+/// Every reason a caller leaves for is written as its own word, and reads
+/// back as itself.
+pub fn every_cancel_reason_reads_back_test() {
+  [
+    types.Hangup,
+    types.Timeout,
+    types.NoAgentTimeout,
+    types.ExitKey,
+    types.QueueFull,
+    types.Transfer,
+    types.QueueDeleted,
+    types.Quarantined,
+  ]
+  |> list.each(fn(reason) {
+    assert records.reason_from_string(records.reason_to_string(reason))
+      == reason
+  })
+  assert records.reason_to_string(types.Quarantined) == "quarantined"
+}
+
 /// Written twice it changes nothing. The dispatcher that connected a caller
 /// usually closes their record, and the sweep closes the ones whose
 /// dispatcher died first; a second end would move the second the call
@@ -204,6 +286,64 @@ pub fn a_deleted_queue_is_a_cancel_reason_of_its_own_test() {
 pub fn an_end_is_written_only_once_test() {
   let closed = records.closed(record([]), Completed, joined_at + 90)
   assert records.closed(closed, CallerHangup, joined_at + 200) == closed
+}
+
+// --- Every offer has an outcome ---------------------------------------------
+
+fn outcomes(document: doc.Value) -> List(#(String, String, String)) {
+  let assert Ok(offers) = doc.get_list(document, ["offered_to"])
+  list.map(offers, fn(offer) {
+    let field = fn(name) {
+      case doc.get_string(offer, [name]) {
+        Ok(value) -> value
+        Error(Nil) -> "-"
+      }
+    }
+    #(field("agent_id"), field("outcome"), field("reason"))
+  })
+}
+
+/// An offer that failed is `failed`, and says why; the agent's earlier
+/// offers keep theirs.
+pub fn a_failed_offer_says_why_test() {
+  let document =
+    record([
+      offer("ann", joined_at + 5, Some("no_answer")),
+      offer("ann", joined_at + 20, None),
+      offer("bob", joined_at + 20, None),
+    ])
+    |> records.offer_closed("ann", "failed", Some("no_endpoints"))
+  assert outcomes(document)
+    == [
+      #("ann", "no_answer", "-"),
+      #("ann", "failed", "no_endpoints"),
+      #("bob", "-", "-"),
+    ]
+  // An agent with no offer open is nothing to close.
+  assert records.offer_closed(document, "cat", "failed", Some("x")) == document
+}
+
+/// A passage closes with no offer open: whatever was still ringing when it
+/// ended -- a ring whose last word nobody heard -- is `cancelled`, and the
+/// outcomes written stand.
+pub fn a_closed_passage_has_no_offer_open_test() {
+  let open =
+    record([
+      offer("ann", joined_at + 5, Some("failed")),
+      offer("ann", joined_at + 20, Some("answered")),
+      offer("bob", joined_at + 20, None),
+    ])
+  let settled = [
+    #("ann", "failed", "-"),
+    #("ann", "answered", "-"),
+    #("bob", "cancelled", "-"),
+  ]
+  assert outcomes(records.closed(open, Completed, joined_at + 60)) == settled
+  assert outcomes(records.cancellation(open, types.Hangup, joined_at + 60))
+    == settled
+  // A record already closed is left alone, as `closed` leaves it.
+  let ended = doc.set(open, ["ended"], doc.Int(joined_at + 30))
+  assert records.closed(ended, Completed, joined_at + 60) == ended
 }
 
 // --- Reading it off the datastore ------------------------------------------
@@ -219,7 +359,7 @@ pub fn a_record_is_read_from_its_month_test() {
   )
   let member = cluster.member("call-one", "support", 0, cluster.start_of_time)
 
-  let assert Some(passage) = records.read(c.kz, member)
+  let assert Ok(Some(passage)) = records.read(c.kz, member)
   assert passage.offer
     == Some(records.Offered(
       agents: ["ann"],
@@ -233,7 +373,41 @@ pub fn a_record_is_read_from_its_month_test() {
 pub fn no_record_is_no_passage_test() {
   let c = cluster.new([], [])
   let member = cluster.member("call-one", "support", 0, cluster.start_of_time)
-  assert records.read(c.kz, member) == None
+  assert records.read(c.kz, member) == Ok(None)
+}
+
+/// The datastore saying the document, or the month's database, is not there
+/// is no record; anything else it says is not a record read, and a takeover
+/// must not take it for none (`call/recovery`). The call id document an
+/// earlier release wrote is looked for too, so a datastore that answers for
+/// the passage's own id and not for that one has not been read either.
+pub fn a_record_not_read_is_not_no_record_test() {
+  let c = cluster.new([], [])
+  let member = cluster.member("call-one", "support", 0, cluster.start_of_time)
+  let answering = fn(own, legacy) {
+    Kazoo(
+      ..c.kz,
+      datamgr: Datamgr(..c.kz.datamgr, open_doc: fn(_db, id) {
+        case id == member.call_id {
+          True -> Error(legacy)
+          False -> Error(own)
+        }
+      }),
+    )
+  }
+  let cases = [
+    #(NotFound, NotFound, Ok(None)),
+    #(Invalid("db_not_found"), Invalid("db_not_found"), Ok(None)),
+    #(NotFound, Invalid("db_not_found"), Ok(None)),
+    #(Unavailable, NotFound, Error(Unavailable)),
+    #(Invalid("timeout"), NotFound, Error(Invalid("timeout"))),
+    #(Invalid("econnrefused"), NotFound, Error(Invalid("econnrefused"))),
+    #(NotFound, Invalid("timeout"), Error(Invalid("timeout"))),
+  ]
+  list.each(cases, fn(case_) {
+    let #(own, legacy, read) = case_
+    assert records.read(answering(own, legacy), member) == read
+  })
 }
 
 /// A transfer is its own result on the wire, and reads back as itself.

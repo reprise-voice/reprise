@@ -1,7 +1,8 @@
 //// A dispatcher with no broker, no switch and no clock of its own.
 ////
 //// Everything a dispatcher talks to is a value it was given: the datastore
-//// is `kazoo/testing/fake`, the clock is that fake's, the offer process is
+//// is `kazoo/testing/fake`, the clock is that fake's, the callers' actors
+//// are `test/support/fake_calls` and the offers they ring
 //// `test/support/fake_offer`, and settling a caller is a function that
 //// counts instead of acking a message that never came off a broker. What is
 //// left is the actor itself, which is the part worth testing.
@@ -15,6 +16,7 @@ import callcenter/queue_doc
 import callcenter/records
 import callcenter/types.{type Member, Member}
 import gleam/erlang/process.{type Subject}
+import gleam/int
 import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/otp/actor
@@ -26,8 +28,8 @@ import kazoo/modb
 import kazoo/testing/fake
 import kazoo/util
 import support/fake_activity.{type Fake as Activities}
+import support/fake_calls.{type Fake as Calls}
 import support/fake_offer.{type Fake as Offers}
-import support/fake_watch.{type Fake as Watches}
 
 pub const account_id = "4b1f0c2d7e8a9b0c1d2e3f4051627384"
 
@@ -40,23 +42,15 @@ pub type Cluster {
     fake: fake.Fake,
     kz: Kazoo,
     offers: Offers,
-    watches: Watches,
+    /// What the dispatcher told the callers' actors.
+    calls: Calls,
     dispatcher: Subject(dispatcher.Message),
     settled: Subject(Settled),
     lamps: Subject(Lit),
     /// What the agents' phones are doing, as the dispatcher reads it.
     activity: Activities,
-    /// Every caller whose ring the dispatcher called off, in order.
-    called_off: Subject(Settled),
-    /// The same, as the `Control-Queue` each call-off was sent to.
-    called_off_through: Subject(Settled),
     /// Every delivery settled, as the call id and which delivery it was.
     deliveries: Subject(Settled),
-    /// Every offer process told its ring was called off, as its call id.
-    stopped: Subject(Settled),
-    /// The same, as the `Control-Queue` of the member each was handed:
-    /// where an unbridge of the offer's own goes.
-    stopped_through: Subject(Settled),
   )
 }
 
@@ -192,6 +186,25 @@ pub fn new_with(
   users: List(#(String, Value)),
   through: fn(Kazoo) -> Kazoo,
 ) -> Cluster {
+  build(queues, users, through, fn() { True })
+}
+
+/// The same, the dispatcher asking `fresh` whether it may still act for
+/// its shard (`callcenter/stall`).
+pub fn new_fenced(
+  queues: List(#(String, Value)),
+  users: List(#(String, Value)),
+  fresh: fn() -> Bool,
+) -> Cluster {
+  build(queues, users, fn(kz) { kz }, fresh)
+}
+
+fn build(
+  queues: List(#(String, Value)),
+  users: List(#(String, Value)),
+  through: fn(Kazoo) -> Kazoo,
+  fresh: fn() -> Bool,
+) -> Cluster {
   swap([])
   let fake = fake.new_with_views(views())
   fake.put_account(fake, account_id, "queues.example.com", [])
@@ -225,16 +238,11 @@ pub fn new_with(
   activity.forget(account_id)
   let _ = activity.of(account_id, "")
   let offers = fake_offer.new()
-  let watches = fake_watch.new()
+  let calls = fake_calls.new()
   let settled = settlements()
   let lamps = lamp_recorder()
   let activities = fake_activity.new()
-  let called_off = settlements()
-  let called_off_through = settlements()
   let deliveries = settlements()
-  let stopped = settlements()
-  let stopped_through = settlements()
-  let offers_by_pid = offers
   let assert Ok(started) =
     dispatcher.start(
       dispatcher_config.Config(
@@ -245,7 +253,6 @@ pub fn new_with(
         default_no_answer_status: "on_break",
         queue_refresh_s: queue_doc.default_refresh_s,
         now: kz.now,
-        start_watch: fake_watch.start_watch(watches),
         settle: fn(member: Member) {
           process.send(settled, Settle(member.call_id))
           process.send(deliveries, Settle(delivery_name(member)))
@@ -254,32 +261,8 @@ pub fn new_with(
           process.send(lamps, Light(agent_id, state))
         },
         activity: fake_activity.reader(activities),
-        call_off: fn(member: Member) {
-          process.send(called_off, Settle(member.call_id))
-          process.send(
-            called_off_through,
-            Settle(
-              doc.get_string(member.call, ["Control-Queue"])
-              |> result.unwrap("none"),
-            ),
-          )
-        },
-        stop_offer: fn(pid, unbridged, member: Member) {
-          let call_id =
-            fake_offer.call_of(offers_by_pid, pid) |> result.unwrap("unknown")
-          let by = case unbridged {
-            True -> " unbridged"
-            False -> " to unbridge"
-          }
-          process.send(stopped, Settle(call_id <> by))
-          process.send(
-            stopped_through,
-            Settle(
-              doc.get_string(member.call, ["Control-Queue"])
-              |> result.unwrap("none"),
-            ),
-          )
-        },
+        calls: fake_calls.calls(calls),
+        fresh: fresh,
       ),
       start_offer: fake_offer.start_offer(offers),
     )
@@ -288,29 +271,29 @@ pub fn new_with(
     fake: fake,
     kz: kz,
     offers: offers,
-    watches: watches,
+    calls: calls,
     dispatcher: started.data,
     settled: settled,
     lamps: lamps,
     activity: activities,
-    called_off: called_off,
-    called_off_through: called_off_through,
     deliveries: deliveries,
-    stopped: stopped,
-    stopped_through: stopped_through,
   )
 }
 
 /// Every caller whose ring the dispatcher called off, in order.
 pub fn called_off(cluster: Cluster) -> List(String) {
-  process.call(cluster.called_off, 5000, Settlements)
+  fake_calls.called_off(cluster.calls)
 }
 
-/// The `Control-Queue` of every call-off the dispatcher sent, in order:
-/// the queue of the member the command was built from, `none` for a member
-/// whose call names none.
-pub fn called_off_through(cluster: Cluster) -> List(String) {
-  process.call(cluster.called_off_through, 5000, Settlements)
+/// Every caller the dispatcher told their actor had joined, in order, and
+/// whether they were resumed.
+pub fn joined(cluster: Cluster) -> List(#(String, Bool)) {
+  fake_calls.joined(cluster.calls)
+}
+
+/// Every caller taken out of a deleted queue, in order.
+pub fn queue_gone(cluster: Cluster) -> List(String) {
+  fake_calls.queue_gone(cluster.calls)
 }
 
 /// A member whose call names the control queue of the callflow holding it,
@@ -320,20 +303,6 @@ pub fn with_control_queue(member: Member, control_queue: String) -> Member {
     ..member,
     call: doc.set(member.call, ["Control-Queue"], doc.String(control_queue)),
   )
-}
-
-/// Every caller whose offer's process the dispatcher told the ring was
-/// called off, in order: `<call> unbridged` when the dispatcher unbridges
-/// it, `<call> to unbridge` when the offer is to unbridge it itself.
-pub fn stopped(cluster: Cluster) -> List(String) {
-  process.call(cluster.stopped, 5000, Settlements)
-}
-
-/// The `Control-Queue` of the member every offer process told its ring was
-/// called off was handed, in order: `none` for a member whose call names
-/// none.
-pub fn stopped_through(cluster: Cluster) -> List(String) {
-  process.call(cluster.stopped_through, 5000, Settlements)
 }
 
 /// Replace a queue document, as a supervisor editing the queue does. The
@@ -575,6 +544,70 @@ pub fn stored_record(
   |> result.replace_error(Nil)
 }
 
+/// Run `body` with the node's record writer writing to this cluster's
+/// datastore, and wait for everything it asked to be written.
+///
+/// A dispatcher's record writes go to the writer registered on the node,
+/// and are dropped when none is (`records.send`): most of this suite runs
+/// with none, and reads what it put in the datastore itself. A writer
+/// something earlier in the run left registered is set aside for as long
+/// as `body` runs, and given its name back once this one has gone.
+pub fn writing_records(cluster: Cluster, body: fn() -> a) -> a {
+  let name = records.name()
+  let set_aside = process.named(name)
+  case set_aside {
+    Ok(_pid) -> {
+      let _ = process.unregister(name)
+      Nil
+    }
+    Error(Nil) -> Nil
+  }
+  let assert Ok(writer) =
+    records.start_with(Some(name), store(cluster), "t-", fn() { 0 })
+  let result = body()
+  records.flush()
+  let monitor = process.monitor(writer.pid)
+  let _ = process.call(writer.data, 1000, records.Stop)
+  let assert Ok(_down) =
+    process.new_selector()
+    |> process.select_specific_monitor(monitor, fn(down) { down })
+    |> process.selector_receive(1000)
+  case set_aside {
+    Ok(pid) -> {
+      let _ = process.register(pid, name)
+      Nil
+    }
+    Error(Nil) -> Nil
+  }
+  result
+}
+
+/// The records writer's datastore, over this cluster's: a node writes a
+/// caller's document through `modb`, which is the node's and not the fake.
+fn store(cluster: Cluster) -> records.Store {
+  let db = fn(where) {
+    case where {
+      records.Account(account) -> kazoo.account_db(account)
+      records.Month(account, at) -> modb.db_name(account, at: Some(at))
+    }
+  }
+  records.Store(
+    read: fn(where, doc_id) { cluster.kz.datamgr.open_doc(db(where), doc_id) },
+    save: fn(where, _doc_id, kind, document) {
+      let account = case where {
+        records.Account(account) | records.Month(account, _) -> account
+      }
+      cluster.kz.datamgr.save_doc(
+        db(where),
+        document
+          |> doc.set(["pvt_type"], doc.String(kind))
+          |> doc.set(["pvt_account_id"], doc.String(account)),
+      )
+      |> result.replace(Nil)
+    },
+  )
+}
+
 // --- Talking to it ---------------------------------------------------------
 
 /// A caller enters a queue.
@@ -615,6 +648,10 @@ pub fn redelivered(
     Member(..arrival, delivery: again()),
     _,
   ))
+  // The dispatcher answers the arrival before it takes the caller in, and
+  // the actor's word on a caller handed over is sent as it does: the first
+  // sync can overtake it, and the second cannot.
+  sync(cluster)
   sync(cluster)
 }
 
@@ -641,6 +678,8 @@ pub fn member(
     callflow_node: "",
     caller_id_name: Some("A Caller"),
     caller_id_number: Some("5551234"),
+    handoff_id: call_id <> "-" <> int.to_string(joined),
+    branches: doc.object([]),
     delivery: delivery(),
   )
 }
@@ -737,36 +776,73 @@ pub fn reply(
   sync(cluster)
 }
 
-/// Answer the watch on one caller, as the takeover process would.
+/// Answer the call a caller's actor is watching -- one it adopted, or one it
+/// found going on when the caller was handed over -- as that actor would.
 pub fn watch_reply(
   cluster: Cluster,
   call_id: String,
   answer: types.OfferReply,
 ) -> Nil {
-  case
-    list.filter(fake_watch.requests(cluster.watches), fn(request) {
-      request.member.call_id == call_id
+  let presented =
+    list.filter(fake_calls.presented(cluster.calls), fn(presented) {
+      presented.call_id == call_id && presented.presence != types.PresentWaiting
     })
     |> list.last
-  {
-    Ok(request) -> fake_watch.reply(request, answer)
-    Error(_) -> Nil
+  let adopted =
+    list.filter(fake_calls.adoptions(cluster.calls), fn(adoption) {
+      adoption.member.call_id == call_id
+    })
+    |> list.last
+  case presented, adopted {
+    Ok(presented), _ -> fake_calls.reply_presented(presented, answer)
+    Error(Nil), Ok(adoption) -> fake_calls.reply(adoption, answer)
+    Error(Nil), Error(Nil) -> Nil
   }
   sync(cluster)
 }
 
-/// The agents the watch on a caller is watching, or nothing if there is no
-/// watch on them.
+/// The agent a caller's call is being watched with: one adopted, or one
+/// their actor found them talking to when they were handed over.
 pub fn watching(cluster: Cluster, call_id: String) -> List(String) {
-  case
-    list.filter(fake_watch.requests(cluster.watches), fn(request) {
-      request.member.call_id == call_id
+  let presented =
+    list.filter_map(fake_calls.presented(cluster.calls), fn(presented) {
+      case presented.presence {
+        types.PresentConnected(agent_id: agent_id, ..)
+          if presented.call_id == call_id
+        -> Ok(agent_id)
+        _ -> Error(Nil)
+      }
     })
     |> list.last
-  {
-    Ok(request) -> request.agents
-    Error(_) -> []
+  let adopted =
+    list.filter(fake_calls.adoptions(cluster.calls), fn(adoption) {
+      adoption.member.call_id == call_id
+    })
+    |> list.last
+  case presented, adopted {
+    Ok(agent_id), _ -> [agent_id]
+    Error(Nil), Ok(adoption) -> [adoption.agent_id]
+    Error(Nil), Error(Nil) -> []
   }
+}
+
+/// What the actor of a caller handed over will say of them.
+pub fn presents(
+  cluster: Cluster,
+  call_id: String,
+  presence: types.Presence,
+) -> Nil {
+  fake_calls.will_present(cluster.calls, call_id, presence)
+}
+
+/// Answer the offer a caller's actor said was going on for them, as that
+/// actor would.
+pub fn present_reply(
+  cluster: Cluster,
+  call_id: String,
+  answer: types.OfferReply,
+) -> Nil {
+  watch_reply(cluster, call_id, answer)
 }
 
 /// Make the dispatcher look again, as an agent state change does.
@@ -831,6 +907,18 @@ pub fn alive(cluster: Cluster) -> Bool {
 
 /// Send a message without waiting for the dispatcher to answer, for the one
 /// case where it is about to stop.
+/// The caller left of their own accord -- hung up, pressed an exit key,
+/// ran out of time -- as their actor tells it through the shard, which has
+/// settled them already.
+pub fn left(
+  cluster: Cluster,
+  call_id: String,
+  reason: types.CancelReason,
+) -> Nil {
+  process.send(cluster.dispatcher, dispatcher.Left(call_id, reason))
+  sync(cluster)
+}
+
 pub fn tell(cluster: Cluster, message: dispatcher.Message) -> Nil {
   process.send(cluster.dispatcher, message)
 }

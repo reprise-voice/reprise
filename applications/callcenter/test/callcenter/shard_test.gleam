@@ -13,6 +13,7 @@ import callcenter/dispatcher
 import callcenter/member
 import callcenter/shard
 import callcenter/shards
+import callcenter/stall
 import callcenter/types.{type Member}
 import cf_callcenter
 import gleam/dict.{type Dict}
@@ -27,6 +28,8 @@ import gleam/result
 import gleam/string
 import kazoo/doc
 import kazoo/listener.{type Delivery}
+import support/cluster
+import support/flag
 
 const account_id = "4b1f0c2d7e8a9b0c1d2e3f4051627384"
 
@@ -70,8 +73,7 @@ type OnArrival {
   PassCrashes
   /// Never start at all.
   NeverStarts
-  /// Hold the caller, and say an agent is being rung for every caller it
-  /// holds.
+  /// Hold the caller, as a dispatcher ringing an agent for them does.
   Rings
 }
 
@@ -162,12 +164,11 @@ fn fake_dispatcher(fake: Fake) -> Result(Subject(dispatcher.Message), String) {
           _, _ -> actor.continue(state)
         }
       }
-      dispatcher.Offers(done) -> {
-        process.send(done, case state.on_arrival {
-          Rings -> dict.size(state.members)
-          _ -> 0
-        })
-        actor.continue(state)
+      dispatcher.Departing(call_id, _reason) -> {
+        state.seen("departing:" <> call_id)
+        actor.continue(
+          Fake(..state, members: dict.delete(state.members, call_id)),
+        )
       }
       dispatcher.Stop(done) ->
         case state.on_stop {
@@ -264,6 +265,22 @@ fn take_poisoned(
   count: option.Option(Int),
   poison: List(String),
 ) -> Harness {
+  take_with(shard_id, arrivals, on_left, on_stop, count, poison, fn(_since) {
+    True
+  })
+}
+
+/// The same, the shard's processes asking `fresh` whether they may still act
+/// for it (`callcenter/stall`).
+fn take_with(
+  shard_id: Int,
+  arrivals: List(OnArrival),
+  on_left: OnLeft,
+  on_stop: OnStop,
+  count: option.Option(Int),
+  poison: List(String),
+  fresh: fn(Int) -> Bool,
+) -> Harness {
   let acks = process.new_subject()
   let cancel_acks = process.new_subject()
   let starts = process.new_subject()
@@ -273,6 +290,7 @@ fn take_poisoned(
   let hooks =
     shard.Hooks(
       start_offer: shard.no_offers,
+      calls: shard.no_calls,
       start_dispatcher: fn(account_id, settle) {
         process.send(starts, account_id)
         case process.call(arrivals, 1000, Next) {
@@ -298,6 +316,7 @@ fn take_poisoned(
         }
       },
       count: count,
+      fresh: fresh,
     )
   let assert Ok(tree) = shard.take_using(shard_id, hooks)
   // The tree is linked to whoever took it, which on a node is the owner,
@@ -359,6 +378,8 @@ fn arrive_joined(
         caller_id_name: None,
         caller_id_number: None,
         shards: None,
+        handoff_id: "handoff-1",
+        branches: doc.object([]),
       ),
     )
   arrive_message(harness, message, delivery)
@@ -561,6 +582,7 @@ pub fn a_shard_is_not_held_until_its_listener_consumes_test() {
   let hooks =
     shard.Hooks(
       start_offer: shard.no_offers,
+      calls: shard.no_calls,
       start_dispatcher: fn(_account_id, _settle) {
         process.send(asked, Nil)
         Error("not in this test")
@@ -576,6 +598,7 @@ pub fn a_shard_is_not_held_until_its_listener_consumes_test() {
       },
       settle: fn(_delivery) { process.send(acks, Nil) },
       count: None,
+      fresh: fn(_since) { True },
     )
   let assert Ok(tree) = shard.take_using(52, hooks)
   process.unlink(tree)
@@ -604,6 +627,88 @@ pub fn a_shard_is_not_held_until_its_listener_consumes_test() {
 
   shard.release(52)
   assert shard.tree(52) == Error(Nil)
+}
+
+/// A shard the node stood still since it was taken may be another node's by
+/// then (`callcenter/stall`). Told of the stall, or asked anything at all,
+/// its actor answers nothing, settles nothing -- the caller it holds goes
+/// back to the broker with the listener's channel -- and ends, and the tree
+/// is started again, fresh: its listener takes the shard back if it is still
+/// this node's. A shard actor started after the stall goes on as it is.
+pub fn a_shard_fenced_by_a_stall_is_taken_again_test() {
+  let stalled = flag.new(None)
+  let h =
+    take_with(84, [], Ignores, Stops, None, [], fn(since) {
+      case flag.get(stalled) {
+        None -> True
+        Some(at) -> since > at
+      }
+    })
+  arrive(h, "call-one")
+  assert next(h.seen, 1000) == account_id <> ":handed:call-one"
+  let first = actor_pid(h)
+
+  // Told of the stall.
+  process.sleep(2)
+  flag.set(stalled, Some(stall.now_ms()))
+  process.sleep(2)
+  shard.stood_still(84)
+  process.sleep(100)
+  let second = actor_pid(h)
+  assert second != first
+  assert shard.tree(84) == Ok(h.tree)
+  assert shard.holds(84)
+  // Told again: started after the stall, it goes on.
+  shard.stood_still(84)
+  process.sleep(50)
+  assert actor_pid(h) == second
+
+  // A stall nobody told it of: the first thing it is asked ends it.
+  process.sleep(2)
+  flag.set(stalled, Some(stall.now_ms()))
+  process.sleep(2)
+  assert shard.held(84) == None
+  process.sleep(100)
+  assert actor_pid(h) != second
+  assert shard.holds(84)
+
+  // Nothing was settled on the way: the caller was never let go of here.
+  assert drain(h.acks) == []
+  shard.release(84)
+}
+
+/// A caller leaving on a branch their actor hands them back on: their
+/// dispatcher is told, but their member is kept, and settled only when the
+/// actor says they are handed back (`Settle`, naming their delivery). A
+/// word naming another delivery -- a later passage of the call -- touches
+/// nothing, and a dispatcher started again is not handed a caller on their
+/// way out: they are not the dispatcher's any more.
+pub fn a_departing_caller_is_held_until_handed_back_test() {
+  let h = take(86, [], Ignores, Stops)
+  arrive(h, "call-one")
+  assert next(h.seen, 1000) == account_id <> ":handed:call-one"
+  let leaving =
+    types.Member(
+      ..cluster.member("call-one", queue_id, 0, 63_900_000_000),
+      account_id: account_id,
+      delivery: delivery(),
+    )
+  process.send(h.to, shard.CallerDeparting(leaving, types.ExitKey))
+  assert next(h.seen, 1000) == account_id <> ":departing:call-one"
+  assert drain(h.acks) == []
+  assert holding(h) == ["call-one"]
+
+  process.kill(dispatcher_pid(h))
+  process.sleep(100)
+  assert drain(h.seen) == []
+
+  process.send(h.to, shard.Settle(account_id, "call-one", another_delivery()))
+  assert drain(h.acks) == []
+  assert holding(h) == ["call-one"]
+  process.send(h.to, shard.Settle(account_id, "call-one", delivery()))
+  assert list.length(drain(h.acks)) == 1
+  assert holding(h) == []
+  finish(h)
 }
 
 /// A dispatcher that settles the caller it was told had left asks the shard,
@@ -1112,6 +1217,7 @@ pub fn a_listener_that_ends_ends_the_tree_test() {
   let hooks =
     shard.Hooks(
       start_offer: shard.no_offers,
+      calls: shard.no_calls,
       start_dispatcher: fn(_account_id, _settle) { Error("not in this test") },
       consumer: fn(_shard, _to) {
         Some(
@@ -1125,6 +1231,7 @@ pub fn a_listener_that_ends_ends_the_tree_test() {
       },
       settle: fn(_delivery) { Nil },
       count: None,
+      fresh: fn(_since) { True },
     )
   let assert Ok(tree) = shard.take_using(54, hooks)
   process.unlink(tree)
@@ -1564,19 +1671,15 @@ pub fn a_shard_with_a_caller_waiting_is_given_up_test() {
   assert drain(h.acks) == []
 }
 
-/// An agent being rung is the one thing that keeps a shard where it is: the
-/// node taking it could only watch the ring.
-pub fn a_shard_with_an_agent_ringing_is_not_given_up_test() {
+/// An agent being rung no longer keeps a shard where it is: the node taking
+/// it finds the ring on the switch and takes it on, so the shard goes with
+/// the caller's member unsettled, as a waiting caller's does.
+pub fn a_shard_with_an_agent_ringing_is_given_up_test() {
   let h = take(83, [Rings], Settles, Stops)
   arrive(h, "call-one")
-  assert shard.give_up(83) == False
-  assert shard.holds(83) == True
-  assert holding(h) == ["call-one"]
-  assert drain(h.acks) == []
-
-  assert cancel(h, "call-one") == True
   assert shard.give_up(83) == True
   assert process.is_alive(h.tree) == False
+  assert drain(h.acks) == []
 }
 
 fn member_call(account_id: String, call_id: String) -> doc.Value {
@@ -1596,6 +1699,8 @@ fn member_call(account_id: String, call_id: String) -> doc.Value {
       caller_id_name: None,
       caller_id_number: None,
       shards: None,
+      handoff_id: "handoff-1",
+      branches: doc.object([]),
     ),
   )
 }
@@ -1610,4 +1715,69 @@ fn gone_within(pid: Pid, attempts: Int) -> Bool {
       gone_within(pid, attempts - 1)
     }
   }
+}
+
+// --- A caller's actor saying they left -------------------------------------
+
+/// A caller's actor says the caller left a queue: the shard settles their
+/// member as their cancel did, and tells their dispatcher, once. A word for
+/// a passage earlier than the one held, on that passage's own delivery,
+/// settles nothing.
+pub fn a_caller_who_left_is_settled_by_the_shard_test() {
+  let h = take(88, [], Settles, Stops)
+  arrive(h, "call-one")
+  let _ = drain(h.starts)
+
+  let left =
+    types.Member(
+      ..cluster.member("call-one", queue_id, 0, 63_900_000_000),
+      account_id: account_id,
+    )
+  process.send(h.to, shard.CallerLeft(left, types.ExitKey))
+  assert list.length(drain(h.acks)) == 1
+  assert drain(h.lefts) == [#(account_id, "call-one")]
+  assert holding(h) == []
+
+  // The member of a later passage is not settled by a word about an
+  // earlier one.
+  arrive_joined(h, account_id, "call-two", delivery(), 63_900_000_100)
+  let earlier =
+    types.Member(
+      ..cluster.member("call-two", queue_id, 0, 63_900_000_000),
+      account_id: account_id,
+      delivery: another_delivery(),
+    )
+  process.send(h.to, shard.CallerLeft(earlier, types.Timeout))
+  assert drain(h.acks) == []
+  assert holding(h) == ["call-two"]
+  finish(h)
+}
+
+/// A caller who entered the same queue again -- resumed on another callflow
+/// node -- keeps the older join in their dispatcher and their actor
+/// (`arrival.kept_place`), and takes the new delivery; the member held here
+/// joined at the newer. When they leave, the word naming that delivery is
+/// about the member held, however old the join it names: settled once, and
+/// their dispatcher told. Judged by its join, it was an earlier passage, and
+/// the caller stayed counted as waiting until the shard went.
+pub fn a_caller_who_left_under_the_held_delivery_is_settled_test() {
+  let h = take(89, [], Ignores, Stops)
+  arrive_joined(h, account_id, "call-one", delivery(), 63_900_000_100)
+  let _ = drain(h.starts)
+
+  let resumed =
+    types.Member(
+      ..cluster.member("call-one", queue_id, 0, 63_900_000_000),
+      account_id: account_id,
+      delivery: delivery(),
+    )
+  process.send(h.to, shard.CallerLeft(resumed, types.Hangup))
+  assert list.length(drain(h.acks)) == 1
+  assert drain(h.lefts) == [#(account_id, "call-one")]
+  assert holding(h) == []
+
+  // Once: the same word again settles nothing.
+  process.send(h.to, shard.CallerLeft(resumed, types.Hangup))
+  assert drain(h.acks) == []
+  finish(h)
 }

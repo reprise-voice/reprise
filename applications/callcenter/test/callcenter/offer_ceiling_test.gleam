@@ -42,10 +42,11 @@ fn strict() -> cluster.Cluster {
   c
 }
 
-/// The offer's process crashes with its ring out, past its ceiling, and the
+/// The caller's actor crashes with its ring out, past its ceiling, and the
 /// tick is handled before the monitor's word for it. The tick closes it as
-/// the monitor would: the ring is called off, once, and Ann is not charged
-/// a miss for it. The monitor's word, heard after, finds nothing to do.
+/// the monitor would: a failure, and Ann is not charged a miss for it. There
+/// is no actor left to call the ring off. The monitor's word, heard after,
+/// finds nothing to do.
 pub fn a_crashed_offer_past_its_ceiling_is_a_crash_and_not_a_miss_test() {
   let c = strict()
   cluster.arrive(c, "call-one", "support", 0, 0)
@@ -61,7 +62,7 @@ pub fn a_crashed_offer_past_its_ceiling_is_a_crash_and_not_a_miss_test() {
   let _ = resume(pid)
   cluster.sync(c)
 
-  assert cluster.called_off(c) == ["call-one"]
+  assert cluster.called_off(c) == []
   assert cluster.availability_becomes(c, "ann", "logged_out") == "available"
   assert cluster.waiting(c) == ["call-one"]
   assert cluster.alive(c)

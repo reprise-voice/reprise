@@ -227,6 +227,7 @@
                             ,hidden = 'false' :: boolean() | '_'
                             ,exchanges = #{} :: map() | '_'
                             ,bindings = #{} :: map() | '_'
+                            ,zone = 'local' :: atom() | '_' % the zone it registers under in kz_amqp_connections
                             }).
 -type kz_amqp_connection() :: #kz_amqp_connection{}.
 

@@ -223,17 +223,16 @@ publishers_test_() ->
                 sent(fun() -> kapi_callcenter:publish_pickup_resp(<<"requester-q">>, full(<<"pickup_resp">>)) end),
                 ?assertEqual([<<"requester-q">>], platform_fakes:targeted())
         end}
-      ,{"the four caller events reach the callflow at its controller queue, and nothing else does"
+      ,{"a caller is handed back at the callflow's controller queue, and the callflow answers at Reply-To"
        ,fun() ->
-                [begin
-                     sent(fun() -> kapi_callcenter:publish_caller_event(<<"pid://<0.1.0>/cf">>, full(Name)) end),
-                     ?assertEqual([<<"pid://<0.1.0>/cf">>], platform_fakes:targeted())
-                 end
-                 || Name <- [<<"member_offer">>, <<"member_position">>, <<"member_connected">>, <<"member_result">>]
-                ],
+                sent(fun() -> kapi_callcenter:publish_member_continue(<<"pid://<0.1.0>/cf">>, full(<<"member_continue">>)) end),
+                ?assertEqual([<<"pid://<0.1.0>/cf">>], platform_fakes:targeted()),
+                sent(fun() -> kapi_callcenter:publish_member_continuing(<<"pid://<0.2.0>/cc">>, full(<<"member_continuing">>)) end),
+                ?assertEqual([<<"pid://<0.2.0>/cc">>], platform_fakes:targeted()),
                 platform_fakes:clear(),
-                ?assertError({'not_a_caller_event', <<"agent_offer">>}
-                            ,kapi_callcenter:publish_caller_event(<<"q">>, full(<<"agent_offer">>))
+                NoBranch = lists:keydelete(<<"Branch">>, 1, full(<<"member_continue">>)),
+                ?assertError({'badmatch', {'error', _}}
+                            ,kapi_callcenter:publish_member_continue(<<"q">>, NoBranch)
                             ),
                 ?assertEqual([], platform_fakes:calls('kz_amqp_util'))
         end}

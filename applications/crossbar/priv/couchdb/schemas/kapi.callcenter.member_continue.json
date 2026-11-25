@@ -1,0 +1,51 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.member_continue",
+    "description": "A caller the queue is done with, handed back to their callflow on a branch",
+    "properties": {
+        "Account-ID": {
+            "description": "Account the event belongs to",
+            "type": "string"
+        },
+        "Branch": {
+            "description": "The flow the callflow goes on into: _, exit_key, timeout, no_agents or no_agent_timeout",
+            "type": "string"
+        },
+        "Call-ID": {
+            "description": "Call-ID of the caller",
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "member_continue"
+            ],
+            "type": "string"
+        },
+        "Handoff-ID": {
+            "description": "The passage's own, from its member_call",
+            "type": "string"
+        },
+        "Queue-ID": {
+            "description": "Queue the caller leaves",
+            "type": "string"
+        },
+        "Reply-To": {
+            "description": "Where the callflow answers member_continuing",
+            "type": "string"
+        }
+    },
+    "required": [
+        "Account-ID",
+        "Queue-ID",
+        "Call-ID",
+        "Handoff-ID",
+        "Branch"
+    ],
+    "type": "object"
+}

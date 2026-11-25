@@ -9,16 +9,20 @@
 //// which shards the broker has handed them, and that changes on its own.
 
 import callcenter/activity
+import callcenter/call/calls
+import callcenter/call/publishers
+import callcenter/call/replies
+import callcenter/call/snapshots
 import callcenter/closed
 import callcenter/dnd
 import callcenter/lamp_probe
-import callcenter/offer
 import callcenter/pickup
 import callcenter/placement
 import callcenter/reconcile
 import callcenter/records
 import callcenter/shard
 import callcenter/shards
+import callcenter/stall
 import callcenter/status
 import callcenter/system
 import callcenter/types.{
@@ -62,8 +66,17 @@ pub fn main() -> Nil {
 ///   an agent's lamp that Kamailio has no state for, off a queue every node
 ///   shares;
 /// - the reconciler, the sweep behind the events;
+/// - the stall watch (`callcenter/stall`), which notes the time every
+///   second and, when the node has stood still for long enough that the
+///   broker may have given its shards away, fences everything its shards
+///   started before and has them taken again;
 /// - the node's confirming publisher, the one channel every caller's
 ///   `member_call` goes out on;
+/// - the call publishers (`callcenter/call/publishers`), a few processes
+///   with a channel each that everything a call actor publishes goes out
+///   through, started before anything that can start an actor;
+/// - the call reply listener, where the answers to what a call actor asks
+///   come back (`callcenter/call/replies`);
 /// - the placement, which takes the shards assigned to this node and hands
 ///   over the ones another member asks for.
 pub fn start(
@@ -105,7 +118,13 @@ fn children(
     False -> always
     True ->
       always
+      |> list.append([stall.supervised(stood_still(count))])
       |> list.append([amqp.confirming_publisher()])
+      |> list.append([publishers.supervised(kz)])
+      |> list.append([supervised_listener(replies.listener())])
+      |> list.append([
+        snapshots.supervised() |> supervision.map_data(fn(_) { Nil }),
+      ])
       |> list.append([
         supervised_listener(activity.conf_listener(queue_deleted(count))),
       ])
@@ -113,7 +132,17 @@ fn children(
       |> list.append([pickup.supervised(count)])
       |> list.append(lamp_probe.supervised(kz, count))
       |> list.append(dnd.supervised(kz))
-      |> list.append(placement.supervised(count, start_offer(kz)))
+      |> list.append(placement.supervised(count, start_offer(kz, count)))
+  }
+}
+
+/// The node stood still: every shard this node runs a tree for looks
+/// whether it may still act for the shard.
+fn stood_still(count: Int) -> fn(Int) -> Nil {
+  fn(_gap_ms) {
+    int.range(from: 0, to: count, with: Nil, run: fn(_, index) {
+      shard.stood_still(index)
+    })
   }
 }
 
@@ -143,22 +172,23 @@ fn supervised_listener(
   |> supervision.map_data(fn(_server) { Nil })
 }
 
-/// How this node rings an agent.
-///
-/// The one seam between choosing an agent and dialling one. The call path is
-/// `callcenter/offer`, built and shipped separately, and this is the line
-/// that names it once it is there. Until then a node answers that no offer
-/// can be made, which the dispatcher logs and treats as an offer it could
-/// not start: the caller stays in the queue and is offered again next pass.
+/// How this node rings an agent: the caller's actor, on the shard that
+/// holds the caller's account (`callcenter/call/calls`), rings the offer and
+/// says how it went.
 ///
 /// `system_config/callcenter.stub_offer` turns on an offer that rings
 /// nobody and answers on a timer. It exists so that the dispatcher, the
 /// events and the documents can be exercised on a cluster with no media
-/// server, which is every cluster this is developed on.
-pub fn start_offer(kz: Kazoo) -> shard.StartOffer {
+/// server.
+pub fn start_offer(kz: Kazoo, count: Int) -> shard.StartOffer {
   case kz.config.get_string("stub_offer", "false") {
     "true" | "1" -> stub_offer(kz)
-    _off -> offer.start
+    _off -> fn(request: OfferRequest) {
+      calls.ring(
+        calls.of_shard(shards.of_account(request.member.account_id, count)),
+        request,
+      )
+    }
   }
 }
 

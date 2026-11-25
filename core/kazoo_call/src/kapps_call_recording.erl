@@ -16,7 +16,14 @@
         ,handler_from_url/1
         ,should_store_recording/2
         ,media_recorder/2
+        ,start_on_answer_by_default/2
         ]).
+
+-ifdef(TEST).
+-export([start_on_answer_unless_answered/2
+        ,is_answered/1
+        ]).
+-endif.
 
 -include("kapps_call_command.hrl").
 -include("kapps_call_recording.hrl").
@@ -170,6 +177,39 @@ record_call_command(Data, Call) ->
             | kz_api:default_headers(<<"call">>, <<"command">>, ?APP_NAME, ?APP_VERSION)
             ],
     kz_json:from_list(Media).
+
+%%------------------------------------------------------------------------------
+%% @doc Recording settings that name neither `record_on_answer' nor
+%% `record_on_bridge' start on answer while the call is unanswered.
+%%
+%% Account recordings and endpoint outbound recordings start on the caller's
+%% leg before it is bridged. Started there right away, FreeSWITCH's `record_session'
+%% pre-answers that leg, which settles its codec before the callee's leg is
+%% offered one. A leg that is already answered (or whose state cannot be
+%% read) starts recording now, as before, since its answer has passed.
+%% @end
+%%------------------------------------------------------------------------------
+-spec start_on_answer_by_default(kz_json:object(), kapps_call:call()) -> kz_json:object().
+start_on_answer_by_default(Data, Call) ->
+    case kz_json:get_first_defined([<<"record_on_answer">>, <<"record_on_bridge">>], Data) of
+        'undefined' ->
+            IsAnswered = is_answered(kapps_call_command:b_channel_status(Call)),
+            start_on_answer_unless_answered(Data, IsAnswered);
+        _Set -> Data
+    end.
+
+-spec start_on_answer_unless_answered(kz_json:object(), boolean()) -> kz_json:object().
+start_on_answer_unless_answered(Data, 'true') -> Data;
+start_on_answer_unless_answered(Data, 'false') ->
+    lager:debug("call is unanswered, recording will start on answer"),
+    kz_json:set_value(<<"record_on_answer">>, 'true', Data).
+
+-spec is_answered(kapps_api_std_return()) -> boolean().
+is_answered({'ok', Status}) when is_tuple(Status) ->
+    kz_json:is_true(<<"Answered">>, Status);
+is_answered(_Unknown) ->
+    lager:debug("call state unknown (~p), recording will start now", [_Unknown]),
+    'true'.
 
 -spec silence_detection(kz_json:object()) -> kz_term:api_object().
 silence_detection(Data) ->

@@ -82,10 +82,14 @@ pub fn a_late_reply_from_the_queue_a_caller_left_is_dropped_test() {
   assert fake_offer.count(c.offers) == 2
   assert cluster.ringing(c, "behind") == []
 
-  // The overflow's own answer is the one that counts. The first settlement
-  // is the support queue's member, when the caller timed out of it.
+  // The overflow's own answer is the one that counts, and its end settles
+  // the overflow's member. The first settlement is the support queue's
+  // member, when the caller timed out of it.
   assert cluster.settled(c) == ["overflowing"]
   fake_offer.reply(second, Answered("bob", "bob-leg", cluster.start_of_time))
+  cluster.sync(c)
+  assert !list.contains(cluster.waiting(c), "overflowing")
+  fake_offer.reply(second, types.Ended(types.Completed, cluster.start_of_time))
   cluster.sync(c)
   assert cluster.settled(c) == ["overflowing", "overflowing"]
 }
@@ -129,11 +133,12 @@ pub fn a_late_reply_after_release_agent_is_dropped_test() {
 
   fake_offer.reply(second, Answered("ann", "ann-leg", cluster.start_of_time))
   cluster.sync(c)
-  assert cluster.settled(c) == ["released"]
+  assert cluster.waiting(c) == []
 }
 
 /// An agent released by hand while talking has their call ended here: the
-/// record is closed and nothing the call's process says afterwards is heard.
+/// record is closed, the member settled, and nothing the caller's actor says
+/// afterwards is heard.
 pub fn release_agent_ends_an_answered_offer_test() {
   let c = cluster.new([#("support", queue(["ann"]))], [#("ann", user())])
   cluster.agent_is(c, "ann", "available")
@@ -142,11 +147,12 @@ pub fn release_agent_ends_an_answered_offer_test() {
   let first = request(c, 0)
   fake_offer.reply(first, Answered("ann", "ann-leg", cluster.start_of_time))
   cluster.sync(c)
-  assert cluster.settled(c) == ["talking"]
+  assert cluster.settled(c) == []
 
   assert process.call(c.dispatcher, 5000, dispatcher.ReleaseAgent("ann", _))
   cluster.sync(c)
   assert cluster.report(c).offers == []
+  assert cluster.settled(c) == ["talking"]
 
   // Free, and offered the next caller at once.
   cluster.arrive(c, "next", "support", 0, 10)

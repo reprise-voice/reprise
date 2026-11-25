@@ -2,25 +2,31 @@
 //// a redelivery of one the node that was dispatching for them did not live
 //// to finish, or an answered call the sweep found nobody holding.
 ////
-//// Not to be confused with `callcenter/takeover`, which is the process that
-//// watches such a call once this module has decided to watch rather than
-//// ring: this module decides, from the caller's own `queue_call` document,
-//// and `config.start_watch` starts the watcher.
+//// Every caller taken in is told to their actor (`config.calls.join`), the
+//// one process that commands them. A caller this dispatcher did not see
+//// join -- the broker handed them out before, their actor ended, or the
+//// dispatcher before this one did -- joins it `resumed`, and nobody is rung
+//// for them until the actor has found out where they stand and said so
+//// (`present`): waiting, phones already ringing for them, already through
+//// to an agent, or not the queue's any more. What the actor finds going on
+//// is taken on here as an offer like any other, under the id it names. An
+//// answered call the sweep found nobody holding is adopted by the caller's
+//// actor instead (`config.calls.adopt`), which watches it to its end.
 
 import callcenter/activity
+import callcenter/call/talk
 import callcenter/closed
 import callcenter/dispatcher/offers
 import callcenter/dispatcher/pickup
-import callcenter/dispatcher/settings.{type QueueSettings}
 import callcenter/dispatcher/state.{
   type Offer, type State, type Wait, Offer, State, Wait,
 }
 import callcenter/presence
 import callcenter/records
 import callcenter/system
-import callcenter/takeover
 import callcenter/types.{
-  type Member, type OfferId, Completed, Ended, Member, OfferId, Transfer,
+  type Member, type OfferId, type Presence, Completed, Ended, Member, OfferId,
+  Transfer,
 }
 import gleam/bool
 import gleam/dict
@@ -31,9 +37,7 @@ import gleam/list
 import gleam/option.{type Option, None, Some}
 import gleam/result
 import gleam/string
-import kazoo/call
 import kazoo/listener
-import kazoo/nodes
 
 // --- Arrivals --------------------------------------------------------------
 
@@ -43,56 +47,220 @@ pub fn arrived(state: State, member: Member) -> State {
 }
 
 /// A caller came off the member queue, or was handed on from a dispatcher of
-/// this node that ended without being asked to (`recovered`). The second is
-/// a caller whose offer may still be ringing on the switch, with nothing on
-/// the delivery to say so, and their record is read as a redelivery's is.
+/// this node that ended without being asked to (`recovered`). Either kind
+/// that this dispatcher did not see join -- the second, or a redelivery --
+/// joins their actor `resumed`: whatever was going on for them is still
+/// going on, and the actor finds out what before anybody is rung.
 pub fn recovering(state: State, member: Member, recovered: Bool) -> State {
+  let resumed = recovered || listener.redelivered(member.delivery)
+  // A caller joining again was handed back from any queue they were on
+  // their way out of: that departure is over, and its actor settles it as
+  // it begins the new passage.
+  let state =
+    State(..state, departing: dict.delete(state.departing, member.call_id))
+  case
+    dict.get(state.waiting, member.call_id),
+    dict.get(state.offers, member.call_id)
+  {
+    // The member of a call the sweep adopted before it arrived: a node
+    // taking a shard over meets the member redelivered and the shard's open
+    // records at once, in either order. The adopting actor watches the call;
+    // the offer takes the member's delivery, which is what its end settles.
+    Error(Nil), Ok(offer) ->
+      case records.same_passage(offer.member, member) {
+        True -> {
+          system.log(
+            "call "
+            <> member.call_id
+            <> " arrived after the sweep adopted its call: watched as adopted",
+          )
+          State(
+            ..state,
+            offers: dict.insert(
+              state.offers,
+              member.call_id,
+              Offer(..offer, member: member),
+            ),
+          )
+        }
+        False -> arriving(state, member, resumed)
+      }
+    _, _ -> arriving(state, member, resumed)
+  }
+}
+
+/// A caller arriving who is not the member of a call the sweep adopted.
+fn arriving(state: State, member: Member, resumed: Bool) -> State {
   case dict.get(state.waiting, member.call_id) {
     // A redelivery of somebody already here, or the same caller entering
-    // the same queue again -- their callflow run again after its node died:
-    // keep the place, take the new delivery, and do not count the arrival
-    // twice. The place is the older of the two joins, so that a re-entry
-    // does not put the caller behind everybody who came after them, and
-    // with the older join the re-entry stays the passage it continues: its
-    // document goes on being the one written to. A caller now in another
-    // queue is a new passage, and so is one a timeout or exit branch sent
-    // straight back into this one (`kept_place`).
+    // the same queue again -- their callflow run again elsewhere: keep the
+    // place, take the new delivery, and do not count the arrival twice. The
+    // place is the older of the two joins, so that a re-entry does not put
+    // the caller behind everybody who came after them, and with the older
+    // join the re-entry stays the passage it continues: its document goes
+    // on being the one written to. A caller now in another queue is a new
+    // passage, and so is one a timeout or exit branch sent straight back
+    // into this one (`kept_place`).
     Ok(wait) -> {
       let kept = kept_place(wait, member)
       let state = superseded(state, wait.member, kept)
-      // The rerun asked for has happened once a member with a later join
-      // arrives (`rerun_arrived`), and the arrivals after it are judged as
-      // anybody's are.
-      let rerun = wait.rerun && !rerun_arrived(wait, member)
       let wait = case records.same_passage(wait.member, kept) {
-        True -> Wait(..wait, member: kept, rerun: rerun)
-        // The action of a new passage has heard nothing from this
-        // dispatcher yet -- it takes only what is about its own passage --
-        // and is told where it stands on the next pass, whether or not the
-        // number is the one the passage before it was told.
-        False ->
-          Wait(..wait, member: kept, position: 0, announced_at: 0, rerun: rerun)
+        // The passage goes on under the re-entry's handoff and control
+        // queue, as the caller's actor has it: the record says so too, for
+        // a node that has only the record to go by (`records.rejoined`).
+        True -> {
+          records.rejoined(kept)
+          Wait(..wait, member: kept)
+        }
+        // A new passage has been told nothing of where it stands yet, and
+        // is told on the next pass whether or not the number is the one the
+        // passage before it was told.
+        False -> Wait(..wait, member: kept, position: 0, announced_at: 0)
       }
       State(..state, waiting: dict.insert(state.waiting, member.call_id, wait))
+      |> join(kept, resumed)
     }
     Error(_) -> {
       records.joined(member)
+      State(
+        ..state,
+        waiting: dict.insert(
+          state.waiting,
+          member.call_id,
+          Wait(member: member, position: 0, announced_at: 0, tried: []),
+        ),
+      )
+      |> join(member, resumed)
+    }
+  }
+}
+
+/// How long a caller handed over waits for their actor to say where they
+/// stand before they are rung like anybody else: the actor gives its survey
+/// eight seconds, and asks six times (`core.recover_attempts`).
+pub const present_wait_s = 60
+
+/// Tell the caller's actor they joined, and watch it while they wait. An
+/// actor that cannot be started is a caller nothing commands: logged, and
+/// left waiting here, where their offers fail until one can be.
+///
+/// A caller handed over is rung for by nobody until the actor says where
+/// they stand, unless this dispatcher holds an offer for them already: the
+/// same member delivered again, whose actor says what this dispatcher
+/// knows.
+fn join(state: State, member: Member, resumed: Bool) -> State {
+  case state.config.calls.join(member, resumed, state.replies) {
+    Ok(pid) -> {
+      let _monitor = process.monitor(pid)
       let state =
-        State(
-          ..state,
-          waiting: dict.insert(
-            state.waiting,
-            member.call_id,
-            Wait(
-              member: member,
-              position: 0,
-              announced_at: 0,
-              rerun: False,
-              tried: [],
+        State(..state, actors: dict.insert(state.actors, member.call_id, pid))
+      case resumed && !dict.has_key(state.offers, member.call_id) {
+        False -> state
+        True ->
+          State(
+            ..state,
+            presenting: dict.insert(
+              state.presenting,
+              member.call_id,
+              state.config.now() + present_wait_s,
             ),
-          ),
+          )
+      }
+    }
+    Error(reason) -> {
+      system.log_error(
+        "call "
+        <> member.call_id
+        <> " joined queue "
+        <> member.queue_id
+        <> " with nothing to command it: "
+        <> reason,
+      )
+      state
+    }
+  }
+}
+
+/// A caller's actor has ended. A caller still waiting is joined to a new
+/// one, as a caller handed out again is: the one that ended may have
+/// finished the passage before just as the member of this one reached it,
+/// or crashed, and either way nothing commands the caller now.
+///
+/// A caller on their way out whose actor `crashed` is joined to a new one
+/// too, which finds them on their way out and hands them back
+/// (`call/recovery`'s `Departing`): their member is still held, and nothing
+/// else would ever hand them back. One whose actor ended as it should, or
+/// was shut down with the shard's calls, is forgotten: it handed them back,
+/// or the member goes back to the broker with the shard.
+pub fn actor_down(state: State, pid: Pid, crashed: Bool) -> State {
+  let leaving =
+    dict.to_list(state.departing)
+    |> list.filter(fn(entry) { entry.1.1 == pid })
+  let state =
+    State(
+      ..state,
+      departing: dict.drop(
+        state.departing,
+        list.map(leaving, fn(entry) { entry.0 }),
+      ),
+    )
+  let state = case crashed {
+    False -> state
+    True ->
+      list.fold(leaving, state, fn(state, entry) {
+        let #(member, _pid) = entry.1
+        hand_back(state, member)
+      })
+  }
+  let gone =
+    dict.to_list(state.actors)
+    |> list.filter(fn(entry) { entry.1 == pid })
+    |> list.map(fn(entry) { entry.0 })
+  let state = State(..state, actors: dict.drop(state.actors, gone))
+  list.fold(gone, state, fn(state, call_id) {
+    case dict.get(state.waiting, call_id) {
+      Ok(wait) -> {
+        system.log(
+          "the actor of call "
+          <> call_id
+          <> " ended while the caller waits: joining them to a new one",
         )
-      recover(state, member.call_id) |> take_over(member, recovered)
+        join(state, wait.member, True)
+      }
+      Error(Nil) -> state
+    }
+  })
+}
+
+/// A caller on their way out whose actor crashed, joined to a new actor to
+/// hand them back: it finds out where they stand and, finding them leaving,
+/// finishes their departure. Watched as the one before was.
+fn hand_back(state: State, member: Member) -> State {
+  case state.config.calls.join(member, True, state.replies) {
+    Ok(pid) -> {
+      system.log(
+        "the actor of call "
+        <> member.call_id
+        <> " ended while the caller was on their way out of queue "
+        <> member.queue_id
+        <> ": joining them to a new one to hand them back",
+      )
+      let _monitor = process.monitor(pid)
+      State(
+        ..state,
+        departing: dict.insert(state.departing, member.call_id, #(member, pid)),
+      )
+    }
+    Error(reason) -> {
+      system.log_error(
+        "call "
+        <> member.call_id
+        <> " is on its way out of queue "
+        <> member.queue_id
+        <> " with nothing to hand it back: "
+        <> reason,
+      )
+      state
     }
   }
 }
@@ -110,9 +278,6 @@ pub fn recovering(state: State, member: Member, recovered: Bool) -> State {
 /// whichever of the two passages is left over: the old one if nobody
 /// answered, the new one if an agent did (`offers.superseded_passage`).
 ///
-/// A mark that the passage replaced was being taken out of its queue
-/// (`offers.queue_deleted`) goes with it: the caller has left that queue
-/// already, and the new passage is not the one being taken out.
 fn superseded(state: State, was: Member, member: Member) -> State {
   case records.same_passage(was, member) {
     True -> state
@@ -129,7 +294,7 @@ fn superseded(state: State, was: Member, member: Member) -> State {
         True -> Nil
         False -> records.cancelled(was, Transfer, state.config.now())
       }
-      State(..state, leaving: dict.delete(state.leaving, member.call_id))
+      state
     }
   }
 }
@@ -140,18 +305,12 @@ fn superseded(state: State, was: Member, member: Member) -> State {
 /// the caller's age there, through the channel's `Queue-System-Joined`.
 ///
 /// The same queue is the same passage going on when the callflow was run
-/// again (plan 4.4): the action that sent the new member runs on another
-/// node, or the rerun was this dispatcher's asking, and it takes whatever
-/// this dispatcher says about the caller in the queue (`cf_callcenter`'s
-/// `FirstHere`). It is not when a timeout or exit branch sent the caller
-/// straight back into the queue and the new member got here before the
-/// cancel of the passage they left: the same executor -- the same callflow
-/// node -- sent it, joined later, and its action hears only messages about
-/// its own join (`Again`). Given the older one, it heard nothing more from
-/// this dispatcher, offers included. That caller is a new passage and
-/// keeps the new join; the cancel still to come is about the passage
-/// before, and the shard holding the new member drops it as such
-/// (`shard.later_passage`).
+/// again somewhere else: a caller resumed on another callflow node after
+/// theirs died, which routes them into the queue they were in. It is not
+/// when a timeout or exit branch sent the caller straight back into the
+/// queue and the new member got here before the caller's actor said they
+/// left the passage before: the same callflow node sent it, joined later.
+/// That caller is a new passage and keeps the new join.
 fn kept_place(held: Wait, arriving: Member) -> Member {
   case
     held.member.queue_id == arriving.queue_id && !looped_back(held, arriving)
@@ -164,249 +323,191 @@ fn kept_place(held: Wait, arriving: Member) -> Member {
 
 /// Whether a member for the queue a caller is already waiting in is them
 /// sent back into it by their own callflow, on the node that ran the
-/// passage held: joined later, from the same callflow node, and not the
-/// rerun this dispatcher asked for. A node that says nothing is not taken
-/// for the same one.
+/// passage held: joined later, from the same callflow node. A node that
+/// says nothing is not taken for the same one.
 ///
 /// Nor is a redelivery: a message the broker has handed out before is one
 /// this dispatcher has had already, and a loop-back is a member its action
-/// has just published. It matters after a rerun, whose member is held under
-/// the older join it continues: the same member delivered again carries
-/// its own later join, from the node now holding the caller, and is still
-/// that passage.
+/// has just published.
 fn looped_back(held: Wait, arriving: Member) -> Bool {
-  !held.rerun
-  && !listener.redelivered(arriving.delivery)
+  !listener.redelivered(arriving.delivery)
   && arriving.callflow_node != ""
   && arriving.callflow_node == held.member.callflow_node
   && arriving.joined > held.member.joined
 }
 
-/// Whether a member is the one the rerun this dispatcher asked for sent:
-/// any with a later join than the passage held. The node the passage held
-/// came from is gone, which is why the rerun was asked for, so nothing but
-/// the callflow the rerun started can send the caller in again -- to this
-/// queue, from whichever node answered the route request, a restarted one
-/// of the same name included, or on to another. The rerun marks one
-/// expected member, and once it is here the next one from that callflow is
-/// a loop-back like any other (`looped_back`). A redelivery of the passage
-/// held has its join, and leaves the rerun still to come.
-fn rerun_arrived(held: Wait, arriving: Member) -> Bool {
-  arriving.joined > held.member.joined
-}
+// --- Where a caller handed over stands --------------------------------------
 
-/// Plan 4.4: a caller whose callflow node is gone has nobody to continue
-/// their callflow when they time out or press the exit key. The switch is
-/// asked to run its dialplan for the channel again, which produces a fresh
-/// route request that a live node answers; the caller keeps their place
-/// because the queue orders by the time they entered the system.
-fn recover(state: State, call_id: String) -> State {
-  case dict.get(state.waiting, call_id) {
-    Error(_) -> state
-    Ok(wait) ->
-      case wait.rerun || wait.member.callflow_node == "" {
-        True -> state
-        False ->
-          case nodes.is_up(wait.member.callflow_node) {
-            True -> state
-            False -> {
-              let caller = call.from_value(wait.member.call)
-              let extension =
-                call.request_user(caller)
-                |> option.unwrap(wait.member.queue_id)
-              system.log(
-                "callflow node "
-                <> wait.member.callflow_node
-                <> " is gone for call "
-                <> call_id
-                <> ": running the dialplan again on "
-                <> extension,
-              )
-              call.execute_extension(caller, extension)
-              State(
-                ..state,
-                waiting: dict.insert(
-                  state.waiting,
-                  call_id,
-                  Wait(..wait, rerun: True),
-                ),
-              )
-            }
-          }
-      }
-  }
-}
-
-// --- Taking a caller over from a node that died ----------------------------
-
-/// A caller the broker has handed out before may already have a phone
-/// ringing for them, or somebody talking to them, because the node that was
-/// dispatching for them died with an offer in flight. The only thing about
-/// them that outlived that node is the `queue_call` document of this
-/// passage, so it is read -- here and nowhere else -- before anybody is rung
-/// a second time. The passage is the member's own (`records.passage_id`): a
-/// caller who left another queue for this one is not read as that queue's
-/// closed record.
+/// The caller's actor says where a caller this dispatcher was handed
+/// without seeing them join stands, and the offer `id` is what anything it
+/// found going on is held under from now on.
 ///
-/// A first delivery is a caller nobody has done anything about yet, and its
-/// document is asked nothing: the read is the price of a failover and not of
-/// a call. A caller handed on after this node's own dispatcher for the
-/// account ended is read too: that dispatcher may have left an offer ringing,
-/// and the delivery, never given back to the broker, does not say so.
-fn take_over(state: State, member: Member, recovered: Bool) -> State {
-  case recovered || listener.redelivered(member.delivery) {
-    False -> state
-    True ->
-      case records.read(state.config.kz, member) {
-        None -> state
-        Some(passage) -> taken(state, member, passage)
-      }
-  }
-}
-
-fn taken(state: State, member: Member, passage: records.Passage) -> State {
-  case passage.ended, passage.cancelled, passage.answered, passage.offer {
-    // A closed record belongs to a passage that finished, whose member came
-    // round again all the same, and the caller is offered from the beginning
-    // like anybody else. A caller who came back -- a transfer, a callflow
-    // run again -- joined at another second, which is another passage and
-    // is not this record.
-    Some(_), _, _, _ | _, Some(_), _, _ -> state
-
-    // Answered and never closed: somebody is talking to this caller on a
-    // switch that outlived the node which connected them. The member message
-    // is settled, because the answer that should have settled it did not
-    // reach the broker, and the call is watched for its end. A supervisor
-    // who picked the caller up is talking to them as a supervisor, and the
-    // call is watched as the pickup it is.
-    _, _, Some(at), _ -> {
-      state.config.settle(member)
-      adopt(
-        state,
-        member,
-        option.unwrap(passage.agent_id, takeover.unknown_agent()),
-        option.unwrap(passage.agent_call_id, ""),
-        at,
-        passage.picked_up,
-      )
+/// Only a caller still waiting for that word is anything to it: one who
+/// has left, or whom this dispatcher already knows the state of, is left as
+/// it is. What it says is taken on as the dispatcher that died would have
+/// held it:
+///
+/// - **waiting**: the caller is rung like anybody else from now on;
+/// - **ringing**: the agents are held until the ring's ceiling, under the
+///   actor's offer, which says how the ring went as any offer's does; a
+///   supervisor's pickup is held as the pickup it is;
+/// - **connected**: the call is adopted, as a call the sweep found is
+///   (`adopt`), and its end is heard from the actor;
+/// - **over**: the passage was closed, or the caller was on their way out,
+///   and all that is left is to settle their member.
+///
+/// Nothing is written and nothing is published for a ring or a call taken
+/// on: the node that made them wrote and published them.
+pub fn present(state: State, id: OfferId, presence: Presence) -> State {
+  let call_id = id.call_id
+  case
+    dict.get(state.presenting, call_id),
+    dict.get(state.waiting, call_id),
+    dict.get(state.actors, call_id)
+  {
+    Ok(_), Ok(wait), Ok(pid) -> {
+      let state =
+        State(..state, presenting: dict.delete(state.presenting, call_id))
+      presented(state, wait.member, id, pid, presence)
     }
-
-    _, _, None, Some(offered) -> offered_elsewhere(state, member, offered)
-    _, _, None, None -> state
+    _, _, _ -> state
   }
 }
 
-/// An offer that was in flight on the node that died. If it still has time
-/// to run, this caller is not rung: the outcome of the ringing that is
-/// already happening is watched for instead. A supervisor's pickup rings
-/// for `pickup.ring_timeout_s`, whatever the queue says.
-fn offered_elsewhere(
+fn presented(
   state: State,
   member: Member,
-  offered: records.Offered,
+  id: OfferId,
+  pid: Pid,
+  presence: Presence,
 ) -> State {
-  let queue = settings.for_queue(state.config, member.queue_id)
-  let ring_timeout = case offered.pickup {
-    True -> pickup.ring_timeout_s
-    False -> settings.ring_timeout(state.config, offered.agents, queue)
-  }
-  let ceiling = offered.at + ring_timeout + state.config.offer_grace_s
-  case ceiling > state.config.now() {
-    // The offer ran out before this node ever saw the caller. Whatever was
-    // ringing has stopped, and they are offered again from here.
-    False -> state
-    True -> watch_offer(state, member, queue, offered, ceiling)
-  }
-}
-
-fn watch_offer(
-  state: State,
-  member: Member,
-  queue: QueueSettings,
-  offered: records.Offered,
-  ceiling: Int,
-) -> State {
-  let id = new_id(member)
-  let request =
-    takeover.Request(
-      member: member,
-      agents: offered.agents,
-      offered_at: offered.at,
-      deadline: ceiling,
-      // The same rule `offers.send` applies, because the offer that died
-      // applied it and then died before it could start anything: the queue's
-      // setting, or any of the agents' own. A pickup's is the queue's alone
-      // (`dispatcher/pickup`).
-      record: queue.record
-        || {
-        !offered.pickup
-        && settings.any_agent_records(state.config, offered.agents)
-      },
-      answered: None,
-      leg_prefix: offered.leg_prefix,
-      id: id,
-      reply_to: state.replies,
-    )
-  case state.config.start_watch(request) |> result.map(offers.monitored) {
-    Error(reason) -> {
-      system.log_error(
-        "could not watch the offer of call "
-        <> member.call_id
-        <> " to "
-        <> string.join(offered.agents, ", ")
-        <> ": "
-        <> reason,
-      )
-      state
-    }
-    Ok(pid) -> {
+  case presence {
+    types.PresentWaiting -> state
+    types.PresentRinging(agents, ceiling, is_pickup) ->
+      ringing_elsewhere(state, member, id, pid, agents, ceiling, is_pickup)
+    types.PresentConnected(agent_id, leg, at, is_pickup) ->
+      watched(state, member, id, agent_id, leg, at, pid, is_pickup)
+    types.PresentLeaving -> {
       system.log(
         "call "
         <> member.call_id
-        <> " was offered to "
-        <> string.join(offered.agents, ", ")
-        <> " on the node that was dispatching for it: watching for the "
-        <> "outcome rather than ringing again",
+        <> " in queue "
+        <> member.queue_id
+        <> " was handed over on its way out of the queue: its actor hands it"
+        <> " back",
       )
-      // Nothing is written and nothing is published: the offer on the record
-      // is the one the dead node made and already said it had. The agents
-      // are held here all the same, because their phones are ringing and no
-      // other caller may be sent to them. A supervisor's pickup is held the
-      // same way, as `dispatcher/pickup` holds its own, and its replies go
-      // there: nobody misses it and nobody's queue call it becomes.
-      case offered.pickup {
-        True -> Nil
-        False ->
-          list.each(offered.agents, fn(agent_id) {
-            activity.set_offering(
-              state.config.account_id,
-              agent_id,
-              ceiling - state.config.now(),
-            )
-          })
-      }
-      let offer =
-        Offer(
-          id: id,
-          queue_id: queue.id,
-          member: member,
-          agents: offered.agents,
-          ringing: offered.agents,
-          started_at: offered.at,
-          ceiling: ceiling,
-          connected: None,
-          pid: Some(pid),
-          // The dead node's ring is out there already.
-          rung: True,
-          called_off: False,
-        )
       State(
         ..state,
-        offers: dict.insert(state.offers, member.call_id, offer),
-        busy: offers.hold(state, id, offered.agents),
+        waiting: dict.delete(state.waiting, member.call_id),
+        actors: dict.delete(state.actors, member.call_id),
+        departing: dict.insert(state.departing, member.call_id, #(member, pid)),
       )
-      |> as_pickup(offer, offered.pickup)
     }
+    types.PresentOver -> {
+      system.log(
+        "call "
+        <> member.call_id
+        <> " in queue "
+        <> member.queue_id
+        <> " was handed over after the queue was done with it: settling it",
+      )
+      state.config.settle(member)
+      State(
+        ..state,
+        waiting: dict.delete(state.waiting, member.call_id),
+        actors: dict.delete(state.actors, member.call_id),
+      )
+    }
+  }
+}
+
+/// A ring the caller's actor found going on, taken on as this dispatcher's
+/// offer: its agents are held until its ceiling, as the offer that rang
+/// them would have held them, and nobody else is offered them meanwhile.
+fn ringing_elsewhere(
+  state: State,
+  member: Member,
+  id: OfferId,
+  pid: Pid,
+  agents: List(String),
+  ceiling: Int,
+  is_pickup: Bool,
+) -> State {
+  let now = state.config.now()
+  system.log(
+    "call "
+    <> member.call_id
+    <> " was being offered to "
+    <> string.join(agents, ", ")
+    <> " when it was handed over: holding them until "
+    <> int.to_string(ceiling)
+    <> " and hearing the ring out",
+  )
+  case is_pickup {
+    True -> Nil
+    False ->
+      list.each(agents, fn(agent_id) {
+        activity.set_offering(
+          state.config.account_id,
+          agent_id,
+          int.max(ceiling - now, 1),
+        )
+      })
+  }
+  let offer =
+    Offer(
+      id: id,
+      queue_id: member.queue_id,
+      member: member,
+      agents: agents,
+      ringing: agents,
+      started_at: now,
+      ceiling: ceiling,
+      connected: None,
+      pid: Some(pid),
+      rung: True,
+      called_off: False,
+    )
+  State(
+    ..state,
+    offers: dict.insert(state.offers, member.call_id, offer),
+    busy: offers.hold(state, id, agents),
+  )
+  |> as_pickup(offer, is_pickup)
+}
+
+/// A call the caller's actor found connected, taken on as this dispatcher's:
+/// the offer that answered it is the actor's, and so is the word of its
+/// end. The agent's login lamp is this node's to keep now.
+fn watched(
+  state: State,
+  member: Member,
+  id: OfferId,
+  agent_id: String,
+  leg: String,
+  at: Int,
+  pid: Pid,
+  is_pickup: Bool,
+) -> State {
+  system.log(
+    "call "
+    <> member.call_id
+    <> case is_pickup {
+      True -> " was picked up by "
+      False -> " was answered by "
+    }
+    <> agent_id
+    <> " when it was handed over: waiting for the end",
+  )
+  let state =
+    connected(state, id, member, agent_id, leg, at, Some(pid), is_pickup)
+  case agent_id == talk.unknown_agent || agent_id == "" || is_pickup {
+    True -> state
+    False ->
+      State(
+        ..state,
+        lamps: presence.connected(state.lamps, agent_id, state.config.lamp),
+      )
   }
 }
 
@@ -418,13 +519,14 @@ fn watch_offer(
 /// reported and nobody else will -- and the agent's login lamp, which is
 /// shown `early` again because this node now answers for it.
 ///
-/// A call nothing watches is one nothing will ever say the end of, and its
-/// agent would be held busy until the sweep's backstop, ten minutes later.
-/// So a watch that cannot be started is tried once more, and a second
-/// failure closes the call here and now, as a call its record says was
-/// answered: the agent gets their wrap-up and their counters, and their own
-/// channels keep them out of the next offer for as long as they really are
-/// talking.
+/// The caller's actor adopts the call (`config.calls.adopt`) and says when
+/// it ends, as it says the end of a call it connected. A call nothing
+/// watches is one nothing will ever say the end of, and its agent would be
+/// held busy until the sweep's backstop, ten minutes later. So an actor
+/// that cannot be had closes the call here and now, as a call its record
+/// says was answered: the agent gets their wrap-up and their counters, and
+/// their own channels keep them out of the next offer for as long as they
+/// really are talking.
 ///
 /// A supervisor's pickup (`picked_up`) is adopted as the pickup it is: its
 /// replies are `dispatcher/pickup`'s, and its end closes the record and
@@ -439,41 +541,15 @@ fn adopt(
   picked_up: Bool,
 ) -> State {
   let id = new_id(member)
-  let request =
-    takeover.Request(
-      member: member,
-      agents: [agent_id],
-      offered_at: at,
-      deadline: at,
-      // A record that says answered is one written by an offer that reached
-      // its answer, and an offer that reaches its answer starts the
-      // recording there. There is nothing left to start.
-      record: False,
-      answered: Some(takeover.Answer(
-        agent_id: agent_id,
-        agent_call_id: agent_call_id,
-        at: at,
-      )),
-      leg_prefix: None,
-      id: id,
-      reply_to: state.replies,
-    )
   let watching =
-    case state.config.start_watch(request) {
-      Ok(pid) -> Ok(pid)
-      Error(reason) -> {
-        system.log_error(
-          "could not watch call "
-          <> member.call_id
-          <> ", answered by "
-          <> agent_id
-          <> ": "
-          <> reason
-          <> "; trying once more",
-        )
-        state.config.start_watch(request)
-      }
-    }
+    state.config.calls.adopt(
+      member,
+      id,
+      agent_id,
+      agent_call_id,
+      at,
+      state.replies,
+    )
     |> result.map(offers.monitored)
   case watching {
     Error(reason) -> {
@@ -513,7 +589,7 @@ fn adopt(
         )
       // The lamp is this node's to keep now, and the node that lit it is
       // gone.
-      case agent_id == takeover.unknown_agent() || picked_up {
+      case agent_id == talk.unknown_agent || picked_up {
         True -> state
         False ->
           State(
@@ -590,10 +666,56 @@ pub fn orphaned(
 ) -> State {
   // Closed here already, its end still on its way to the document.
   use <- bool.guard(closed.again(member), state)
+  // A caller of this passage held here: their member came back with the
+  // shard and their actor is finding out where they stand, and says so
+  // (`present`). A connected call's member is held until the call ends, so
+  // a node taking a shard over meets both at once -- the member redelivered,
+  // and the sweep's scan of the shard's open records -- and adopted too, the
+  // call was watched twice. Then
+  // the actor's word went to an offer the adoption had replaced, the
+  // actor's end was taken for a lost call and closed `failed`, and the
+  // member was never settled: the adoption's member has no delivery.
+  //
+  // A caller held here in another passage -- waiting in a queue the agent
+  // passed them on to, or on their way out of one -- is left to that
+  // passage too, and the orphan to the backstop's next look (every
+  // `reconcile.backstop_sweeps`th sweep), as one with an offer of another
+  // passage in flight is -- the scan of a shard taken does not come back: adopted, the call took the
+  // caller out of the queue they are in, held their agent busy with an offer
+  // nothing would ever answer, and closed `failed` when their actor ended.
+  let waiting = dict.get(state.waiting, member.call_id)
+  let held_here = case waiting {
+    Ok(wait) ->
+      case records.same_passage(wait.member, member) {
+        True -> Some(wait.member)
+        False -> None
+      }
+    Error(Nil) -> None
+  }
+  let has_actor = dict.has_key(state.actors, member.call_id)
+  use <- bool.guard(option.is_some(held_here) && has_actor, state)
+  use <- bool.lazy_guard(
+    { result.is_ok(waiting) && option.is_none(held_here) }
+      || dict.has_key(state.departing, member.call_id),
+    fn() {
+      system.log(
+        "call "
+        <> member.call_id
+        <> " has an open record in queue "
+        <> member.queue_id
+        <> " while its caller is held here in another passage or on their way out: left for now",
+      )
+      state
+    },
+  )
+  // One held here whose actor could not be started, which nothing will
+  // ever say anything of, is adopted with the member held: its delivery is
+  // what the call's end settles.
+  let member = option.unwrap(held_here, member)
   case dict.get(state.offers, member.call_id), end {
     Ok(offer), _ ->
       case records.same_passage(offer.member, member), end {
-        // Adopted already, and its watcher will say when it ends.
+        // Adopted already, and its actor will say when it ends.
         True, None -> state
         True, Some(at) -> close(state, member.call_id, at)
         False, _ -> {

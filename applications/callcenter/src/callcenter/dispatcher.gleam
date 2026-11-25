@@ -28,9 +28,10 @@
 ////   agent still on the call (`callcenter/presence`).
 ////
 //// The ringing itself is not here. The dispatcher asks for an offer through
-//// a function it was started with, which is `callcenter/offer.start` on a
-//// node and a fake in the tests, and hears the result back as a message.
-//// That is the whole of the boundary: this module chooses, that one dials.
+//// a function it was started with, which asks the caller's actor
+//// (`callcenter/call/actor`) on a node and is a fake in the tests, and hears
+//// the result back as a message. That is the whole of the boundary: this
+//// module chooses, the caller's actor dials.
 ////
 //// The actor is this module: what it is started with, the messages it takes
 //// and the loop that takes them. What it does with each message is in the
@@ -120,19 +121,36 @@ pub type Message {
   /// dispatcher's own -- take them out of the queue, release whoever was
   /// being rung for them, close their record.
   Left(call_id: String, reason: CancelReason)
-  /// The offer process's answer, naming the offer it is about.
+  /// The caller is leaving on a branch their actor hands them back on, told
+  /// and not asked: taken out of the queue as a caller who left is, but
+  /// their member kept until the actor has handed them back
+  /// (`offers.depart`).
+  Departing(call_id: String, reason: CancelReason)
+  /// The caller's actor's answer, naming the offer it is about.
   Reply(offer: OfferId, reply: OfferReply)
-  /// A process this dispatcher monitors has ended: an offer's, or a
-  /// takeover's. See `offers.down`.
+  /// A caller's actor this dispatcher monitors has ended. See `offers.down`.
   OfferDown(down: process.Down)
   /// A caller's channel is gone, seen by the activity actor or the sweep.
   /// The activity actor says it of every queue channel of the account that
   /// goes, agents' legs and callers already through included; only a caller
-  /// still waiting here is anything to this dispatcher.
+  /// still waiting here, with nobody being rung for them, is anything to
+  /// this dispatcher.
+  ///
+  /// A caller being rung for is their actor's to close. It hears the same
+  /// end, and it alone knows whether an agent answered first: an answer and
+  /// the caller's end are two channels' events, and the actor dates them
+  /// (`call/core`'s `Desertion`). A dispatcher that closed a caller as gone on
+  /// this word would be wrong whenever an agent answered first: the actor's `Answered` and `Ended` then found no offer, and an agent's
+  /// answered call was never counted. An actor that misses the end has its
+  /// own audit, and an actor that dies has its offer closed (`OfferDown`),
+  /// after which this word closes the caller.
   ChannelGone(call_id: String)
   /// A call answered on a node that died, whose `queue_call` record the
-  /// sweep found still open. The member message was settled when it was
-  /// answered, so this caller reaches this node no other way.
+  /// sweep found still open. A connected call's member is held until the
+  /// call ends, and usually comes back with the shard as well: a caller of
+  /// the passage held here is their actor's, and is left to it
+  /// (`arrival.orphaned`). One whose member was settled -- an earlier
+  /// release's, or one the broker lost -- reaches this node no other way.
   ///
   /// `ended` is the second the caller's channel went, when the switches say
   /// it has gone. `None` is a conversation still going on: the call is
@@ -169,11 +187,6 @@ pub type Message {
   Status(queue_id: Option(String), done: Subject(List(Value)))
   /// What this dispatcher is doing, for `sup`.
   Report(done: Subject(Snapshot))
-  /// How many offers are in flight: agents being rung right now, counted.
-  /// Asked on its own rather than read out of a `Report`, because the caller
-  /// is a handover deciding whether a shard may move and a snapshot reads
-  /// the account's queue documents to build the rest of itself.
-  Offers(done: Subject(Int))
   /// The agents on a queue call here right now: an offer they answered that
   /// has not ended. What a login lamp probe needs to tell `early` from the
   /// availability's own state.
@@ -205,8 +218,8 @@ pub type Snapshot =
 /// Start a dispatcher for an account.
 ///
 /// `start_offer` is the only thing this module knows about ringing an agent.
-/// On a node it is `offer.start`; in a test it is a fake that answers
-/// whatever the test wants. Taking it as an argument rather than calling the
+/// On a node it hands the request to the caller's actor; in a test it is a
+/// fake that answers whatever the test wants. Taking it as an argument rather than calling the
 /// module directly is what lets the two halves of the dispatcher be built
 /// and tested apart.
 pub fn start(
@@ -234,8 +247,10 @@ pub fn start(
       start_offer: start_offer,
       waiting: dict.new(),
       offers: dict.new(),
+      actors: dict.new(),
+      presenting: dict.new(),
+      departing: dict.new(),
       pickups: dict.new(),
-      leaving: dict.new(),
       busy: dict.new(),
       delayed: dict.new(),
       wrapup: dict.new(),
@@ -269,6 +284,20 @@ pub fn start(
 // --- The loop --------------------------------------------------------------
 
 fn handle(state: State, message: Message) -> actor.Next(State, Message) {
+  case message, state.config.fresh() {
+    Stop(_), _ | _, True -> act(state, message)
+    // The node stood still since this dispatcher started, and the shard it
+    // dispatches for may be another node's now (`callcenter/stall`): what
+    // it is handed is dropped, and nothing more is written, published or
+    // settled from here. The shard's tree is ending, this dispatcher with
+    // it.
+    _, False -> actor.continue(state)
+  }
+}
+
+/// What the dispatcher does with a message while it may still act for its
+/// shard.
+fn act(state: State, message: Message) -> actor.Next(State, Message) {
   case message {
     Arrived(member, done) -> {
       process.send(done, Nil)
@@ -290,13 +319,21 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
 
     Left(call_id, reason) -> step(state, offers.leave(state, call_id, reason))
 
+    Departing(call_id, reason) ->
+      step(state, offers.depart(state, call_id, reason))
+
     ChannelGone(call_id) ->
-      case dict.has_key(state.waiting, call_id) {
+      case
+        dict.has_key(state.waiting, call_id),
+        dict.has_key(state.offers, call_id)
+      {
         // A caller whose channel is gone is an abandon, whatever the queue
         // believed. Requirement 0.6: no ghost calls.
-        True -> step(state, offers.leave(state, call_id, Hangup))
+        True, False -> step(state, offers.leave(state, call_id, Hangup))
+        // Being rung for: their actor says how it ends.
+        True, True -> actor.continue(state)
         // Nobody of ours: no pass for it.
-        False -> actor.continue(state)
+        False, _ -> actor.continue(state)
       }
 
     Orphaned(member, agent_id, agent_call_id, answered_at, picked_up, ended) -> {
@@ -319,21 +356,32 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
 
     // A supervisor's pickup is an offer whose replies mean something else:
     // no agent's counters or idle time move on them, so they skip `step`.
+    // Where a caller handed over stands: not about an offer this
+    // dispatcher made, and the start of one when it says one is going on.
+    Reply(offer, types.Present(presence)) ->
+      step(state, arrival.present(state, offer, presence))
+
     Reply(offer, reply) ->
       case pickup.holds(state, offer) {
         True -> actor.continue(pickup.replied(state, offer, reply) |> pass.run)
         False -> step(state, offers.replied(state, offer, reply))
       }
 
+    // An actor its supervisor shut down went with its shard's calls, which
+    // only ever end with the shard's whole tree (`calls.supervised`), this
+    // dispatcher next. Its call goes on, and the actor of the tree that
+    // takes the shard next finds it where it stands and says so
+    // (*Takeover*). So its offer is let go of with nothing written or
+    // published: closed here, an answered call was closed twice, once by
+    // each holder.
     OfferDown(process.ProcessDown(pid: pid, reason: reason, ..)) ->
-      case pickup.down(state, pid, string.inspect(reason)) {
-        Ok(after) -> actor.continue(pass.run(after))
-        Error(Nil) ->
-          case offers.down(state, pid, string.inspect(reason)) {
-            Ok(after) -> step(state, after)
-            // Settled already: nearly every offer's end is this.
-            Error(Nil) -> actor.continue(state)
-          }
+      case shut_down(reason) {
+        True ->
+          step(
+            state,
+            offers.let_go(state, pid) |> arrival.actor_down(pid, False),
+          )
+        False -> actor_ended(state, pid, reason)
       }
 
     OfferDown(process.PortDown(..)) -> actor.continue(state)
@@ -384,11 +432,6 @@ fn handle(state: State, message: Message) -> actor.Next(State, Message) {
     Report(done) -> {
       let state = view.read_activity(state)
       process.send(done, status.snapshot(state))
-      actor.continue(state)
-    }
-
-    Offers(done) -> {
-      process.send(done, dict.size(state.offers))
       actor.continue(state)
     }
 
@@ -676,3 +719,37 @@ pub fn account_of(config: Config) -> String {
 pub fn no_answer_source() -> Source {
   NoAnswerRule
 }
+
+/// A caller's actor that ended any other way than by its supervisor's
+/// shutdown. The offer the actor held is closed first, and only then is a
+/// caller still waiting joined to a new actor: the new one finds out
+/// whatever the old one left ringing and says so, and a dispatcher still
+/// holding the old offer would take that for an offer it already has.
+fn actor_ended(
+  state: State,
+  pid: Pid,
+  reason: process.ExitReason,
+) -> actor.Next(State, Message) {
+  let crashed = reason != process.Normal
+  case pickup.down(state, pid, string.inspect(reason)) {
+    Ok(after) ->
+      actor.continue(arrival.actor_down(after, pid, crashed) |> pass.run)
+    Error(Nil) ->
+      case offers.down(state, pid, string.inspect(reason)) {
+        Ok(after) -> step(state, arrival.actor_down(after, pid, crashed))
+        // Settled already: nearly every offer's end is this.
+        Error(Nil) -> step(state, arrival.actor_down(state, pid, crashed))
+      }
+  }
+}
+
+/// Whether a process ended because its supervisor shut it down.
+fn shut_down(reason: process.ExitReason) -> Bool {
+  case reason {
+    process.Abnormal(reason) -> is_shutdown(reason)
+    process.Normal | process.Killed -> False
+  }
+}
+
+@external(erlang, "callcenter_ffi", "is_shutdown")
+fn is_shutdown(reason: Dynamic) -> Bool

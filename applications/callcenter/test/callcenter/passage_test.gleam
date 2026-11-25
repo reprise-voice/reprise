@@ -8,10 +8,10 @@ import callcenter/records
 import callcenter/types
 import gleam/int
 import gleam/list
-import gleam/option.{None, Some}
+import gleam/option.{type Option, None, Some}
+import gleam/result
 import kazoo/doc
 import support/cluster
-import support/fake_offer
 
 const call_id = "passing-through"
 
@@ -131,10 +131,24 @@ pub fn a_call_id_document_is_its_own_passage_only_test() {
 
 // --- Taking a caller over ----------------------------------------------------
 
+/// The record a caller's actor reads when it finds out where a caller
+/// handed over stands (`records.read`), for the member it was handed.
+fn read(
+  c: cluster.Cluster,
+  queue_id: String,
+  joined: Int,
+) -> Option(records.Passage) {
+  let assert Ok(found) =
+    records.read(
+      c.kz,
+      cluster.member(call_id, queue_id, 0, cluster.start_of_time + joined),
+    )
+  found
+}
+
 /// The node dispatching the overflow died with Bob ringing. The redelivered
 /// member is the overflow's, and so is the record read: the support passage
-/// is closed, the overflow's is not, and Bob's phone is watched rather than
-/// rung a second time.
+/// is closed, the overflow's is not, and it has Bob's ring in flight.
 pub fn a_takeover_reads_the_passage_it_is_about_test() {
   let c = two_queues()
   cluster.put_record(c, 0, left_support())
@@ -144,16 +158,16 @@ pub fn a_takeover_reads_the_passage_it_is_about_test() {
     cluster.record(call_id, "overflow", 30, [#("bob", 31, None)], None),
   )
 
-  cluster.redelivered(c, call_id, "overflow", 0, 30)
-
-  assert fake_offer.count(c.offers) == 0
-  assert cluster.watching(c, call_id) == ["bob"]
-  assert cluster.ringing(c, call_id) == ["bob"]
+  let assert Some(passage) = read(c, "overflow", 30)
+  assert passage.cancelled == None
+  let assert Some(offered) = passage.offer
+  assert offered.agents == ["bob"]
+  assert offered.at == cluster.start_of_time + 31
 }
 
 /// With only the support passage on record, as a call id document from an
 /// earlier release, the overflow's member has no record: nothing had been
-/// written about it, and it is offered from here.
+/// written about it.
 pub fn a_takeover_does_not_read_another_passages_call_id_document_test() {
   let c = two_queues()
   cluster.put_record(
@@ -162,15 +176,11 @@ pub fn a_takeover_does_not_read_another_passages_call_id_document_test() {
     left_support() |> doc.set(["_id"], doc.String(call_id)),
   )
 
-  cluster.redelivered(c, call_id, "overflow", 0, 30)
-
-  assert cluster.watching(c, call_id) == []
-  assert fake_offer.count(c.offers) == 1
-  assert cluster.ringing(c, call_id) == ["bob"]
+  assert read(c, "overflow", 30) == None
 }
 
 /// A caller waiting across the upgrade: their passage's document is the call
-/// id one, and a redelivery still finds the offer on it in flight.
+/// id one, and a takeover still finds the offer on it in flight.
 pub fn a_takeover_reads_a_call_id_document_test() {
   let c = two_queues()
   cluster.put_record(
@@ -179,10 +189,9 @@ pub fn a_takeover_reads_a_call_id_document_test() {
     cluster.legacy_record(call_id, "support", 0, [#("ann", 0, None)], None),
   )
 
-  cluster.redelivered(c, call_id, "support", 0, 0)
-
-  assert fake_offer.count(c.offers) == 0
-  assert cluster.watching(c, call_id) == ["ann"]
+  let assert Some(passage) = read(c, "support", 0)
+  let assert Some(offered) = passage.offer
+  assert offered.agents == ["ann"]
 }
 
 // --- The open-call scan ----------------------------------------------------
@@ -221,6 +230,41 @@ pub fn the_open_scan_finds_an_answered_second_passage_test() {
   assert id == records.passage_id(overflow())
 }
 
+/// A caller waiting across the upgrade whose callflow is run again on
+/// another node enters the queue they wait in again, and keeps their place:
+/// the same passage, whose call id document the earlier release wrote. The
+/// re-entry names how the caller is reached now on that document, and
+/// begins no document of the passage's own id beside it -- one every later
+/// write would go to, while the call id document was never closed.
+pub fn a_re_entry_across_the_upgrade_goes_on_in_its_call_id_document_test() {
+  let c = two_queues()
+  cluster.agent_is(c, "ann", "logged_out")
+  cluster.put_record(
+    c,
+    0,
+    cluster.legacy_record(call_id, "support", 0, [], None),
+  )
+  let again =
+    types.Member(
+      ..support(),
+      joined: cluster.start_of_time + 5,
+      handoff_id: "again",
+    )
+    |> cluster.with_control_queue("control-again")
+  cluster.writing_records(c, fn() {
+    cluster.redelivered(c, call_id, "support", 0, 0)
+    cluster.arrive_as(c, again)
+  })
+  assert cluster.waiting(c) == [call_id]
+
+  let assert Ok(document) = cluster.stored_record(c, 0, call_id)
+  assert doc.get_string(document, ["handoff_id"]) == Ok("again")
+  assert doc.get_string(document, ["control_queue"]) == Ok("control-again")
+  assert doc.get_int(document, ["joined"]) == Ok(cluster.start_of_time)
+  assert cluster.stored_record(c, 0, records.passage_id(support()))
+    == Error(Nil)
+}
+
 /// An answered call id document from an earlier release is still open to
 /// the scan, and the member rebuilt from it closes that document.
 pub fn the_open_scan_finds_a_call_id_document_test() {
@@ -248,6 +292,6 @@ pub fn the_open_scan_finds_a_call_id_document_test() {
     records.locate(reconcile.rebuilt(call), True, lookup(c))
   assert id == call_id
   assert records.read(c.kz, reconcile.rebuilt(call))
-    |> option.map(fn(passage) { passage.agent_id })
-    == Some(Some("ann"))
+    |> result.map(option.map(_, fn(passage) { passage.agent_id }))
+    == Ok(Some(Some("ann")))
 }

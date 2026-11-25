@@ -36,7 +36,8 @@
                 "exit_key",
                 "queue_full",
                 "transfer",
-                "queue_deleted"
+                "queue_deleted",
+                "quarantined"
             ],
             "type": "string"
         },
@@ -44,9 +45,17 @@
             "description": "When the caller left without being connected, in Gregorian seconds",
             "type": "integer"
         },
+        "control_queue": {
+            "description": "The control queue the caller's channel is commanded through, for a node that takes the answered call over",
+            "type": "string"
+        },
         "ended": {
             "description": "When the call finished, in Gregorian seconds",
             "type": "integer"
+        },
+        "handoff_id": {
+            "description": "The passage's handoff id, which the caller's actor and the callflow that sent them know it by",
+            "type": "string"
         },
         "joined": {
             "description": "When the caller entered the queue, in Gregorian seconds",
@@ -71,19 +80,24 @@
                         "type": "string"
                     },
                     "outcome": {
-                        "description": "How the offer ended",
+                        "description": "How the offer ended: cancelled is a ring called off, by the caller leaving, somebody else answering, or the passage ending around it; failed is an offer that never rang or broke, and says why in reason",
                         "enum": [
                             "answered",
                             "no_answer",
                             "busy",
                             "reject",
-                            "cancelled"
+                            "cancelled",
+                            "failed"
                         ],
                         "type": "string"
                     },
                     "pickup": {
                         "description": "The phone rung was a supervisor's, for a pickup, and not an agent's",
                         "type": "boolean"
+                    },
+                    "reason": {
+                        "description": "Why a failed offer failed: no_endpoints, offer_crashed, offer_down, or the switch's cause",
+                        "type": "string"
                     }
                 },
                 "type": "object"
@@ -99,7 +113,7 @@
             "type": "string"
         },
         "recording": {
-            "description": "Recording of the call, when the queue or the agent asked for one",
+            "description": "The name of the call's recording, when the queue or the agent asked for one: the call_recording document's name, less its extension",
             "type": "string"
         }
     },

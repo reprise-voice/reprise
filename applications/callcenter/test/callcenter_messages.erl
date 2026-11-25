@@ -31,6 +31,7 @@ call() -> ?CALL.
 events() ->
     [<<"member_call">>, <<"member_cancel">>, <<"member_offer">>
     ,<<"member_connected">>, <<"member_result">>, <<"member_position">>
+    ,<<"member_continue">>, <<"member_continuing">>
     ,<<"agent_availability">>, <<"agent_activity">>, <<"agent_offer">>
     ,<<"agent_answered">>, <<"agent_wrapup">>, <<"queue_stats">>
     ,<<"status_req">>, <<"status_resp">>
@@ -49,6 +50,8 @@ message(<<"member_call">>) ->
     ,{<<"Caller-ID-Number">>, <<"5551234">>}
     ,{<<"Priority">>, 2}
     ,{<<"Shard-Count">>, 64}
+    ,{<<"Handoff-ID">>, <<"handoff-1">>}
+    ,{<<"Branches">>, {[{<<"_">>, {[{<<"module">>, <<"voicemail">>}]}}]}}
     ];
 message(<<"member_cancel">>) ->
     [{<<"Account-ID">>, ?ACCOUNT}
@@ -98,6 +101,18 @@ message(<<"member_position">>) ->
     ,{<<"Joined-Timestamp">>, ?NOW - 30}
     ,{<<"Media-Node">>, <<"freeswitch@fs1">>}
     ,{<<"Offered">>, 'false'}
+    ];
+message(<<"member_continue">>) ->
+    [{<<"Account-ID">>, ?ACCOUNT}
+    ,{<<"Queue-ID">>, ?QUEUE}
+    ,{<<"Call-ID">>, ?CALL}
+    ,{<<"Handoff-ID">>, <<"handoff-1">>}
+    ,{<<"Branch">>, <<"timeout">>}
+    ,{<<"Reply-To">>, <<"pid://<0.2.0>/callcenter-calls">>}
+    ];
+message(<<"member_continuing">>) ->
+    [{<<"Call-ID">>, ?CALL}
+    ,{<<"Handoff-ID">>, <<"handoff-1">>}
     ];
 message(<<"agent_availability">>) ->
     [{<<"Account-ID">>, ?ACCOUNT}
@@ -154,7 +169,6 @@ message(<<"status_req">>) ->
 message(<<"status_resp">>) ->
     [{<<"Account-ID">>, ?ACCOUNT}
     ,{<<"Queues">>, [{[{<<"Queue-ID">>, ?QUEUE}, {<<"Waiting-Count">>, 0}]}]}
-    ,{<<"Caller-Delivery">>, <<"controller">>}
     ,{<<"Node">>, <<"kazoo_apps@one">>}
     ,{<<"On-Queue-Call">>, [?AGENT]}
     ,{<<"Shard">>, 7}

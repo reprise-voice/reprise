@@ -3,7 +3,8 @@
 //// take shards at all.
 ////
 //// The broker is an actor that knows which nodes are members, who consumes
-//// each shard's queue, and which shards have an agent ringing; it passes a
+//// each shard's queue, and which shards are too busy to answer being given
+//// up; it passes a
 //// want to the member it is addressed to, as the member's own queue would.
 //// Each node is a real placement actor whose hooks talk to it. Nothing
 //// ticks on its own: every look is sent by hand, so a run is the same every
@@ -35,8 +36,8 @@ type World {
     broken: Set(String),
     /// Who consumes each shard's member queue, and the tree doing it.
     owners: Dict(Int, #(String, Pid)),
-    /// The shards with an agent ringing.
-    ringing: Set(Int),
+    /// The shards too busy to answer being given up.
+    stuck: Set(Int),
     /// How long a shard takes to answer whether it will give itself up.
     give_up_ms: Int,
     /// The clock, in milliseconds.
@@ -50,7 +51,7 @@ type Ask {
   Agreed(node: String, done: Subject(Bool))
   Join(node: String, inbox: Subject(placement.Message), done: Subject(Nil))
   Leave(node: String)
-  Members(node: String, done: Subject(List(String)))
+  Members(node: String, known: List(String), done: Subject(List(String)))
   Probe(shard: Int, done: Subject(Int))
   Take(node: String, shard: Int, done: Subject(Result(Pid, String)))
   Adopt(node: String, shard: Int, done: Subject(Result(Pid, Nil)))
@@ -71,7 +72,7 @@ fn world() -> Subject(Ask) {
         disagreeing: set.new(),
         broken: set.new(),
         owners: dict.new(),
-        ringing: set.new(),
+        stuck: set.new(),
         give_up_ms: 0,
         now: 1_000_000,
         takes: [],
@@ -94,11 +95,13 @@ fn serve(w: World, ask: Ask) -> actor.Next(World, Ask) {
     }
     Leave(node) ->
       actor.continue(World(..w, present: dict.delete(w.present, node)))
-    Members(node, done) -> {
+    // As `members.now` asks: the names `kz_nodes` lists and the members
+    // the node saw at its last look.
+    Members(node, known, done) -> {
       let listed = dict.get(w.listed, node) |> option_list
       process.send(
         done,
-        [node, ..listed]
+        [node, ..list.append(listed, known)]
           |> list.unique
           |> list.filter(fn(name) { dict.has_key(w.present, name) }),
       )
@@ -142,7 +145,7 @@ fn serve(w: World, ask: Ask) -> actor.Next(World, Ask) {
       actor.continue(w)
     }
     GiveUp(node, shard, done) ->
-      case set.contains(w.ringing, shard) {
+      case set.contains(w.stuck, shard) {
         True -> {
           process.send(done, False)
           actor.continue(w)
@@ -216,7 +219,7 @@ fn hooks(w: Subject(Ask), name: String) -> placement.Hooks {
       process.call(w, 1000, Join(name, inbox, _))
       Ok(fn() { process.send(w, Leave(name)) })
     },
-    members: fn() { Ok(process.call(w, 1000, Members(name, _))) },
+    members: fn(known) { Ok(process.call(w, 1000, Members(name, known, _))) },
     probe: fn(shard) { Ok(#(0, process.call(w, 1000, Probe(shard, _)))) },
     take: fn(shard) { process.call(w, 1000, Take(name, shard, _)) },
     adopt: fn(shard) { process.call(w, 1000, Adopt(name, shard, _)) },
@@ -432,6 +435,59 @@ pub fn a_node_that_returns_is_given_its_shards_back_once_test() {
   stop([node_a, node_b])
 }
 
+/// The flap: a node that comes back is one name
+/// with two lives, and the survivor's `kz_nodes` drops the name when the
+/// first life's entry runs out -- after the second life's queue is consumed
+/// and before its heartbeat is heard. The returned node stays a member all
+/// the same, since the broker still says its queue is consumed, and its
+/// shards move to it once and never back.
+pub fn a_returned_node_kz_nodes_forgets_stays_a_member_test() {
+  let w = world()
+  let node_a = node(w, a)
+  let node_b = node(w, b)
+  rounds([node_a, node_b], 3)
+  kill(w, node_b)
+  round([node_a])
+  assert list.length(held(w, a)) == 64
+
+  forget_takes(w)
+  let node_b = start(w, b)
+  round([node_a, node_b])
+  assert report(node_a).members == [a, b]
+
+  // The first life's entry runs out on a.
+  change(w, fn(w) { World(..w, listed: dict.insert(w.listed, a, [a])) })
+  rounds([node_a, node_b], 3)
+  assert report(node_a).members == [a, b]
+  assert settled_as_assigned(w, [a, b])
+  assert list.all(takes(w), fn(take) { take.1 == b })
+  assert list.length(takes(w)) == 32
+
+  // The second life's heartbeat is heard, and nothing moves.
+  change(w, fn(w) { World(..w, listed: dict.insert(w.listed, a, [a, b])) })
+  forget_takes(w)
+  rounds([node_a, node_b], 3)
+  assert takes(w) == []
+  stop([node_a, node_b])
+}
+
+/// A node that stops is dropped at once, however long it was a member: the
+/// broker says its queue has no consumer.
+pub fn a_member_that_stops_is_no_member_at_once_test() {
+  let w = world()
+  let node_a = node(w, a)
+  let node_b = node(w, b)
+  rounds([node_a, node_b], 3)
+  change(w, fn(w) { World(..w, listed: dict.insert(w.listed, a, [a])) })
+  round([node_a])
+  assert report(node_a).members == [a, b]
+  kill(w, node_b)
+  round([node_a])
+  assert report(node_a).members == [a]
+  assert list.length(held(w, a)) == 64
+  stop([node_a])
+}
+
 /// A node whose shard count is not the cluster's is no member: it takes
 /// nothing and is given nothing, however long it asks.
 pub fn a_node_with_the_wrong_count_takes_nothing_and_is_given_nothing_test() {
@@ -446,22 +502,22 @@ pub fn a_node_with_the_wrong_count_takes_nothing_and_is_given_nothing_test() {
   stop([node_a, node_b])
 }
 
-/// An agent ringing keeps a shard where it is when its node is asked for
-/// it, until the patience runs out: then it moves ringing.
-pub fn a_shard_with_an_agent_ringing_moves_after_the_patience_test() {
+/// A shard too busy to answer being given up stays where it is when its node
+/// is asked for it, until the patience runs out: then it moves all the same.
+pub fn a_shard_that_does_not_answer_moves_after_the_patience_test() {
   let w = world()
   let node_a = node(w, a)
   round([node_a])
   assert list.length(held(w, a)) == 64
 
   let assigned = shards.assign(count, [a, b])
-  let assert Ok(#(ringing, _b)) =
+  let assert Ok(#(stuck, _b)) =
     dict.to_list(assigned) |> list.find(fn(assigned) { assigned.1 == b })
-  change(w, fn(w) { World(..w, ringing: set.from_list([ringing])) })
+  change(w, fn(w) { World(..w, stuck: set.from_list([stuck])) })
   let node_b = node(w, b)
   rounds([node_a, node_b], 3)
   assert list.length(held(w, b)) == 31
-  assert list.contains(held(w, a), ringing)
+  assert list.contains(held(w, a), stuck)
 
   change(w, fn(w) { World(..w, now: w.now + placement.patience_ms) })
   rounds([node_a, node_b], 2)

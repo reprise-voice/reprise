@@ -14,7 +14,9 @@
 -export([caller_id_number/1, caller_id_number/2, set_caller_id_number/2]).
 -export([cancel_reason/1, cancel_reason/2, set_cancel_reason/2]).
 -export([cancelled/1, cancelled/2, set_cancelled/2]).
+-export([control_queue/1, control_queue/2, set_control_queue/2]).
 -export([ended/1, ended/2, set_ended/2]).
+-export([handoff_id/1, handoff_id/2, set_handoff_id/2]).
 -export([joined/1, joined/2, set_joined/2]).
 -export([offered_to/1, offered_to/2, set_offered_to/2]).
 -export([picked_up/1, picked_up/2, set_picked_up/2]).
@@ -129,6 +131,18 @@ cancelled(Doc, Default) ->
 set_cancelled(Doc, Cancelled) ->
     kz_json:set_value([<<"cancelled">>], Cancelled, Doc).
 
+-spec control_queue(doc()) -> kz_term:api_binary().
+control_queue(Doc) ->
+    control_queue(Doc, 'undefined').
+
+-spec control_queue(doc(), Default) -> binary() | Default.
+control_queue(Doc, Default) ->
+    kz_json:get_binary_value([<<"control_queue">>], Doc, Default).
+
+-spec set_control_queue(doc(), binary()) -> doc().
+set_control_queue(Doc, ControlQueue) ->
+    kz_json:set_value([<<"control_queue">>], ControlQueue, Doc).
+
 -spec ended(doc()) -> kz_term:api_integer().
 ended(Doc) ->
     ended(Doc, 'undefined').
@@ -140,6 +154,18 @@ ended(Doc, Default) ->
 -spec set_ended(doc(), integer()) -> doc().
 set_ended(Doc, Ended) ->
     kz_json:set_value([<<"ended">>], Ended, Doc).
+
+-spec handoff_id(doc()) -> kz_term:api_binary().
+handoff_id(Doc) ->
+    handoff_id(Doc, 'undefined').
+
+-spec handoff_id(doc(), Default) -> binary() | Default.
+handoff_id(Doc, Default) ->
+    kz_json:get_binary_value([<<"handoff_id">>], Doc, Default).
+
+-spec set_handoff_id(doc(), binary()) -> doc().
+set_handoff_id(Doc, HandoffId) ->
+    kz_json:set_value([<<"handoff_id">>], HandoffId, Doc).
 
 -spec joined(doc()) -> kz_term:api_integer().
 joined(Doc) ->

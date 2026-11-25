@@ -18,6 +18,7 @@
         ,add/3
         ]).
 -export([remove/1]).
+-export([register_connection/1]).
 -export([broker_connections/1
         ,connections/0, connections/1, managers/1
         ]).
@@ -42,6 +43,7 @@
 -export([start_link/0]).
 
 -export([init/1
+        ,handle_continue/2
         ,handle_call/3
         ,handle_cast/2
         ,handle_info/2
@@ -54,6 +56,8 @@
 -define(SERVER, ?MODULE).
 
 -define(TAB, ?MODULE).
+%% gen_server:call/2's own default, written out
+-define(CALL_TIMEOUT, 5 * ?MILLISECONDS_IN_SECOND).
 
 -record(state, {watchers = sets:new() :: sets:set(pid())}).
 -type state() :: #state{}.
@@ -108,11 +112,13 @@ add(Broker) -> add(Broker, 'local').
 -spec add(kz_amqp_connection() | kz_term:text(), kz_term:text()) ->
           kz_amqp_connection() |
           {'error', any()}.
-add(#kz_amqp_connection{broker=Broker, tags=Tags}=Connection, Zone) ->
-    case kz_amqp_connection_sup:add(Connection) of
+add(#kz_amqp_connection{broker=Broker}=Connection, Zone) ->
+    %% The connection registers itself as it starts (register_connection/1),
+    %% and so again when its supervisor restarts it after a crash, and when
+    %% this server asks it to after a crash of this server's own.
+    case kz_amqp_connection_sup:add(Connection#kz_amqp_connection{zone=Zone}) of
         {'ok', Pid} ->
             lager:info("new connection proc ~p for ~s", [Pid, Broker]),
-            gen_server:cast(?SERVER, {'new_connection', Pid, Broker, Zone, Tags}),
             Connection;
         {'error', Reason} = Error ->
             lager:warning("unable to start amqp connection to '~s': ~p"
@@ -193,6 +199,31 @@ remove(Broker=?NE_BINARY) ->
                                   },
     remove([Connection || [Connection] <- ets:match(?TAB, Pattern)]).
 
+%% @doc A connection registering itself, from the process that manages it,
+%% with its broker, zone and tags and whether it is available now. It is
+%% sent at two moments:
+%%
+%% - as the manager starts. A connection this server saw go down with an
+%%   error is deleted, and its supervisor's restart is a new process:
+%%   registering at every start, rather than only in add/2, is what puts the
+%%   restarted one back. Without it, the restart connected and marked itself
+%%   available on a record nobody held, primary_broker/0 answered `undefined'
+%%   for good, and no consumer of the node was given a channel again (seen
+%%   with a node frozen until the broker dropped it);
+%% - when this server asks for it (kz_amqp_connection:reregister/1), as it
+%%   starts after a crash of its own: see handle_continue/2.
+%%
+%% Only the manager sends it, so it and the manager's later available/1 and
+%% unavailable/1 arrive here in the order it sent them, and the last one
+%% handled is the manager's latest word on itself.
+-spec register_connection(kz_amqp_connection()) -> 'ok'.
+register_connection(#kz_amqp_connection{broker=Broker
+                                       ,zone=Zone
+                                       ,tags=Tags
+                                       ,available=Available
+                                       }) ->
+    gen_server:cast(?SERVER, {'new_connection', self(), Broker, Zone, Tags, Available}).
+
 %% @doc Change a connection's availability to 'true'
 -spec available(pid()) -> 'ok'.
 available(Connection) when is_pid(Connection) ->
@@ -223,7 +254,7 @@ arbitrator_broker() ->
 %% @doc counts how many connections to Broker (AMQP URI) exist
 -spec broker_connections(kz_term:ne_binary()) -> non_neg_integer().
 broker_connections(Broker) ->
-    gen_server:call(?SERVER, {'broker_connections', Broker}).
+    gen_server:call(?SERVER, {'broker_connections', Broker}, ?CALL_TIMEOUT).
 
 %% @doc returns all kz_amqp_connections() records
 -spec connections() -> [kz_amqp_connections()].
@@ -266,7 +297,7 @@ managers(Broker) ->
 
 -spec broker_available_connections(kz_term:ne_binary()) -> non_neg_integer().
 broker_available_connections(Broker) ->
-    gen_server:call(?SERVER, {'broker_available_connections', Broker}).
+    gen_server:call(?SERVER, {'broker_available_connections', Broker}, ?CALL_TIMEOUT).
 
 %% @doc returns the first Broker URI from the sorted list of
 %% available, non-hidden brokers in the 'local' zone
@@ -353,7 +384,7 @@ wait_for_available(IsAvailableFun, Timeout) ->
 %% @doc Initializes the server.
 %% @end
 %%------------------------------------------------------------------------------
--spec init([]) -> {'ok', state()}.
+-spec init([]) -> {'ok', state(), {'continue', 'relearn_connections'}}.
 init([]) ->
     kz_log:put_callid(?DEFAULT_LOG_SYSTEM_ID),
     _ = ets:new(?TAB, ['named_table'
@@ -361,7 +392,62 @@ init([]) ->
                       ,'protected'
                       ,{'read_concurrency', 'true'}
                       ]),
-    {'ok', #state{}}.
+    {'ok', #state{}, {'continue', 'relearn_connections'}}.
+
+%%------------------------------------------------------------------------------
+%% @doc Relearn the connections that outlived this server.
+%%
+%% The table is this process's, and a crash takes it along. kz_amqp_sup is
+%% one_for_one, so it restarts this server alone: the connections' managers
+%% under kz_amqp_connection_sup live on, connected, but register only as
+%% they start. Left there, the new table stayed empty, primary_broker/0
+%% answered `undefined' for good, and every float consumer on the node was
+%% stranded, deaf to its queues -- the same end as a manager restarted into
+%% nobody's table (register_connection/1).
+%%
+%% So each live manager is asked to register again, and answers with
+%% register_connection/1 from its own process, as it does at its start: its
+%% broker, zone and tags, and whether it is available now. It is a cast both
+%% ways, not a get_connection/1 call from here. A manager can be busy for
+%% seconds (connecting, closing a connection, declaring exchanges on a sick
+%% broker), and a call would either stall this server, and every caller of
+%% broker_connections/1 with it, or time out and leave that manager
+%% unregistered, the state this is here to end. No manager waits on this
+%% server either (it only casts to it and reads the table), so nothing can
+%% deadlock. And the manager's answer and its later available/1 and
+%% unavailable/1 come from one process, in order, so the table ends on its
+%% latest state.
+%%
+%% A manager starting while this runs is not missed. Its own registration,
+%% if sent after this server's name was registered, arrives; if sent before,
+%% it was lost, but the supervisor finished starting it before it answers
+%% which_children/1, so it is asked here. Both arriving is harmless: the
+%% registration is idempotent (see handle_cast/2).
+%%
+%% At first boot kz_amqp_sup starts this server before
+%% kz_amqp_connection_sup, and there is nobody to ask.
+%% @end
+%%------------------------------------------------------------------------------
+-spec handle_continue('relearn_connections', state()) -> {'noreply', state(), 'hibernate'}.
+handle_continue('relearn_connections', State) ->
+    Managers = live_managers(),
+    _ = Managers =/= []
+        andalso lager:info("asking ~b live amqp connection(s) to register again: ~p"
+                          ,[length(Managers), Managers]
+                          ),
+    lists:foreach(fun kz_amqp_connection:reregister/1, Managers),
+    {'noreply', State, 'hibernate'}.
+
+%% The managers kz_amqp_connection_sup has now, or none when it is not
+%% running (first boot, or a restart of kz_amqp_sup's whole tree, where it
+%% starts after this server and its managers register as they start).
+-spec live_managers() -> [pid()].
+live_managers() ->
+    try supervisor:which_children('kz_amqp_connection_sup') of
+        Children -> [Pid || {_Id, Pid, _Type, _Modules} <- Children, is_pid(Pid)]
+    catch
+        'exit':_Reason -> []
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc Handling call messages.
@@ -394,16 +480,26 @@ handle_call(_Msg, _From, State) ->
 %% @end
 %%------------------------------------------------------------------------------
 -spec handle_cast(any(), state()) -> kz_types:handle_cast_ret_state(state()).
-handle_cast({'new_connection', KZConnection, Broker, Zone, Tags}, State) ->
-    Ref = erlang:monitor('process', KZConnection),
+handle_cast({'new_connection', KZConnection, Broker, Zone, Tags, Available}, State) ->
+    %% A manager can register twice with this server (at its start, and when
+    %% asked by handle_continue/2): the record is replaced, with the
+    %% availability the manager gave last, but it keeps its one monitor.
+    Ref = case ets:lookup(?TAB, KZConnection) of
+              [#kz_amqp_connections{connection_ref=Monitor}] -> Monitor;
+              [] -> erlang:monitor('process', KZConnection)
+          end,
     _ = ets:insert(?TAB, #kz_amqp_connections{connection=KZConnection
                                              ,connection_ref=Ref
                                              ,broker=Broker
+                                             ,available=Available
                                              ,zone=Zone
                                              ,tags=Tags
                                              ,hidden=is_hidden_broker(Tags)
                                              }),
-    {'noreply', State, 'hibernate'};
+    case Available of
+        'true' -> {'noreply', notify_watchers(State), 'hibernate'};
+        'false' -> {'noreply', State, 'hibernate'}
+    end;
 handle_cast({'connection_available', Connection}, State) ->
     lager:debug("connection ~p is now available", [Connection]),
     Props = [{#kz_amqp_connections.available, 'true'}],

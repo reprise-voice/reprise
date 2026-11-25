@@ -1,9 +1,8 @@
 //// Script events and time independently of command receipt. Checks run inside
-//// the production loop, so they can assert no media/publication while answer
+//// the production loop, so they can assert nothing is published while answer
 //// execution is delayed. Every test owns its state in its process dictionary.
 
 import cf_callcenter
-import gleam/option.{Some}
 import kazoo/call
 import kazoo/doc.{type Value}
 import kazoo/testing/channel
@@ -14,8 +13,17 @@ pub type Step {
   Check(fn() -> Nil)
 }
 
-/// A caller whose shard holder said it sends to the controller queue: no
-/// listener, and the dispatcher's messages arrive as `cf_exe` relays them.
+/// The passage id every scripted caller joins with.
+pub const handoff_id = "handoff-1"
+
+/// The flows the scripted callflow would go on into.
+pub fn branches() -> Value {
+  doc.object([
+    #("_", doc.object([#("module", doc.String("hangup"))])),
+    #("exit_key", doc.object([#("module", doc.String("voicemail"))])),
+  ])
+}
+
 pub fn new(script: List(Step), now: Int) -> cf_callcenter.Runtime {
   channel.record()
   init(script, now)
@@ -26,20 +34,17 @@ pub fn new(script: List(Step), now: Int) -> cf_callcenter.Runtime {
     answer: call.answer_now,
     destroyed: destroyed,
     publish: publish,
+    reply: fn(reply_to, payload) {
+      note("member_continuing", reply_to)
+      replied(payload)
+    },
+    mark: fn(call, vars) { call.set_channel_vars(call, vars, []) },
     continue_branch: continue_branch,
-    listen: cf_callcenter.no_listener,
+    stop: fn(_call) { note("stop", "") },
+    let_go: fn(_call) { note("let_go", "") },
+    branches: fn(_call) { branches() },
+    handoff_id: fn() { handoff_id },
   )
-}
-
-/// A caller whose shard holder did not say so -- a node of the release
-/// before, or no answer: the action listens on the exchange key. Starting
-/// and stopping the listener are noted as the commands `listen` (the call
-/// id) and `stop_listening`, in order with everything else sent.
-pub fn new_listening(script: List(Step), now: Int) -> cf_callcenter.Runtime {
-  cf_callcenter.Runtime(..new(script, now), listen: fn(_account_id, call_id) {
-    note("listen", call_id)
-    Some(fn() { note("stop_listening", "") })
-  })
 }
 
 @external(erlang, "kazoo_gleam_call_ffi", "note")
@@ -62,6 +67,13 @@ fn publish(shard: Int, name: String, payload: Value) -> Result(Nil, Nil)
 
 @external(erlang, "queue_runtime_ffi", "publications")
 pub fn publications() -> List(#(String, Value))
+
+@external(erlang, "queue_runtime_ffi", "replied")
+fn replied(payload: Value) -> Nil
+
+/// Every answer to a hand-back the action sent, oldest first.
+@external(erlang, "queue_runtime_ffi", "replies")
+pub fn replies() -> List(Value)
 
 @external(erlang, "queue_runtime_ffi", "continue_branch")
 fn continue_branch(call: call.Call, branch: String) -> Nil

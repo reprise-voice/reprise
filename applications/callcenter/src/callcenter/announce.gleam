@@ -133,21 +133,24 @@ pub fn says_anything(settings: Settings, position: Option(Int)) -> Bool {
 
 /// Play one announcement, in place of the hold.
 ///
+/// The hold is flushed first, and with it whatever is queued behind it.
+/// Nothing but the caller's actor sends a waiting caller anything, and it
+/// queues nothing behind the hold -- but the callflow executor that put the
+/// caller in the queue does, if it stops: it queues the channel's hangup on
+/// its way out, where the endless hold keeps it from ever running. An
+/// announcement that only interrupted the hold would let it run as soon as
+/// the announcement ended.
+///
 /// The switch is not waited on: the whole macro goes out as one command and
-/// the caller's own loop hears the `CHANNEL_EXECUTE_COMPLETE` for its `noop`
-/// when it has finished, which is when hold goes back on. Blocking here
-/// would deafen the caller to the agent who answered them halfway through
-/// it.
+/// the actor hears the `CHANNEL_EXECUTE_COMPLETE` of its `noop` when it has
+/// finished, which is when hold goes back on.
 pub fn play(call: Call, items: List(MacroItem)) -> Nil {
+  call.flush(call)
   call.audio_macro_interrupting(call, items)
 }
 
-/// Put the caller back on hold, which is what an announcement ends with.
-///
-/// Queued, never interrupting: an offer may be ringing the caller's agents
-/// from this same channel, and a hold that broke in on it would play music
-/// into the bridge. Queued behind a ringing bridge the hold waits, and runs
-/// only when the ring comes to nothing.
+/// Put the caller back on hold, which is what an announcement ends with:
+/// queued behind it, so that it starts when the announcement has finished.
 pub fn resume_hold(call: Call, moh: Option(String)) -> Nil {
   call.hold_queued(call, moh)
 }

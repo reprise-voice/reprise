@@ -2,9 +2,12 @@
 ////
 //// Two messages. `member_call` is a caller who has entered a queue: the
 //// account, the queue, the call, when the caller arrived and which node ran
-//// the callflow that put them there. `member_cancel` is that caller leaving
-//// again -- an abandon, a timeout, an exit key -- and it is what settles the
-//// `member_call` the shard is holding unacked.
+//// the callflow that put them there. `member_cancel` is that caller taken
+//// out again from outside their actor -- an operator settling them by hand
+//// through `sup`, or the callflow action of an older release, which said
+//// an abandon, a timeout or an exit key this way -- and it settles the
+//// `member_call` the shard is holding unacked. A caller's actor says their
+//// leaving to the shard directly (`CallerLeft`).
 ////
 //// The decoder is total and takes what it recognises. A message this
 //// release does not understand is not a crash in a listener: it is a member
@@ -69,6 +72,12 @@ pub type Member {
     call: Value,
     caller_id_name: Option(String),
     caller_id_number: Option(String),
+    /// The passage's own id (`Handoff-ID`), empty when the message did not
+    /// say.
+    handoff_id: String,
+    /// The flows the callflow goes on into when the caller leaves
+    /// (`Branches`), an empty object when the message did not say.
+    branches: Value,
   )
 }
 
@@ -86,6 +95,8 @@ pub fn decode(value: Value) -> Member {
     call: doc.get(value, ["Call"]) |> result.unwrap(doc.object([])),
     caller_id_name: fields.some_string(value, ["Caller-ID-Name"]),
     caller_id_number: fields.some_string(value, ["Caller-ID-Number"]),
+    handoff_id: fields.string_at(value, ["Handoff-ID"], ""),
+    branches: doc.get(value, ["Branches"]) |> result.unwrap(doc.object([])),
   )
 }
 
@@ -112,10 +123,22 @@ pub fn arrival(value: Value, delivery: Delivery) -> Option(types.Member) {
         callflow_node: option.unwrap(arrival.node, ""),
         caller_id_name: arrival.caller_id_name,
         caller_id_number: arrival.caller_id_number,
+        handoff_id: case arrival.handoff_id {
+          "" -> handoff_of(arrival.call_id, arrival.joined_at)
+          id -> id
+        },
+        branches: arrival.branches,
         delivery: delivery,
       ))
     _not_a_caller, _, _ -> None
   }
+}
+
+/// The passage id of a member whose sender gave none: the call and the
+/// second it joined, which is what tells one passage from another anywhere
+/// else in the application.
+pub fn handoff_of(call_id: String, joined: Int) -> String {
+  call_id <> "-" <> int.to_string(joined)
 }
 
 // --- When the caller entered the system ------------------------------------
@@ -158,10 +181,11 @@ pub fn system_joined_value(value: Value) -> Option(Int) {
 
 /// A delivery that settles nothing.
 ///
-/// What a caller rebuilt from their own `queue_call` document carries: the
-/// message they arrived on was acked by the node that connected them, which
-/// then died before it could close the record. There is nothing left on a
-/// broker to settle, and settling this one is a no-op rather than an error.
+/// What a caller rebuilt from their own `queue_call` document carries
+/// (`reconcile.rebuilt`). Settling it is a no-op rather than an error: the
+/// member it stands for is gone -- settled by an earlier release as the
+/// call was answered, or lost -- or still on its way to the shard, and
+/// takes the adopted call's place as it arrives.
 @external(erlang, "callcenter_ffi", "unsettled_delivery")
 pub fn no_delivery() -> Delivery
 

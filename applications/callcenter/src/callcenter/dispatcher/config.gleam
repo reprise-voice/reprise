@@ -6,21 +6,22 @@
 //// `dispatcher.config` is `live`.
 
 import callcenter/activity
-import callcenter/offer
+import callcenter/call/actor
+import callcenter/call/calls
 import callcenter/presence
 import callcenter/queue_doc
-import callcenter/takeover
-import callcenter/types.{type Member}
-import gleam/erlang/process.{type Pid}
-import kazoo/call
+import callcenter/shards
+import callcenter/stall
+import callcenter/types.{type Member, type OfferId, type OfferReply}
+import gleam/erlang/process.{type Pid, type Subject}
+import gleam/option.{type Option, Some}
 import kazoo/kazoo.{type Kazoo}
 import kazoo/listener
 import kazoo/modb
 
-/// What the dispatcher is, and the two things it is given rather than
-/// finding for itself: the clock, so a test can hold time still, and the
-/// function that rings an agent, so this module does not depend on the one
-/// that does.
+/// What the dispatcher is, and the things it is given rather than finding
+/// for itself: the clock, so a test can hold time still, and its callers'
+/// actors, so this module does not depend on the ones that command them.
 pub type Config {
   Config(
     kz: Kazoo,
@@ -36,14 +37,6 @@ pub type Config {
     queue_refresh_s: Int,
     /// Gregorian seconds.
     now: fn() -> Int,
-    /// Watch a caller whose offer, or whose conversation, was left behind by
-    /// a node that died, instead of ringing over it.
-    ///
-    /// `takeover.start` on a node and a fake in the tests, for the same
-    /// reason the offer is a function: what this actor does with the replies
-    /// is the part worth testing, and neither a switch nor a broker is there
-    /// to produce them.
-    start_watch: fn(takeover.Request) -> Result(Pid, String),
     /// Settle a caller's member message: the broker may forget them.
     ///
     /// It is `listener.ack` on a node and nothing else, and it is here as a
@@ -60,23 +53,77 @@ pub type Config {
     /// a node, whatever a test says in the tests. An `Error` is an activity
     /// actor that did not answer, and nobody is offered on it.
     activity: fn() -> Result(activity.Reading, String),
-    /// Call off the ring an offer has going on a caller's channel:
-    /// `kazoo/call.unbridge` on the call the member carries, on a node; a
-    /// recorder in the tests. The caller stays: the bridge ends with
-    /// `ORIGINATOR_CANCEL`, the offer replies, and the callflow action puts
-    /// them back on hold.
-    call_off: fn(Member) -> Nil,
-    /// Tell an offer's process its ring has been called off, whether the
-    /// dispatcher unbridges it, and the member held for the caller now,
-    /// whose call names the control queue an unbridge of the offer's own
-    /// goes to: `offer.call_off` on a node, a recorder in the tests. See
-    /// `offers.stop`.
-    stop_offer: fn(Pid, Bool, Member) -> Nil,
+    /// The callers' actors (`callcenter/call/actor`), each the one process
+    /// commanding one caller: the shard's own on a node, recorders in the
+    /// tests.
+    calls: Calls,
+    /// Whether this dispatcher may still act for its shard: no stall of the
+    /// node since it was started (`callcenter/stall`). Always, in the
+    /// tests that are not about a stall.
+    fresh: fn() -> Bool,
+  )
+}
+
+/// What the dispatcher tells its callers' actors. Every one names the
+/// caller by their member; the offers are rung through the function the
+/// dispatcher is started with, which is the same actors'.
+pub type Calls {
+  Calls(
+    /// A caller joined, or was delivered again: `True` when this dispatcher
+    /// did not see them join, and the actor is to say where they stand
+    /// (`Present`, on the subject given). Starts the caller's actor if they
+    /// have none, and answers its pid.
+    join: fn(Member, Bool, Subject(#(OfferId, OfferReply))) ->
+      Result(Pid, String),
+    /// A call a node that died connected, to be watched to its end under
+    /// the offer given: the agent, the agent's leg, when it was answered.
+    adopt: fn(
+      Member,
+      OfferId,
+      String,
+      String,
+      Int,
+      Subject(#(OfferId, OfferReply)),
+    ) -> Result(Pid, String),
+    /// Call an offer's ring off. The actor hangs its legs up, and says
+    /// `Failed(called_off)` once the ring is over -- or `Answered`, when an
+    /// agent picked up before the call-off reached it.
+    call_off: fn(Member, OfferId) -> Nil,
+    /// The caller's queue was deleted: they leave it on `no_agents`.
+    queue_gone: fn(Member) -> Nil,
+    /// Where the caller stands: position, callers waiting, agents free when
+    /// the dispatcher can say.
+    positioned: fn(Member, Int, Int, Option(Int)) -> Nil,
+  )
+}
+
+/// The actors of one shard's calls, reached through its registry.
+pub fn calls_of(registry: Subject(calls.Message)) -> Calls {
+  Calls(
+    join: fn(member, resumed, reply_to) {
+      calls.join(registry, member, resumed, reply_to)
+    },
+    adopt: fn(member, offer, agent_id, leg, at, reply_to) {
+      calls.adopt(registry, member, offer, agent_id, leg, at, reply_to)
+    },
+    call_off: fn(member, offer) {
+      calls.tell(registry, member, actor.CallOff(offer))
+    },
+    queue_gone: fn(member) { calls.tell(registry, member, actor.QueueGone) },
+    positioned: fn(member, position, waiting, available) {
+      calls.tell(
+        registry,
+        member,
+        actor.Positioned(Some(position), Some(waiting), available),
+      )
+    },
   )
 }
 
 /// The configuration a node runs with.
 pub fn live(kz: Kazoo, account_id: String) -> Config {
+  // Built as the dispatcher is started, so this is when it started.
+  let since = stall.now_ms()
   Config(
     kz: kz,
     account_id: account_id,
@@ -93,7 +140,6 @@ pub fn live(kz: Kazoo, account_id: String) -> Config {
       _invalid -> queue_doc.default_refresh_s
     },
     now: modb.now,
-    start_watch: takeover.start,
     settle: fn(member: Member) { listener.ack(member.delivery) },
     lamp: fn(agent_id, state) {
       let _ =
@@ -104,7 +150,9 @@ pub fn live(kz: Kazoo, account_id: String) -> Config {
       Nil
     },
     activity: fn() { activity.snapshot(account_id) },
-    call_off: fn(member: Member) { call.unbridge(call.from_value(member.call)) },
-    stop_offer: offer.call_off,
+    calls: calls_of(
+      calls.of_shard(shards.of_account(account_id, shards.count(kz))),
+    ),
+    fresh: fn() { stall.fresh(since) },
   )
 }

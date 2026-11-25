@@ -17,6 +17,7 @@
 -export([declare_exchange/2, declare_exchange/3]).
 -export([exchange_bind/2, exchange_bind/3]).
 -export([create_prechannel/1]).
+-export([reregister/1]).
 -export([disconnect/1]).
 -export([init/1
         ,handle_call/3
@@ -42,6 +43,8 @@
 -define(START_TIMEOUT, 1500).
 -define(MAX_TIMEOUT, 5 * ?MILLISECONDS_IN_SECOND).
 -define(MAX_REMOTE_TIMEOUT, ?MILLISECONDS_IN_MINUTE).
+%% gen_server:call/2's own default, written out
+-define(CALL_TIMEOUT, 5 * ?MILLISECONDS_IN_SECOND).
 
 -define(SERVER_REPLY_NOT_FOUND, {'shutdown',{'server_initiated_close',404,_}}).
 
@@ -59,7 +62,7 @@ start_link(#kz_amqp_connection{}=Connection) ->
 
 -spec get_connection(pid()) -> kz_amqp_connection().
 get_connection(Srv) ->
-    gen_server:call(Srv, 'get_connection').
+    gen_server:call(Srv, 'get_connection', ?CALL_TIMEOUT).
 
 -spec info(pid() | kz_amqp_connections()) -> list() | {error, connection_not_available}.
 info(#kz_amqp_connections{connection = Pid}) ->
@@ -71,7 +74,7 @@ info(ConnectionPID) ->
 info(#kz_amqp_connections{connection = Pid}, InfoList) ->
     info(Pid, InfoList);
 info(ConnectionPID, InfoList) ->
-    gen_server:call(ConnectionPID, {info, InfoList}).
+    gen_server:call(ConnectionPID, {info, InfoList}, ?CALL_TIMEOUT).
 
 -spec info_keys() -> [atom()].
 info_keys() ->
@@ -81,27 +84,36 @@ info_keys() ->
 info_keys(#kz_amqp_connections{connection = Pid}) ->
     info_keys(Pid);
 info_keys(ConnectionPID) ->
-    gen_server:call(ConnectionPID, info_keys).
+    gen_server:call(ConnectionPID, info_keys, ?CALL_TIMEOUT).
 
 -spec declare_exchange(pid(), kz_amqp_exchange()) -> 'ok' | {'error', any()}.
 declare_exchange(Srv, Exchange) ->
-    gen_server:call(Srv, {'declare_exchange', Exchange}).
+    gen_server:call(Srv, {'declare_exchange', Exchange}, ?CALL_TIMEOUT).
 
 -spec declare_exchange(pid(), pid(), kz_amqp_exchange()) -> 'ok' | {'error', any()}.
 declare_exchange(Srv, Channel, Exchange) ->
-    gen_server:call(Srv, {'declare_exchange', Channel, Exchange}).
+    gen_server:call(Srv, {'declare_exchange', Channel, Exchange}, ?CALL_TIMEOUT).
 
 -spec exchange_bind(pid(), kz_amqp_exchange_binding()) -> 'ok' | {'error', any()}.
 exchange_bind(Srv, Binding) ->
-    gen_server:call(Srv, {'exchange_bind', Binding}).
+    gen_server:call(Srv, {'exchange_bind', Binding}, ?CALL_TIMEOUT).
 
 -spec exchange_bind(pid(), pid(), kz_amqp_exchange_binding()) -> 'ok' | {'error', any()}.
 exchange_bind(Srv, Channel, Binding) ->
-    gen_server:call(Srv, {'exchange_bind', Channel, Binding}).
+    gen_server:call(Srv, {'exchange_bind', Channel, Binding}, ?CALL_TIMEOUT).
 
 -spec create_prechannel(pid()) -> 'ok'.
 create_prechannel(Srv) ->
     gen_server:cast(Srv, 'create_prechannel').
+
+%% @doc Ask a connection's manager to register with kz_amqp_connections
+%% again, with what it is now. kz_amqp_connections asks it as it restarts
+%% after a crash of its own, which lost its table while the connections
+%% lived on. A cast: the manager answers when it is free, with
+%% kz_amqp_connections:register_connection/1, and nobody waits on anybody.
+-spec reregister(pid()) -> 'ok'.
+reregister(Srv) ->
+    gen_server:cast(Srv, 'register_connection').
 
 -spec disconnect(pid()) -> 'ok'.
 disconnect(Srv) ->
@@ -127,6 +139,12 @@ zone(#kz_amqp_connections{zone=Zone}) ->
 init([#kz_amqp_connection{}=Connection]) ->
     _ = process_flag('trap_exit', 'true'),
     kz_log:put_callid(?DEFAULT_LOG_SYSTEM_ID),
+    %% On every start, its supervisor's restart after a crash included: the
+    %% crashed process's record was deleted, and without this one nothing
+    %% names the broker primary again. (A restart of kz_amqp_connections
+    %% itself is covered by its asking, see reregister/1.) The connection
+    %% given here has not connected yet, so it registers as not available.
+    kz_amqp_connections:register_connection(Connection),
 
     {'ok', disconnected(Connection#kz_amqp_connection{manager=self()})}.
 
@@ -140,11 +158,11 @@ handle_call('get_connection', _, Connection) ->
 handle_call({info, _Items}, _From, #kz_amqp_connection{available=false} = Connection) ->
     {reply, {error, connection_not_available}, Connection};
 handle_call({info, Items}, _From, #kz_amqp_connection{connection = AMQPConnectionPID} = Connection) ->
-    {'reply', amqp_connection:info(AMQPConnectionPID, Items), Connection};
+    {'reply', connection_info(fun() -> amqp_connection:info(AMQPConnectionPID, Items) end), Connection};
 handle_call(info_keys, _From, #kz_amqp_connection{available=false} = Connection) ->
     {reply, {error, connection_not_available}, Connection};
 handle_call(info_keys, _From, #kz_amqp_connection{connection = AMQPConnectionPID} = Connection) ->
-    {'reply', amqp_connection:info_keys(AMQPConnectionPID), Connection};
+    {'reply', connection_info(fun() -> amqp_connection:info_keys(AMQPConnectionPID) end), Connection};
 handle_call('stop', _From, Connection) ->
     lager:info("stopping from ~p", [_From]),
     {'stop', 'normal', 'ok', disconnected(Connection)};
@@ -222,6 +240,11 @@ handle_cast('create_prechannel'
            ,#kz_amqp_connection{available='true'}=Connection
            ) ->
     _ = kz_process:spawn(fun establish_prechannel/1, [Connection]),
+    {'noreply', Connection, 'hibernate'};
+handle_cast('register_connection', Connection) ->
+    %% kz_amqp_connections restarted with an empty table (reregister/1):
+    %% tell it again who this is, and whether it is available now.
+    kz_amqp_connections:register_connection(Connection),
     {'noreply', Connection, 'hibernate'};
 handle_cast(_Msg, Connection) ->
     lager:debug("unhandled cast : ~p : ~p", [_Msg, Connection]),
@@ -311,6 +334,23 @@ code_change(_OldVsn, Connection, _Extra) ->
 %%%=============================================================================
 %%% Internal functions
 %%%=============================================================================
+
+%%------------------------------------------------------------------------------
+%% @doc What the broker says of the connection, or `connection_not_available'
+%% when the connection has gone and its `DOWN' is not handled yet. A call
+%% into a dead connection exits, and this server must not exit with it: the
+%% heartbeat of `kz_nodes' asks for `channel_max' every few seconds, and the
+%% first one after the broker dropped a node used to take this server down.
+%% @end
+%%------------------------------------------------------------------------------
+-spec connection_info(fun(() -> any())) -> any().
+connection_info(Info) ->
+    try Info()
+    catch
+        _E:_R ->
+            lager:info("amqp connection info not available: ~s: ~p", [_E, _R]),
+            {'error', 'connection_not_available'}
+    end.
 
 %%------------------------------------------------------------------------------
 %% @doc

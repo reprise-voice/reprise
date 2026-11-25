@@ -7,12 +7,14 @@
 
 -export([new/0]).
 -export([account_id/1, account_id/2, set_account_id/2]).
+-export([branches/1, branches/2, set_branches/2]).
 -export([call/1, call/2, set_call/2]).
 -export([caller_id_name/1, caller_id_name/2, set_caller_id_name/2]).
 -export([caller_id_number/1, caller_id_number/2, set_caller_id_number/2]).
 -export([callflow_node/1, callflow_node/2, set_callflow_node/2]).
 -export([event_category/1, event_category/2, set_event_category/2]).
 -export([event_name/1, event_name/2, set_event_name/2]).
+-export([handoff_id/1, handoff_id/2, set_handoff_id/2]).
 -export([joined_timestamp/1, joined_timestamp/2, set_joined_timestamp/2]).
 -export([priority/1, priority/2, set_priority/2]).
 -export([queue_id/1, queue_id/2, set_queue_id/2]).
@@ -41,6 +43,18 @@ account_id(Doc, Default) ->
 -spec set_account_id(doc(), binary()) -> doc().
 set_account_id(Doc, AccountId) ->
     kz_json:set_value([<<"Account_ID">>], AccountId, Doc).
+
+-spec branches(doc()) -> kz_term:api_object().
+branches(Doc) ->
+    branches(Doc, 'undefined').
+
+-spec branches(doc(), Default) -> kz_json:object() | Default.
+branches(Doc, Default) ->
+    kz_json:get_json_value([<<"Branches">>], Doc, Default).
+
+-spec set_branches(doc(), kz_json:object()) -> doc().
+set_branches(Doc, Branches) ->
+    kz_json:set_value([<<"Branches">>], Branches, Doc).
 
 -spec call(doc()) -> kz_term:api_object().
 call(Doc) ->
@@ -113,6 +127,18 @@ event_name(Doc, Default) ->
 -spec set_event_name(doc(), binary()) -> doc().
 set_event_name(Doc, EventName) ->
     kz_json:set_value([<<"Event_Name">>], EventName, Doc).
+
+-spec handoff_id(doc()) -> kz_term:api_binary().
+handoff_id(Doc) ->
+    handoff_id(Doc, 'undefined').
+
+-spec handoff_id(doc(), Default) -> binary() | Default.
+handoff_id(Doc, Default) ->
+    kz_json:get_binary_value([<<"Handoff_ID">>], Doc, Default).
+
+-spec set_handoff_id(doc(), binary()) -> doc().
+set_handoff_id(Doc, HandoffId) ->
+    kz_json:set_value([<<"Handoff_ID">>], HandoffId, Doc).
 
 -spec joined_timestamp(doc()) -> kz_term:api_integer().
 joined_timestamp(Doc) ->

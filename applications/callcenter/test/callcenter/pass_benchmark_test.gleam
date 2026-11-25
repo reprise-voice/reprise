@@ -38,6 +38,7 @@ import kazoo/kazoo.{type Kazoo, Kazoo}
 import kazoo/testing/fake
 import support/cluster
 import support/fake_activity
+import support/fake_calls
 import support/fake_offer
 
 const agents = 500
@@ -312,13 +313,7 @@ fn setup_on(
         )
       #(
         member.call_id,
-        Wait(
-          member: member,
-          position: 0,
-          announced_at: 0,
-          rerun: False,
-          tried: [],
-        ),
+        Wait(member: member, position: 0, announced_at: 0, tried: []),
       )
     })
     |> dict.from_list
@@ -332,20 +327,21 @@ fn setup_on(
         default_no_answer_status: "on_break",
         queue_refresh_s: queue_doc.default_refresh_s,
         now: kz.now,
-        start_watch: fn(_request) { Error("no watches here") },
         settle: fn(_member) { Nil },
         lamp: fn(_agent_id, _state) { Nil },
         activity: fake_activity.reader(fake_activities),
-        call_off: fn(_member) { Nil },
-        stop_offer: fn(_pid, _unbridged, _member) { Nil },
+        calls: fake_calls.nothing(),
+        fresh: fn() { True },
       ),
       ticks: process.new_subject(),
       replies: process.new_subject(),
       start_offer: fake_offer.start_offer(offers),
       waiting: waiting,
       offers: dict.new(),
+      actors: dict.new(),
+      presenting: dict.new(),
+      departing: dict.new(),
       pickups: dict.new(),
-      leaving: dict.new(),
       busy: dict.new(),
       delayed: dict.new(),
       wrapup: dict.new(),

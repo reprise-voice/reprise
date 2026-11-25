@@ -7,10 +7,6 @@
             "description": "Account the event belongs to",
             "type": "string"
         },
-        "Caller-Delivery": {
-            "description": "How the answering node's dispatchers reach a waiting caller: controller, at the caller's controller queue. An answer without it is from a node that publishes only on the caller's exchange key",
-            "type": "string"
-        },
         "Event-Category": {
             "enum": [
                 "callcenter"

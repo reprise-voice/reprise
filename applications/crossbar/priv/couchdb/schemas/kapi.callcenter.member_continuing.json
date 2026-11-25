@@ -1,0 +1,32 @@
+{
+    "$schema": "http://json-schema.org/draft-04/schema#",
+    "_id": "kapi.callcenter.member_continuing",
+    "description": "The callflow has a caller the queue handed back",
+    "properties": {
+        "Call-ID": {
+            "description": "Call-ID of the caller",
+            "type": "string"
+        },
+        "Event-Category": {
+            "enum": [
+                "callcenter"
+            ],
+            "type": "string"
+        },
+        "Event-Name": {
+            "enum": [
+                "member_continuing"
+            ],
+            "type": "string"
+        },
+        "Handoff-ID": {
+            "description": "The passage's own, from the member_continue",
+            "type": "string"
+        }
+    },
+    "required": [
+        "Call-ID",
+        "Handoff-ID"
+    ],
+    "type": "object"
+}

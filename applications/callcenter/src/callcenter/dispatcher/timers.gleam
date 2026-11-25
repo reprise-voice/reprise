@@ -90,23 +90,26 @@ fn expire_wrapups(state: State, now: Int) -> State {
 }
 
 /// Requirement 0.6: an offer has a ceiling, so an agent can never be left
-/// ringing because a bridge result was missed. Past it the agents are
+/// ringing because a ring's end was missed. Past it the agents are
 /// released.
 ///
-/// An offer that had a process is only taken back once that process has
-/// gone (`still_ringing`), and a process that went without a reply is a
-/// crash, which is what `offers.down` closes when the monitor says so: its
-/// ring called off, `Failed`, nobody's miss. The tick can see the process
-/// gone before that word has been heard, and closes it the same way
-/// (`offers.lost`) -- read as a no answer instead, every agent it rang was
-/// charged a miss, and possibly stood down, for a ring left going on the
-/// caller's channel with nobody to call it off. An offer with no process
-/// to ask is counted as a no answer.
+/// An offer whose caller's actor is alive is only taken back once the
+/// actor has had `actor_slack_s` past the ceiling to say how it went: the
+/// actor gives up on a ring at the same ceiling and says so, so an actor
+/// that has not is one that lost it. One whose actor has gone without a
+/// reply is a crash, which is what `offers.down` closes when the monitor
+/// says so: `Failed`, nobody's miss. The tick can see the actor gone before
+/// that word has been heard, and closes it the same way (`offers.lost`) --
+/// read as a no answer instead, every agent it rang was charged a miss, and
+/// possibly stood down, for a ring nobody could hear. An offer with no
+/// actor to ask is counted as a no answer, unless it was called off.
 fn expire_offers(state: State, now: Int) -> State {
   let stuck =
     dict.values(state.offers)
     |> list.filter(fn(offer) {
-      offer.connected == None && offer.ceiling <= now && !still_ringing(offer)
+      offer.connected == None
+      && offer.ceiling <= now
+      && { !still_ringing(offer) || offer.ceiling + actor_slack_s <= now }
     })
   list.fold(stuck, state, fn(state, offer) {
     use <- unless_pickup(state, offer, now)
@@ -146,8 +149,7 @@ fn unless_pickup(
   }
 }
 
-/// A connected call with nothing watching it: its offer's or takeover's
-/// process is gone. Its monitor normally says so the moment it goes
+/// A connected call with nothing watching it: its caller's actor is gone. Its monitor normally says so the moment it goes
 /// (`offers.down`); this is the backstop for one whose word was lost, so
 /// that an agent is never held busy until the sweep's ten minutes come round
 /// by a call nobody will ever report the end of. It is closed the way `down`
@@ -178,6 +180,10 @@ fn expire_calls(state: State, now: Int) -> State {
 /// alive has not finished: its phones may still be ringing, and taking it
 /// back now would free agents who are still being rung and charge them a miss
 /// for a ring whose real outcome would then be dropped as stale.
+/// How long past an offer's ceiling an actor still alive is given to say
+/// how its ring went.
+const actor_slack_s = 60
+
 fn still_ringing(offer: Offer) -> Bool {
   case offer.pid {
     Some(pid) -> process.is_alive(pid)

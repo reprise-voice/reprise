@@ -29,9 +29,34 @@
         having inbound_codecs and outbound_codecs separately
         allows to only send a small codec list for outbound calls when
         the endpoint codec list is empty
+
+        inbound_codecs is the priority list: the profile negotiates
+        greedy, so a caller's leg takes the first of these it offers, and
+        a callee is offered the caller's codecs in this order. G722 first
+        keeps calls between wideband phones and apps wideband, and a
+        carrier's HD Voice service that delivers mobile calls as G722
+        stays wideband too; anything else falls back to G.711.
+
+        list only codecs this build can encode and decode. A codec that
+        is only passed through (AMR and G723 without their libraries;
+        AMR-WB and G7221 are not built at all) leaves a call silent once
+        its other leg, after a transfer say, takes something else.
+
+        outbound_codecs follow the caller's codecs in an offer, and are
+        the whole offer for a leg with no caller (click-to-call, quickcall,
+        originate).
     -->
-    <z-PRE-PROCESS cmd="set" data="inbound_codecs=PCMU,AMR-WB,AMR,OPUS,G723,G7231,G726-16,G726-40,G7221@32000h,G7221@16000h,G722,PCMA,VP8,H264,VP9,red,ulpfec"/>
-    <X-PRE-PROCESS cmd="set" data="inbound_codecs=PCMU,AMR-WB,AMR,OPUS,G723,G7231,G726-16,G726-40,G7221@32000h,G7221@16000h,G722,PCMA,VP8,H264,VP9"/>
-    <X-PRE-PROCESS cmd="set" data="outbound_codecs=PCMU,PCMA,AMR-WB,G722"/>
+    <X-PRE-PROCESS cmd="set" data="inbound_codecs=G722,PCMU,PCMA,OPUS,VP8,H264,VP9"/>
+    <X-PRE-PROCESS cmd="set" data="outbound_codecs=G722,PCMU,PCMA"/>
+
+    <!--
+        the caller's leg takes the codec its callee answered with, when the
+        caller offered it, rather than picking its own: late negotiation
+        then ends with both legs on one codec and nothing transcoded.
+        Bridges that set inherit_codec themselves (click-to-call,
+        quickcall, doorman) keep their own value.
+    -->
+    <X-PRE-PROCESS cmd="set" data="inherit_codec=true"/>
+
 
 </include>

@@ -1,14 +1,16 @@
-//// What the caller's action is told about an offer, and when: the
-//// dispatcher against a fake offer, with the broker standing in so that
-//// what it publishes can be read back.
+//// What is told about an offer, and when: the dispatcher against a fake
+//// offer, with the broker standing in so that what it publishes can be
+//// read back, and the callers' actors recorded.
 
 import callcenter/dispatcher
 import callcenter/dispatcher/config
 import callcenter/dispatcher/offers
 import callcenter/dispatcher/state.{Offer, State}
 import callcenter/types.{
-  type Member, ExitKey, Failed, Hangup, OfferNoAnswer, OfferRinging, Timeout,
+  type Member, ExitKey, Failed, Hangup, OfferNoAnswer, OfferRinging,
+  QueueDeleted, Timeout,
 }
+import gleam/dict
 import gleam/erlang/process
 import gleam/list
 import gleam/option.{Some}
@@ -58,12 +60,68 @@ fn release(c: cluster.Cluster, agent_id: String) -> Nil {
   cluster.sync(c)
 }
 
+// --- An actor shut down ----------------------------------------------------
+
+/// The offer under an actor its supervisor shut down is let go of: dropped,
+/// its agents freed, and nothing else -- no outcome written, no miss, no
+/// call-off, nothing published -- since the call goes on under whoever has
+/// the caller's actor next (`dispatcher.OfferDown`). The caller stays
+/// waiting, for a new actor to be joined to. Only the offer under that actor
+/// goes, and an actor holding none changes nothing.
+pub fn an_offer_let_go_of_frees_its_agents_and_nothing_else_test() {
+  let platform = platform_start()
+  let gone = process.spawn_unlinked(fn() { process.sleep_forever() })
+  let other = process.spawn_unlinked(fn() { process.sleep_forever() })
+  let stray = process.spawn_unlinked(fn() { process.sleep_forever() })
+  let ring =
+    Offer(..bare_state.offer("call-one", ["ann", "bob"]), pid: Some(gone))
+  let kept = Offer(..bare_state.offer("call-two", ["cal"]), pid: Some(other))
+  let before =
+    bare_state.new()
+    |> bare_state.waiting("call-one")
+    |> bare_state.waiting("call-two")
+    |> bare_state.held(ring)
+    |> bare_state.held(kept)
+  let events = list.length(published_events())
+
+  let after = offers.let_go(before, gone)
+  assert dict.keys(after.offers) == ["call-two"]
+  assert dict.to_list(after.busy) == [#("cal", kept.id)]
+  assert dict.has_key(after.waiting, "call-one")
+  assert list.length(published_events()) == events
+  assert offers.let_go(before, stray) == before
+
+  list.each([gone, other, stray], process.kill)
+  platform_stop(platform)
+}
+
+/// A deleted queue's caller whose departure a node taking them over takes
+/// up again is not told of twice: the node that took them out of the queue
+/// published their `member_result` then. One the dispatcher takes out of
+/// the queue itself is told of.
+pub fn a_departure_taken_up_again_is_not_told_twice_test() {
+  let platform = platform_start()
+  let results = fn() {
+    published_events()
+    |> list.filter(fn(event) { event.1 == "member_result" })
+    |> list.length
+  }
+  let state = bare_state.new() |> bare_state.waiting("call-one")
+  let before = results()
+  let _ = offers.depart(state, "call-one", QueueDeleted)
+  let departed = results()
+  let _ = offers.leave(state, "call-one", QueueDeleted)
+  let left = results()
+  platform_stop(platform)
+  assert departed == before
+  assert left == before + 1
+}
+
 // --- member_offer follows the bridge ---------------------------------------
 
-/// The action hears `member_offer` once the offer says its bridge went out,
-/// and not when the offer is only asked for. An offer that fails before it
-/// rings -- here, nothing of the agent's to ring -- never told the action
-/// anything, so nothing is left believing in a ring.
+/// `member_offer` goes out once the actor says the ring went out, and not
+/// when the offer is only asked for. An offer that fails before it rings --
+/// here, nothing of the agent's to ring -- is never told as one.
 pub fn member_offer_waits_for_the_bridge_test() {
   let platform = platform_start()
   let c = ann_alone()
@@ -88,8 +146,7 @@ pub fn member_offer_waits_for_the_bridge_test() {
 }
 
 /// An agent whose every device is disabled fails every offer before it
-/// rings, pass after pass. The caller is never told they are being offered,
-/// so their no-agent clock runs and their announcements fall due.
+/// rings, pass after pass, and none of it is told as an offer.
 pub fn nothing_to_ring_is_never_an_offer_test() {
   let platform = platform_start()
   let c = ann_alone()
@@ -107,8 +164,8 @@ pub fn nothing_to_ring_is_never_an_offer_test() {
   assert told == 0
 }
 
-/// A ring called off before it went out is not told either: it is being
-/// unbridged the moment it is out.
+/// A ring called off before it went out is not told either: the actor
+/// calls it off the moment it is out.
 pub fn a_ring_called_off_before_it_went_out_is_not_told_test() {
   let platform = platform_start()
   let c = ann_alone()
@@ -124,11 +181,9 @@ pub fn a_ring_called_off_before_it_went_out_is_not_told_test() {
 
 // --- The end of a ring the channel did not show -----------------------------
 
-/// A ring the action was told of that ends unanswered has the caller's
-/// position published again, saying no offer is in flight: the action's
-/// word for the end of a ring whose bridge never finished on its channel.
-/// While an offer is in flight -- asked for, or ringing -- the position says
-/// one is.
+/// A ring that was told of and ends unanswered has the caller's position
+/// published again, saying no offer is in flight. While an offer is in
+/// flight -- asked for, or ringing -- the position says one is.
 pub fn the_end_of_a_ring_is_told_with_the_position_test() {
   let platform = platform_start()
   let c = ann_alone()
@@ -147,18 +202,17 @@ pub fn the_end_of_a_ring_is_told_with_the_position_test() {
 // --- A caller leaving while an offer is in flight ---------------------------
 
 /// A caller leaving -- an exit key, a timeout -- while their phones ring has
-/// the ring called off by the offer's process, which unbridges it unless it
-/// has seen it end. The dispatcher sends no unbridge of its own: the caller's
-/// action unbridged the ring too and goes on once it ends, and one from here
-/// could land in the next callflow action's ring. The agents go free at once.
+/// the ring called off by their actor, which decided they left; the
+/// dispatcher's call-off, for a caller taken out any other way, is nothing
+/// to an actor that has already let the ring go. The agents go free at
+/// once.
 pub fn a_caller_leaving_during_the_ring_calls_it_off_test() {
   let c = ann_alone()
   cluster.arrive(c, "call-one", "support", 0, 0)
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
 
   assert cluster.cancel(c, "call-one", ExitKey)
-  assert cluster.called_off(c) == []
-  assert cluster.stopped(c) == ["call-one to unbridge"]
+  assert cluster.called_off(c) == ["call-one"]
   assert cluster.all_ringing(c) == []
 
   // Ann takes the next caller at once, and the called-off offer's reply,
@@ -171,50 +225,44 @@ pub fn a_caller_leaving_during_the_ring_calls_it_off_test() {
   assert cluster.ringing(c, "call-two") == ["ann"]
 }
 
-/// A caller leaving before the dispatcher knows the bridge is out: nothing
-/// is unbridged here, since there may be no bridge yet, and the offer's
-/// process is told to call the ring off itself -- by not sending its bridge,
-/// or by unbridging the one it sent. The action, which heard no
-/// `member_offer`, unbridged nothing either.
-pub fn a_caller_leaving_before_the_ring_is_out_stops_the_offer_test() {
+/// A caller leaving before the dispatcher knows the ring is out: the call-off
+/// goes to the actor, which handles the ring first, and the reply that it
+/// rang after all is dropped, with nothing told.
+pub fn a_caller_leaving_before_the_ring_is_out_calls_it_off_test() {
   let platform = platform_start()
   let c = ann_alone()
   cluster.arrive(c, "call-one", "support", 0, 0)
 
   assert cluster.cancel(c, "call-one", Timeout)
   let called_off = cluster.called_off(c)
-  let stopped = cluster.stopped(c)
-  // The offer's reply that it rang after all is dropped, with nothing told.
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
   let told = offers_told()
   platform_stop(platform)
 
-  assert called_off == []
-  assert stopped == ["call-one to unbridge"]
-  assert cluster.called_off(c) == []
+  assert called_off == ["call-one"]
+  assert cluster.called_off(c) == ["call-one"]
   assert told == 0
   assert cluster.all_ringing(c) == []
 }
 
-/// A caller leaving an offer whose process has gone, before this dispatcher
-/// has heard it go, has nobody else to call the ring off: the dispatcher
-/// unbridges it itself. One whose process is running is left to the
-/// process, and nothing is unbridged here.
-pub fn a_caller_leaving_an_offer_whose_process_has_gone_is_unbridged_here_test() {
+/// A caller leaving an offer whose actor has gone, before this dispatcher
+/// has heard it go, is told to the actor all the same: a call-off to an
+/// actor that is not there is nothing, and one to an actor that is
+/// running is the same call-off.
+pub fn a_caller_leaving_an_offer_calls_it_off_whatever_its_actor_test() {
   let called_off = process.new_subject()
-  let stopped = process.new_subject()
   let bare = bare_state.new()
   let watched =
     State(
       ..bare,
       config: config.Config(
         ..bare.config,
-        call_off: fn(member: Member) {
-          process.send(called_off, member.call_id)
-        },
-        stop_offer: fn(_pid, unbridged, member: Member) {
-          process.send(stopped, #(member.call_id, unbridged))
-        },
+        calls: config.Calls(
+          ..bare.config.calls,
+          call_off: fn(member: Member, _offer) {
+            process.send(called_off, member.call_id)
+          },
+        ),
       ),
     )
     |> bare_state.waiting("call-one")
@@ -224,13 +272,11 @@ pub fn a_caller_leaving_an_offer_whose_process_has_gone_is_unbridged_here_test()
 
   let _left = leave(bare_state.offer("call-one", ["ann"]))
   assert process.receive(called_off, 0) == Ok("call-one")
-  assert process.receive(stopped, 0) == Error(Nil)
 
   let running = process.spawn_unlinked(fn() { process.sleep_forever() })
   let _left =
     leave(Offer(..bare_state.offer("call-one", ["ann"]), pid: Some(running)))
-  assert process.receive(called_off, 0) == Error(Nil)
-  assert process.receive(stopped, 0) == Ok(#("call-one", False))
+  assert process.receive(called_off, 0) == Ok("call-one")
   process.kill(running)
 }
 
@@ -243,7 +289,6 @@ pub fn a_hangup_or_a_second_call_off_sends_nothing_test() {
   cluster.reply(c, "call-one", OfferRinging(["ann"]))
   assert cluster.cancel(c, "call-one", Hangup)
   assert cluster.called_off(c) == []
-  assert cluster.stopped(c) == []
 
   let c = ann_alone()
   cluster.arrive(c, "call-one", "support", 0, 0)
@@ -251,7 +296,6 @@ pub fn a_hangup_or_a_second_call_off_sends_nothing_test() {
   release(c, "ann")
   assert cluster.cancel(c, "call-one", ExitKey)
   assert cluster.called_off(c) == ["call-one"]
-  assert cluster.stopped(c) == ["call-one unbridged"]
 }
 
 type Platform

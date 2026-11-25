@@ -43,7 +43,7 @@ set_dns_cache_options() ->
 -spec set_cookie() -> 'true'.
 set_cookie() ->
     Cookie = maybe_cookie_from_env(),
-    lager:info("setting ~s cookie to ~p", [?APP, Cookie]),
+    lager:info("setting ~s cookie", [?APP]),
     erlang:set_cookie(node(), Cookie).
 
 -spec maybe_cookie_from_env() -> atom().
