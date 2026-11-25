@@ -56,6 +56,8 @@
 -define(SERVER, ?MODULE).
 
 -define(TAB, ?MODULE).
+%% gen_server:call/2's own default, written out
+-define(CALL_TIMEOUT, 5 * ?MILLISECONDS_IN_SECOND).
 
 -record(state, {watchers = sets:new() :: sets:set(pid())}).
 -type state() :: #state{}.
@@ -252,7 +254,7 @@ arbitrator_broker() ->
 %% @doc counts how many connections to Broker (AMQP URI) exist
 -spec broker_connections(kz_term:ne_binary()) -> non_neg_integer().
 broker_connections(Broker) ->
-    gen_server:call(?SERVER, {'broker_connections', Broker}).
+    gen_server:call(?SERVER, {'broker_connections', Broker}, ?CALL_TIMEOUT).
 
 %% @doc returns all kz_amqp_connections() records
 -spec connections() -> [kz_amqp_connections()].
@@ -295,7 +297,7 @@ managers(Broker) ->
 
 -spec broker_available_connections(kz_term:ne_binary()) -> non_neg_integer().
 broker_available_connections(Broker) ->
-    gen_server:call(?SERVER, {'broker_available_connections', Broker}).
+    gen_server:call(?SERVER, {'broker_available_connections', Broker}, ?CALL_TIMEOUT).
 
 %% @doc returns the first Broker URI from the sorted list of
 %% available, non-hidden brokers in the 'local' zone

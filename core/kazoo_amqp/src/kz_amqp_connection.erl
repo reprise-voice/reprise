@@ -43,6 +43,8 @@
 -define(START_TIMEOUT, 1500).
 -define(MAX_TIMEOUT, 5 * ?MILLISECONDS_IN_SECOND).
 -define(MAX_REMOTE_TIMEOUT, ?MILLISECONDS_IN_MINUTE).
+%% gen_server:call/2's own default, written out
+-define(CALL_TIMEOUT, 5 * ?MILLISECONDS_IN_SECOND).
 
 -define(SERVER_REPLY_NOT_FOUND, {'shutdown',{'server_initiated_close',404,_}}).
 
@@ -60,7 +62,7 @@ start_link(#kz_amqp_connection{}=Connection) ->
 
 -spec get_connection(pid()) -> kz_amqp_connection().
 get_connection(Srv) ->
-    gen_server:call(Srv, 'get_connection').
+    gen_server:call(Srv, 'get_connection', ?CALL_TIMEOUT).
 
 -spec info(pid() | kz_amqp_connections()) -> list() | {error, connection_not_available}.
 info(#kz_amqp_connections{connection = Pid}) ->
@@ -72,7 +74,7 @@ info(ConnectionPID) ->
 info(#kz_amqp_connections{connection = Pid}, InfoList) ->
     info(Pid, InfoList);
 info(ConnectionPID, InfoList) ->
-    gen_server:call(ConnectionPID, {info, InfoList}).
+    gen_server:call(ConnectionPID, {info, InfoList}, ?CALL_TIMEOUT).
 
 -spec info_keys() -> [atom()].
 info_keys() ->
@@ -82,23 +84,23 @@ info_keys() ->
 info_keys(#kz_amqp_connections{connection = Pid}) ->
     info_keys(Pid);
 info_keys(ConnectionPID) ->
-    gen_server:call(ConnectionPID, info_keys).
+    gen_server:call(ConnectionPID, info_keys, ?CALL_TIMEOUT).
 
 -spec declare_exchange(pid(), kz_amqp_exchange()) -> 'ok' | {'error', any()}.
 declare_exchange(Srv, Exchange) ->
-    gen_server:call(Srv, {'declare_exchange', Exchange}).
+    gen_server:call(Srv, {'declare_exchange', Exchange}, ?CALL_TIMEOUT).
 
 -spec declare_exchange(pid(), pid(), kz_amqp_exchange()) -> 'ok' | {'error', any()}.
 declare_exchange(Srv, Channel, Exchange) ->
-    gen_server:call(Srv, {'declare_exchange', Channel, Exchange}).
+    gen_server:call(Srv, {'declare_exchange', Channel, Exchange}, ?CALL_TIMEOUT).
 
 -spec exchange_bind(pid(), kz_amqp_exchange_binding()) -> 'ok' | {'error', any()}.
 exchange_bind(Srv, Binding) ->
-    gen_server:call(Srv, {'exchange_bind', Binding}).
+    gen_server:call(Srv, {'exchange_bind', Binding}, ?CALL_TIMEOUT).
 
 -spec exchange_bind(pid(), pid(), kz_amqp_exchange_binding()) -> 'ok' | {'error', any()}.
 exchange_bind(Srv, Channel, Binding) ->
-    gen_server:call(Srv, {'exchange_bind', Channel, Binding}).
+    gen_server:call(Srv, {'exchange_bind', Channel, Binding}, ?CALL_TIMEOUT).
 
 -spec create_prechannel(pid()) -> 'ok'.
 create_prechannel(Srv) ->
