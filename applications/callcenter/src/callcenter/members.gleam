@@ -162,9 +162,8 @@ pub fn present(names: List(String)) -> Result(List(String), String) {
 /// after it stopped, and takes it back when it hears the second, 15 to 40 s
 /// after it started. When the second life's queue is consumed before the
 /// first's entry runs out, the name drops out of the ones asked about in
-/// between, and every other node sees a member leave and come back. In the
-/// lab of 2026-09-28 (e2e-260927-cca6), a returned node was out for 6 and
-/// 11 seconds, and its shards went back to the node that had given them up
+/// between, and every other node sees a member leave and come back: a
+/// returned node can be out for several seconds, and its shards go back to the node that had given them up
 /// before they came to it. A name the broker says is a member stays worth
 /// asking about until the broker says its queue has no consumer.
 pub fn worth_asking(

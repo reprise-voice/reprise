@@ -33,9 +33,9 @@
         inbound_codecs is the priority list: the profile negotiates
         greedy, so a caller's leg takes the first of these it offers, and
         a callee is offered the caller's codecs in this order. G722 first
-        keeps calls between our phones and apps wideband, and Telnyx's
-        HD Voice turns AMR-WB mobile calls into G722 for us; anything
-        else falls back to G.711.
+        keeps calls between wideband phones and apps wideband, and a
+        carrier's HD Voice service that delivers mobile calls as G722
+        stays wideband too; anything else falls back to G.711.
 
         list only codecs this build can encode and decode. A codec that
         is only passed through (AMR and G723 without their libraries;

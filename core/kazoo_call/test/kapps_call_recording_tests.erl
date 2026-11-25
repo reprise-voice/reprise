@@ -1,5 +1,5 @@
 %%%-----------------------------------------------------------------------------
-%%% @copyright (C) 2026, 2600Hz
+%%% @copyright (C) 2026, Vonix LLC
 %%% @doc When a recording with no start trigger of its own starts.
 %%%
 %%% This Source Code Form is subject to the terms of the Mozilla Public

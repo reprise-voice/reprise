@@ -86,8 +86,8 @@ pub fn wake_ms(media: Media, next: Int, now: Int) -> Int {
 /// announcement still going -- nothing is said.
 ///
 /// The announcement interrupts. Hold never finishes on its own, so an
-/// announcement queued behind it would never be heard: the lab of
-/// 2026-09-14 had callers who were never told their position. It is not sent
+/// announcement queued behind it would never be heard, and callers would
+/// never be told their position. It is not sent
 /// while an offer is known to be ringing, and the switch side keeps it
 /// behind a bridge it did not know about.
 pub fn announcement_cue(

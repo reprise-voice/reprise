@@ -435,7 +435,7 @@ pub fn a_node_that_returns_is_given_its_shards_back_once_test() {
   stop([node_a, node_b])
 }
 
-/// The lab's flap (e2e-260927-cca6): a node that comes back is one name
+/// The flap: a node that comes back is one name
 /// with two lives, and the survivor's `kz_nodes` drops the name when the
 /// first life's entry runs out -- after the second life's queue is consumed
 /// and before its heartbeat is heard. The returned node stays a member all

@@ -857,7 +857,7 @@ pub fn perform(
 /// set by `ecallmgr` on both channels through the switch's API before the
 /// bridge, which is the only time it can be: a `set` of the caller's
 /// variable sent after the bridge is an application, and a channel in a
-/// bridge runs none (the lab of 2026-09-27, `e2e-260927-cca2`). The agent's
+/// bridge runs none. The agent's
 /// leg parks too when the caller hangs up, and the actor hangs it up then,
 /// as it does at the end of every call.
 fn bridge(context: Context, caller: Call, leg: String) -> Nil {

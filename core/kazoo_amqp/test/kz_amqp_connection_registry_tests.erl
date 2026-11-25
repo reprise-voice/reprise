@@ -1,9 +1,10 @@
 %%%-----------------------------------------------------------------------------
+%%% @copyright (C) 2026, Vonix LLC
 %%% @doc A connection whose broker dropped it stays one the node can use.
 %%%
-%%% The lab of 2026-09-28 froze a node until the broker dropped it. On the
-%%% thaw, the first `kz_nodes' heartbeat asked the connection's manager for
-%%% `channel_max', and the manager called into the AMQP connection that had
+%%% When a node frozen until the broker dropped it thawed, the first
+%%% `kz_nodes' heartbeat asked the connection's manager for `channel_max',
+%%% and the manager called into the AMQP connection that had
 %%% just died, exited with it, and was deleted from `kz_amqp_connections'.
 %%% Its supervisor restarted it, and the restart connected, but it was in
 %%% nobody's table: `primary_broker/0' answered `undefined' for good and no
@@ -18,6 +19,10 @@
 %%% No broker: nothing here gets as far as connecting. A manager that is to
 %%% be connected is put in the state `connected/1' leaves it in, and says so
 %%% to the registry as `connected/1' does (`make_available/1').
+%%%
+%%% This Source Code Form is subject to the terms of the Mozilla Public
+%%% License, v. 2.0. If a copy of the MPL was not distributed with this
+%%% file, You can obtain one at https://mozilla.org/MPL/2.0/.
 %%% @end
 %%%-----------------------------------------------------------------------------
 -module(kz_amqp_connection_registry_tests).

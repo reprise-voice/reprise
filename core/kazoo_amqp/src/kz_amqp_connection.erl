@@ -338,8 +338,7 @@ code_change(_OldVsn, Connection, _Extra) ->
 %% when the connection has gone and its `DOWN' is not handled yet. A call
 %% into a dead connection exits, and this server must not exit with it: the
 %% heartbeat of `kz_nodes' asks for `channel_max' every few seconds, and the
-%% first one after the broker dropped a node used to take this server down
-%% (the lab of 2026-09-28).
+%% first one after the broker dropped a node used to take this server down.
 %% @end
 %%------------------------------------------------------------------------------
 -spec connection_info(fun(() -> any())) -> any().

@@ -25,9 +25,8 @@
 ////   the marks ran: a flush of the hold, and `connect_leg` run at once with
 ////   both channels set to park -- not hang up -- when the other goes, so
 ////   that the actor and not the order of two channels' events says how the
-////   call ended (the labs of 2026-09-27, `e2e-260927-spike1` and
-////   `e2e-260927-cca2`: a leg bridged before its originate had finished with
-////   it was taken back out of the bridge by the originate's own `park`).
+////   call ended (a leg bridged before its originate had finished with it is
+////   taken back out of the bridge by the originate's own `park`).
 ////   The flush throws away whatever the caller's channel has been sent and
 ////   not yet run, which is why the marks are seen to run first (`Confirm`);
 //// - an offer called off -- the caller leaving, the agent released, the
@@ -96,17 +95,17 @@ import kazoo/events
 /// How long an answered leg is given to be parked by its originate, and the
 /// answer's marks to be seen to run on the caller's channel, before the
 /// caller is bridged to it all the same. The switch runs the originate's
-/// `park` within about 40 ms of the answer (the labs of 2026-09-27); neither
+/// `park` within about 40 ms of the answer; neither
 /// the park's own event nor `ecallmgr`'s answer to the originate comes that
 /// soon, the second taking half a second. The marks are seen to run by a
-/// `noop` sent at once behind them, and a `noop` sent at once completed in
-/// 19 ms on the lab (`probe_ms`). Every moment of the wait is a moment the
+/// `noop` sent at once behind them, and a `noop` sent at once completes in
+/// about 19 ms (`probe_ms`). Every moment of the wait is a moment the
 /// agent's leg is on its own, where the switch refuses the agent's blind
 /// transfer and the agent hears nothing.
 pub const park_wait_ms = 150
 
 /// How long the bridge to an answered leg has to show on the caller's
-/// channel. `connect_leg` bridges in under 100 ms on the lab; a bridge that
+/// channel. `connect_leg` bridges in under 100 ms; a bridge that
 /// has not shown in this long is not coming, and the leg is hung up.
 pub const connect_ms = 5000
 
@@ -120,7 +119,7 @@ pub const desertion_ms = 2000
 /// barrier goes out all the same. The barrier's flush throws away whatever
 /// the caller's channel has not yet run, the marks among it, and the marks
 /// are what a node that takes the caller over on their way out finds them
-/// by. A `noop` sent at once completed in 19 ms on the lab (`probe_ms`).
+/// by. A `noop` sent at once completes in about 19 ms (`probe_ms`).
 pub const marks_wait_ms = 1000
 
 /// How long the departure's barrier has to complete before the callflow is
@@ -137,7 +136,7 @@ pub const continue_ack_ms = 2000
 pub const continue_attempts = 3
 
 /// How long the probe of a caller this actor was handed without knowing
-/// them is waited for once the survey is in. The lab's probe completed in
+/// them is waited for once the survey is in. A probe completes in about
 /// 19 ms; one that has not in this long is a channel that is not there, or
 /// whose control process is not.
 pub const probe_ms = 3000
@@ -458,10 +457,9 @@ pub type Recall {
 /// The caller hung up while the offer rang (`caller_gone`), and the ring was
 /// called off, but whether they left before anybody answered or hung up on
 /// an agent who just had is not known yet. The caller's end and a leg's
-/// answer are events of two channels, and nothing orders the two: the lab
-/// of 2026-09-27 (e2e-260927-cca5) had an agent answer and the caller hang
-/// up straight after, the actor heard the hang-up first, and the answer was
-/// never counted. So the call-off decides once its ring is over, or after
+/// answer are events of two channels, and nothing orders the two: when an
+/// agent answers and the caller hangs up straight after, the actor can hear
+/// the hang-up first, and the answer would never be counted. So the call-off decides once its ring is over, or after
 /// `desertion_ms`. A leg that answered before the caller's end, by the
 /// switch's own clock, makes it an answered call that the caller ended.
 /// Otherwise the caller left the queue.
@@ -2183,7 +2181,7 @@ fn is_answer(event: Value) -> Bool {
 }
 
 /// When the switch says an event happened: `Event-Timestamp`, microseconds
-/// on the switch's clock, which `mod_com_kazoo` puts on every event.
+/// on the switch's clock, which `mod_reprise` puts on every event.
 fn event_us(event: Value) -> Option(Int) {
   case doc.get(event, ["Event-Timestamp"]) {
     Ok(doc.Int(us)) -> Some(us)
@@ -2473,7 +2471,7 @@ fn heard(call: Call, event: Value, clock: Clock) -> #(Call, List(Effect)) {
 /// Whether an event of the caller's channel carries the mark of this
 /// passage handed back, `Queue-Departed` naming it. The queue's action
 /// writes it as it takes the caller back, and `callcenter_departed` writes
-/// it first thing in a resumed flow. Every event `mod_com_kazoo` publishes
+/// it first thing in a resumed flow. Every event `mod_reprise` publishes
 /// carries the channel's variables as they are then, so the first event
 /// after the mark shows it, whether a probe's completion or anything the
 /// flow does.
@@ -2738,9 +2736,9 @@ fn leg_moved(conversation: talk.Talk, event: Value) -> Bool {
 /// A transfer's leg is hung up too. The agent passed the caller on, and
 /// their leg has nothing more to do, but the switch does not end it: the
 /// bridge put `park_after_bridge` on both channels (`Park-After-Pickup`),
-/// so a leg whose caller was transferred away parks. The lab of 2026-09-27
-/// (e2e-260927-cca5) had an agent's leg parked for 45 minutes after a
-/// blind transfer, and the agent's phone busy with it. The hang-up cannot
+/// so a leg whose caller was transferred away parks, and after a blind
+/// transfer the agent's leg would stay parked, and their phone busy with
+/// it, until somebody hung it up. The hang-up cannot
 /// cut the caller off on the way to the transfer's target: the caller parks
 /// too when their bridge ends, and a transfer takes a channel from park as
 /// from anywhere. Only a leg the transfer is moving (`leg_moved`) is left

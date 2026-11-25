@@ -6,18 +6,18 @@
 //// enough without a frame from it. LavinMQ drops a client after 15 seconds
 //// of nothing, and an idle connection sends a frame only about every 10
 //// (`heartbeat` is 10 seconds, and the sender skips a beat after its own),
-//// so that can be as little as five seconds into the stop; the lab of
-//// 2026-09-28, `e2e-260927-cca10`, saw a frozen node dropped after 15 to 16.
+//// so that can be as little as five seconds into the stop, and a frozen
+//// node is typically dropped after 15 to 16.
 //// The broker hands every member the node held unacked to the next
 //// consumer, and another node takes the shards over and every caller in
 //// them. When the node moves again, nothing it runs knows that yet. Its
 //// socket still holds what the broker sent before it gave up -- the
 //// callers' events among it -- and the connection reads all of that before
 //// it reads that it is closed. So for a moment every process of every
-//// shard the node held goes on as the holder. In that lab a call actor
-//// thawed after its agent's blind transfer took the caller for transferred,
-//// and its dispatcher wrote the passage's record and published
-//// `member_result` for a call the next holder had already closed.
+//// shard the node held goes on as the holder. A call actor thawed after its
+//// agent's blind transfer could take the caller for transferred, and its
+//// dispatcher write the passage's record and publish `member_result` for
+//// a call the next holder had already closed.
 ////
 //// **The watch.** One process notes the time every `tick_ms`, at high
 //// priority, so that it is among the first to run when the node moves
@@ -38,8 +38,8 @@
 //// something -- starves the heartbeat and the socket's reader and not this
 //// watch, which runs ahead of them, and it can lose its shards with no
 //// stall noted. A VM its host pauses may show no gap either: a guest's
-//// monotonic clock can be held across the pause. The lab's freeze stops
-//// the VM's process, whose clock runs on.
+//// monotonic clock can be held across the pause. A freeze that stops the
+//// VM's process, whose clock runs on, does show one.
 ////
 //// **What a stall costs when nothing was lost.** A stall shorter than the
 //// broker's patience, or a watch kept waiting by the node itself, restarts

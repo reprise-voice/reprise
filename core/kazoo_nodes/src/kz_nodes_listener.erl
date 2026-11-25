@@ -502,7 +502,7 @@ notify_heartbeat(#kz_node{}=Node) ->
 %% primary broker, which is `undefined' until the connection is back -- has
 %% the broker `<<"disconnected">>', which names no broker to remember a zone
 %% for. Normalizing that again crashed this listener: `amqp_uri' cannot parse
-%% it (the lab of 2026-09-28, a node thawed after its broker dropped it).
+%% it, as happens to a node thawed after its broker dropped it.
 %% @end
 %%------------------------------------------------------------------------------
 -spec maybe_add_zone(kz_types:kz_node(), nodes_state()) -> nodes_state().
@@ -573,7 +573,7 @@ notify_waiting(Waiting) ->
 -include_lib("eunit/include/eunit.hrl").
 
 %% A node heard while this node's broker connection was down names no
-%% broker to remember a zone for, and is no crash (the lab of 2026-09-28).
+%% broker to remember a zone for, and is no crash.
 maybe_add_zone_test_() ->
     Broker = kz_amqp_util:normalize_amqp_uri(<<"amqp://guest:guest@broker.example:5672">>),
     State = #state{zones=[]},

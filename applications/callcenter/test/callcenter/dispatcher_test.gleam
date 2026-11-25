@@ -856,10 +856,10 @@ pub fn an_offer_that_crashes_after_an_answer_is_ended_test() {
 /// only with the shard's whole tree, and its call goes on. Its offer is let
 /// go of with nothing settled or closed -- the actor of the tree that takes
 /// the shard next finds the call where it stands and says so -- where an
-/// actor that crashed has its call closed here (above). In the lab of
-/// 2026-09-28 (`e2e-260927-cca10`) a thawed node closed an answered call on
-/// its actor's shutdown that the node holding the shard by then had closed
-/// already, and the call had two `member_result`s.
+/// actor that crashed has its call closed here (above). A thawed node that
+/// closed an answered call on its actor's shutdown, when the node holding
+/// the shard by then had closed it already, would give the call two
+/// `member_result`s.
 pub fn an_actor_shut_down_leaves_its_call_to_whoever_has_it_next_test() {
   let reasons = [
     #("shutdown", to_dynamic(atom.create("shutdown"))),
@@ -892,10 +892,9 @@ pub fn an_actor_shut_down_leaves_its_call_to_whoever_has_it_next_test() {
 /// its member being held until the call ends, and the sweep's scan of the
 /// shard's open records, at once. A caller of the passage held here is
 /// their actor's, finding out where they stand: the sweep does not adopt
-/// them as well. In the lab of 2026-09-29 (`e2e-260927-cca11`) it did, the
-/// actor's word went to an offer the adoption had replaced, the actor's end
-/// was taken for a lost call and closed `failed`, and the member was never
-/// settled.
+/// them as well. If it did, the actor's word would go to an offer the
+/// adoption had replaced, the actor's end would be taken for a lost call and
+/// closed `failed`, and the member would never be settled.
 pub fn an_orphan_being_found_out_about_is_its_actors_test() {
   let c = two_agent_queue()
   fake_calls.will_say_nothing(c.calls, "call-one")
@@ -919,7 +918,7 @@ pub fn an_orphan_ended_while_being_found_out_about_is_its_actors_test() {
   assert cluster.settled(c) == []
 }
 
-/// The lab's order end to end: the member redelivered, the sweep's orphan,
+/// The order a takeover sees, end to end: the member redelivered, the sweep's orphan,
 /// then the actor finding the call connected and hearing its end. The call
 /// is the actor's all through, and its end settles the member the shard
 /// holds.
@@ -1738,9 +1737,9 @@ pub fn a_dead_channel_leaves_the_queue_test() {
 
 /// A caller who hangs up while an agent is being rung for them is their
 /// actor's to close. The actor heard the same end, and knows whether the
-/// agent answered first. In the lab (e2e-260927-cca6), the dispatcher
-/// closed the caller as gone on the activity actor's word, and the actor's
-/// answer that followed found no offer: an answered call nobody counted.
+/// agent answered first. A dispatcher that closed the caller as gone on the
+/// activity actor's word would leave the actor's answer that followed with
+/// no offer: an answered call nobody counted.
 pub fn a_dead_channel_while_rung_for_is_the_actors_to_close_test() {
   let c = two_agent_queue()
   cluster.arrive(c, "call-one", "support", 0, 0)

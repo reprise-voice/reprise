@@ -60,7 +60,7 @@ pub fn closing(result: types.EndResult, now: Int, now_ms: Int) -> Closing {
 /// being passed on, `CHANNEL_TRANSFEROR` on the one passing it,
 /// `CHANNEL_REPLACED` on a leg an attended transfer replaced -- for either
 /// leg of this call, and the agent's leg going with a transfer as its cause,
-/// which is how `mod_com_kazoo` reports a leg that sent a `REFER`.
+/// which is how `mod_reprise` reports a leg that sent a `REFER`.
 /// `bridged_to` is the agent's leg, once there is one.
 pub fn is_transfer_of(
   call_id: String,

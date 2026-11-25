@@ -221,8 +221,7 @@ pub fn a_caller_not_found_on_a_partial_answer_is_unknown_test() {
 /// `Unknown`, since a ring nobody can see must not be rung again over
 /// itself, nor a conversation nobody can see be closed. A record with
 /// nothing going on is waiting, and what the record or the marks say alone
-/// still stands. A node that has just started asks nobody (the lab of
-/// 2026-09-28).
+/// still stands. A node that has just started asks nobody.
 pub fn a_caller_whose_switch_did_not_answer_test() {
   let ringing =
     Some(records.Passage(

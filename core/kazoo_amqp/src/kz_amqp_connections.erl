@@ -206,8 +206,8 @@ remove(Broker=?NE_BINARY) ->
 %%   registering at every start, rather than only in add/2, is what puts the
 %%   restarted one back. Without it, the restart connected and marked itself
 %%   available on a record nobody held, primary_broker/0 answered `undefined'
-%%   for good, and no consumer of the node was given a channel again (the lab
-%%   of 2026-09-28, a node frozen until the broker dropped it);
+%%   for good, and no consumer of the node was given a channel again (seen
+%%   with a node frozen until the broker dropped it);
 %% - when this server asks for it (kz_amqp_connection:reregister/1), as it
 %%   starts after a crash of its own: see handle_continue/2.
 %%

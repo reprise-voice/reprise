@@ -1,3 +1,11 @@
+%%%-----------------------------------------------------------------------------
+%%% @copyright (C) 2026, Vonix LLC
+%%%
+%%% This Source Code Form is subject to the terms of the Mozilla Public
+%%% License, v. 2.0. If a copy of the MPL was not distributed with this
+%%% file, You can obtain one at https://mozilla.org/MPL/2.0/.
+%%% @end
+%%%-----------------------------------------------------------------------------
 %% `callcenter_ffi''s half of the stall watch (`callcenter/stall'): the
 %% notes it keeps in an array found through a persistent term, which say
 %% nothing while no watch is registered, and the one reason a process ends

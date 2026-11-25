@@ -139,9 +139,8 @@ pub type Message {
   /// A caller being rung for is their actor's to close. It hears the same
   /// end, and it alone knows whether an agent answered first: an answer and
   /// the caller's end are two channels' events, and the actor dates them
-  /// (`call/core`'s `Desertion`). In the lab of 2026-09-28
-  /// (e2e-260927-cca6), the dispatcher closed a caller as gone on this word.
-  /// The actor's `Answered` and `Ended` then found no offer, and an agent's
+  /// (`call/core`'s `Desertion`). A dispatcher that closed a caller as gone on
+  /// this word would be wrong whenever an agent answered first: the actor's `Answered` and `Ended` then found no offer, and an agent's
   /// answered call was never counted. An actor that misses the end has its
   /// own audit, and an actor that dies has its offer closed (`OfferDown`),
   /// after which this word closes the caller.
@@ -374,7 +373,7 @@ fn act(state: State, message: Message) -> actor.Next(State, Message) {
     // takes the shard next finds it where it stands and says so
     // (*Takeover*). So its offer is let go of with nothing written or
     // published: closed here, an answered call was closed twice, once by
-    // each holder (the lab of 2026-09-28, `e2e-260927-cca10`).
+    // each holder.
     OfferDown(process.ProcessDown(pid: pid, reason: reason, ..)) ->
       case shut_down(reason) {
         True ->

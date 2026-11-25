@@ -59,7 +59,7 @@ log_redacted_test_() ->
 
 %% The settings kazoo_config_init logs as it starts: config.ini's sections.
 redact_term_config_ini_test_() ->
-    AppEnv = [{<<"amqp">>, [{<<"uri">>, <<"amqp://offhook:amqp-pass-1@lavinmq.offhook.svc:5672">>}
+    AppEnv = [{<<"amqp">>, [{<<"uri">>, <<"amqp://reprise:amqp-pass-1@broker.example.net:5672">>}
                            ,{<<"pool_size">>, 20}
                            ]}
              ,{<<"zone">>, [{<<"name">>, 'local'}
@@ -77,7 +77,7 @@ redact_term_config_ini_test_() ->
              ,{<<"kazoo_apps">>, [{<<"cookie">>, 'cookie-5'}]}
              ,{<<"log">>, [{<<"console">>, <<"info">>}]}
              ],
-    Expected = [{<<"amqp">>, [{<<"uri">>, <<"amqp://offhook:***REDACTED***@lavinmq.offhook.svc:5672">>}
+    Expected = [{<<"amqp">>, [{<<"uri">>, <<"amqp://reprise:***REDACTED***@broker.example.net:5672">>}
                              ,{<<"pool_size">>, 20}
                              ]}
                ,{<<"zone">>, [{<<"name">>, 'local'}

@@ -5,8 +5,7 @@
 //// A write the datastore could not take used to be logged and dropped. For
 //// a `queue_call` record that is survivable -- the sweep closes a record
 //// left open -- but an agent's counter increment dropped during an outage
-//// is gone for good, and nothing counts it again. The lab of 2026-09-27
-//// (e2e-260927-cca3) lost them that way. So the writer keeps what it could
+//// is gone for good, and nothing counts it again. So the writer keeps what it could
 //// not write and tries again, and this module is what it keeps it in and
 //// the rules it keeps it by. Nothing here reads or writes a document.
 ////

@@ -41,8 +41,7 @@
 %% "Stabilize bindings to improve RabbitMQ operation" (#6060) took out of
 %% `callflow_sup' again, moving `cf_route_req' onto the listener's channel and
 %% leaving this behind. With no pool to check out from, every resume failed
-%% (`noproc'), republished itself and failed again wherever it landed: the lab
-%% of 2026-09-27, `e2e-260927-cca2'.
+%% (`noproc'), republished itself and failed again wherever it landed.
 %% @end
 %%------------------------------------------------------------------------------
 -spec handle_req(kapi_callflow:resume(), kz_term:proplist()) ->

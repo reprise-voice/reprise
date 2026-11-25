@@ -28,7 +28,7 @@
 //// and whose own call id is their offer's name for them,
 //// `<Queue-Offer-ID>-N`: a forwarded device's loopback carries the caller's
 //// `Queue-Call-ID` on its far side too, under a name of its own, and is not
-//// a leg the queue rang (the lab of 2026-09-27). Every `ecallmgr` lists a
+//// a leg the queue rang. Every `ecallmgr` lists a
 //// channel it knows, so a row can come more than once; one per call id is
 //// kept. A leg rung for an earlier passage of the caller -- a queue they
 //// have since left -- says so by its `Queue-Joined-Timestamp`, and is only
@@ -291,9 +291,9 @@ fn gone(record: Recorded) -> Finding {
 /// the top of itself, and a conversation nobody can see would be closed
 /// while it goes on. A node that has just started is where this happens:
 /// `kz_nodes` hears of the `ecallmgr`s 15 to 40 seconds after it starts,
-/// and a channel query asks nobody until then. In the lab of 2026-09-28
-/// (e2e-260927-cca7), a restarted holder took its own shard back 16
-/// seconds after its restart and rang a ringing agent a second time.
+/// and a channel query asks nobody until then. A restarted holder can take
+/// its own shard back within that time, and without this would ring a
+/// ringing agent a second time.
 fn standing(
   found: Found,
   legs: List(Leg),

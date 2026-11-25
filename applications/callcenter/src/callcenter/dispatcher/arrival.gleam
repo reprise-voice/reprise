@@ -671,7 +671,7 @@ pub fn orphaned(
   // (`present`). A connected call's member is held until the call ends, so
   // a node taking a shard over meets both at once -- the member redelivered,
   // and the sweep's scan of the shard's open records -- and adopted too, the
-  // call was watched twice. In the lab of 2026-09-29 (`e2e-260927-cca11`)
+  // call was watched twice. Then
   // the actor's word went to an offer the adoption had replaced, the
   // actor's end was taken for a lost call and closed `failed`, and the
   // member was never settled: the adoption's member has no delivery.
