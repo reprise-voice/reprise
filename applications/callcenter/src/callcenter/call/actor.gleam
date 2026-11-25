@@ -974,8 +974,9 @@ fn originate_legs(context: Context, endpoints: List(Value)) -> Nil {
 }
 
 /// Hang one leg up by name on the caller's switch: `call_command` hangup,
-/// which `ecallmgr` runs as `uuid_kill` when
-/// `node_call_command_allowed_applications.callcenter.hangup` lets it. A leg
+/// which `ecallmgr` runs as `uuid_kill`: allowed by default, and refused only
+/// if `node_call_command_allowed_applications.callcenter.hangup` in
+/// system_config/ecallmgr is false. A leg
 /// that has gone already is nothing to it.
 fn hang_up_leg(context: Context, leg: String) -> Nil {
   let node = case context.member {
