@@ -15,11 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # The reprise-voice fork of Kamailio; REPRISE_GIT_BASE
 # points it at a mirror (see make/repos.mk). KAMAILIO_REF: the tip of the
-# reprise/6.1.4 branch as of 2026-11-21 (a commit, a tag or a branch all work:
+# reprise/6.1.6 branch as of 2026-11-25 (a commit, a tag or a branch all work:
 # it is fetched by name).
 ARG REPRISE_GIT_BASE=https://github.com/reprise-voice
 ARG KAMAILIO_REPO=${REPRISE_GIT_BASE}/kamailio
-ARG KAMAILIO_REF=6a1f08b8d1cd38c176a9ce66a45dcccc64df12de
+ARG KAMAILIO_REF=32fd62f54c3adcafeee7da666d4ae4abc755b98a
 RUN git init -q /src \
     && git -C /src fetch -q --depth 1 ${KAMAILIO_REPO} ${KAMAILIO_REF} \
     && git -C /src checkout -q FETCH_HEAD \
