@@ -49,6 +49,11 @@ services:
         mode: 0444
     volumes:
       - couchdb-data:/opt/couchdb/data
+    # CouchDB holds a file open per database shard, and Kazoo makes a few
+    # databases per account and per month: at Docker's default of 1024 it
+    # fails with emfile after about 125 databases.
+    ulimits:
+      nofile: { soft: 65536, hard: 65536 }
     ports:
       # Fauxton at http://127.0.0.1:5984/_utils (this machine only)
       - "127.0.0.1:${COUCHDB_LOCAL_PORT:-5984}:5984"
