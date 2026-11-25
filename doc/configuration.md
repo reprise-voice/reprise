@@ -131,11 +131,12 @@ by anything else, and without it the node cannot control a FreeSWITCH running
 | `LOCAL_IP` | detected | Address FreeSWITCH binds and uses toward Kamailio. Detected from the GCE metadata server when there is one, else `hostname -i`. |
 | `PUBLIC_IP` | none (GCE metadata if present) | When set, written as `ext-sip-ip` and `ext-rtp-ip` of `sipinterface_1`, for 1:1 NAT. |
 | `EXT_SIP_IP`, `EXT_RTP_IP` | `PUBLIC_IP` | Set one to advertise a different address for signalling or for media. `EXT_SIP_IP` is the address ecallmgr reports to Kamailio's dispatcher, so Kamailio must be able to reach it; `EXT_RTP_IP` goes into the SDP. The Compose quick start sets them apart: signalling on the bridge network, media on the host address. |
+| `LOCAL_NETWORK_ACL` | `loopback.auto` | `local-network-acl` of `sipinterface_1`: a call from an address in it gets `LOCAL_IP` in the SDP instead of `EXT_RTP_IP`. FreeSWITCH judges by the INVITE's source, which is always Kamailio, so the default advertises `EXT_RTP_IP` to all but this machine. `localnet.auto` (the shipped configuration's value) suits only phones that send SIP to FreeSWITCH directly. |
 | `KAZOO_TRANSPORT` | `amqp` | Only `amqp` is accepted; the image ships no `mod_kazoo`. |
 
 The media server's node name is `freeswitch@<hostname -f>`, so give the
 container an FQDN hostname too. The RTP port range (16384-32768) is set in
-`autoload_configs/switch.conf.xml` and has no environment variable.
+`autoload_configs/switch.conf.xml`; `RTP_START_PORT` and `RTP_END_PORT` narrow it.
 
 ### reprise-kamailio (`docker/kamailio`)
 
