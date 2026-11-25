@@ -17,15 +17,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libtiff-dev libjpeg62-turbo-dev libsqlite3-dev libcurl4-openssl-dev libpcre2-dev \
     libspeex-dev libspeexdsp-dev libedit-dev libldns-dev libopus-dev libsndfile1-dev \
     libmpg123-dev libmp3lame-dev libshout3-dev flite1-dev \
-    librabbitmq-dev uuid-dev libpq-dev \
+    librabbitmq-dev uuid-dev libpq-dev libminiupnpc-dev libnatpmp-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# sofia-sip >= 1.13.18 and spandsp >= 3.1.1 (what 1.11 requires) are not in
+# sofia-sip >= 1.13.19 and spandsp >= 3.1.1 (what 1.11.4 requires) are not in
 # Debian: build FreeSWITCH's forks at their release tags.
 # Both are fetched from their living upstream (SignalWire's freeswitch org);
 # the *_REPO arguments let a mirror stand in.
 ARG SOFIA_REPO=https://github.com/freeswitch/sofia-sip
-ARG SOFIA_REF=v1.13.18
+ARG SOFIA_REF=v1.13.19
 RUN git clone --depth 1 -b ${SOFIA_REF} ${SOFIA_REPO} /usr/src/sofia-sip \
     && cd /usr/src/sofia-sip && ./bootstrap.sh && ./configure --prefix=/usr/local \
     && make -j"$(nproc)" && make install && ldconfig
@@ -38,10 +38,10 @@ RUN git clone --depth 1 -b ${SPANDSP_REF} ${SPANDSP_REPO} /usr/src/spandsp \
 
 # Source repositories: the reprise-voice forks, under their upstream names
 # (REPRISE_GIT_BASE points the lot at a mirror; see make/repos.mk).
-# reprise-voice/freeswitch carries signalwire's v1.11.3 tag (ef32e205).
+# reprise-voice/freeswitch carries signalwire's v1.11.4 tag (795228ad).
 ARG REPRISE_GIT_BASE=https://github.com/reprise-voice
 ARG FS_REPO=${REPRISE_GIT_BASE}/freeswitch
-ARG FS_REF=v1.11.3
+ARG FS_REF=v1.11.4
 RUN git clone --depth 1 -b ${FS_REF} ${FS_REPO} /usr/src/freeswitch
 
 WORKDIR /usr/src/freeswitch
@@ -134,7 +134,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libtiff6 libjpeg62-turbo libsqlite3-0 libcurl4t64 libpcre2-8-0 \
     libspeex1 libspeexdsp1 libedit2 libldns3t64 libopus0 libsndfile1 \
     libmpg123-0t64 libmp3lame0 libshout3 libflite1 \
-    librabbitmq4 libuuid1 libpq5 \
+    librabbitmq4 libuuid1 libpq5 libminiupnpc18 libnatpmp1t64 \
     xmlstarlet procps iproute2 less \
     && rm -rf /var/lib/apt/lists/*
 

@@ -211,7 +211,7 @@ What this tree changes relative to Kazoo 5.4 as 2600Hz shipped it:
   The closed module's `dialog` and `live-events` relays are not
   implemented (nothing open consumes them). See
   [freeswitch/mod_reprise/README.md](../freeswitch/mod_reprise/README.md).
-- **FreeSWITCH build.** FreeSWITCH v1.11.3 with seven patches
+- **FreeSWITCH build.** FreeSWITCH v1.11.4 with seven patches
   (`docker/freeswitch/patches`) that add the session handoff, intercept,
   transfer, event and early-ringing behaviour ecallmgr expects from
   2600Hz's own FreeSWITCH build, plus one bridge ownership fix

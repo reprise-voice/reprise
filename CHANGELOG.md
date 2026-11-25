@@ -6,6 +6,19 @@ All notable changes to Reprise are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- The FreeSWITCH image builds FreeSWITCH v1.11.4 (from v1.11.3) against
+  sofia-sip v1.13.19 (from v1.13.18), which fixes an out-of-bounds read
+  when parsing multipart MIME bodies. FreeSWITCH 1.11.4 also brings upstream
+  security fixes (MSRP parsing, REFER targets carrying dial-string
+  separators) and requires sofia-sip 1.13.19. The image now builds against
+  Debian's miniupnpc and libnatpmp, which FreeSWITCH no longer carries
+  in-tree. All seven patches in `docker/freeswitch/patches` apply unchanged.
+- FreeSWITCH 1.11.4's `deflect` sends a target that already carries a URI
+  scheme as given and sends no REFER for an empty target, where 1.11.3 sent
+  `sip:@<profile ip>`. ecallmgr's `sip:` redirect contacts are unaffected.
+
 ## [5.4.0] - 2026-11-24
 
 The initial public release. Reprise is based on Kazoo 5.4 (`VERSION`

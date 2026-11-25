@@ -122,7 +122,7 @@ replacing sources:
 | Image | Arguments |
 |---|---|
 | `reprise` | `REPRISE_GIT_BASE`, `KZ_VERSION` (default 5.4.0), `GLEAM_VERSION`, `SOUNDS_REPO`, `SOUNDS_REF` |
-| `reprise-freeswitch` | `REPRISE_GIT_BASE`, `FS_REPO`, `FS_REF` (v1.11.3), `SOFIA_REPO`, `SOFIA_REF`, `SPANDSP_REPO`, `SPANDSP_REF`, `SOUNDS_REPO`, `SOUNDS_REF` |
+| `reprise-freeswitch` | `REPRISE_GIT_BASE`, `FS_REPO`, `FS_REF` (v1.11.4), `SOFIA_REPO`, `SOFIA_REF`, `SPANDSP_REPO`, `SPANDSP_REF`, `SOUNDS_REPO`, `SOUNDS_REF` |
 | `reprise-kamailio` | `REPRISE_GIT_BASE`, `KAMAILIO_REPO`, `KAMAILIO_REF` |
 | `reprise-monster-ui` | `REPRISE_GIT_BASE`, `MONSTER_REF`, `MONSTER_APPS` |
 

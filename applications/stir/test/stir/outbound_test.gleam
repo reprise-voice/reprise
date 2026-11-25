@@ -483,7 +483,7 @@ pub fn outbound_test() {
   assert doc.members(signed) |> list.length == 3
 
   // A passthrough answer carries the inbound call's own header: nothing
-  // in FreeSWITCH 1.11.3 is behind `sip_identity_passthru`, so the value
+  // in FreeSWITCH 1.11.4 is behind `sip_identity_passthru`, so the value
   // is answered here for `stepswitch` to place as the Identity header.
   fake.put_config(f, "attest_forwarded", doc.String("passthru"))
   let inbound_header = "eyJ.eyJ.sig;info=<x>"

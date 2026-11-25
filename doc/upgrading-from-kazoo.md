@@ -50,7 +50,7 @@ not as a package upgrade.
   entrypoint rewrites a `mod_kazoo` or `mod_com_kazoo` load line.
 - `mod_reprise` announces itself as `mod_reprise v5.4.0 commercial`; the
   third word is what selects ecallmgr's AMQP node-module set.
-- The module is built against FreeSWITCH v1.11.3 with the patches in
+- The module is built against FreeSWITCH v1.11.4 with the patches in
   `docker/freeswitch/patches`. A module built for these patches refuses to
   load on an unpatched core (the `switch_kazoo_session_swap_v1` link guard).
   Whether it runs on 2600Hz's own FreeSWITCH builds has not been tested.
