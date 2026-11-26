@@ -19,6 +19,7 @@ setup() ->
     meck:expect(kapps_config, get_is_true, fun(_, _, _) -> false end),
     meck:expect(kapps_config, get_integer, fun(_, _, Default) -> Default end),
     meck:expect(kapps_config, get_ne_binary, fun(_, _, Default) -> Default end),
+    meck:expect(kapps_config, get_ne_binary, fun(_, _) -> undefined end),
     meck:new(kzd_accounts, [non_strict, no_link]),
     meck:expect(kzd_accounts, fetch, fun(_) -> {ok, kz_json:new()} end),
     meck:expect(kzd_accounts, realm, fun(_) -> <<"probe.invalid">> end),
@@ -119,7 +120,7 @@ legacy_control(Mod) ->
     end.
 
 state(Mod, Overrides) ->
-    list_to_tuple([state | [proplists:get_value(Name, Overrides) || Name <- state_fields(Mod)]]).
+    list_to_tuple([state | [props:get_value(Name, Overrides) || Name <- state_fields(Mod)]]).
 
 %% The field names of Mod's #state{}, read from the abstract code the beam
 %% carries (every module is compiled with debug_info).
@@ -257,7 +258,7 @@ takeback_timeout() ->
     stop(P, R).
 
 value(Mod, Field, State) ->
-    proplists:get_value(Field, lists:zip(state_fields(Mod), tl(tuple_to_list(State)))).
+    props:get_value(Field, lists:zip(state_fields(Mod), tl(tuple_to_list(State)))).
 
 invalid_control() ->
     lists:foreach(fun(Resp) -> ?assertEqual({error, no_control}, konami_originate:control([Resp]))

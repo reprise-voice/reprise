@@ -20,6 +20,9 @@
 
 -behaviour(gen_statem).
 
+%% pattern_builder/1 and number_builder/1 prompt at the console
+-elvis([{elvis_style, no_debug_call, disable}]).
+
 %% API
 -export([handle/2
         ,pattern_builder/1
@@ -91,7 +94,12 @@
 -define(DEFAULT_TARGET_TIMEOUT,
         kapps_config:get_integer(?CONFIG_CAT, [<<"transfer">>, <<"default_target_timeout_ms">>], 20 * ?MILLISECONDS_IN_SECOND)).
 
--define(DEFAULT_RINGBACK, kapps_config:get_ne_binary(<<"ecallmgr">>, <<"default_ringback">>, <<"%(2000,4000,440,480)">>)).
+%% The transferor has been answered, so it hears ecallmgr's transfer ringback:
+%% default_transfer_ringback, else default_ringback, else the tone. Neither is
+%% read with a default, which kapps_config would store: a stored
+%% default_ringback would pre-answer every caller not answered yet
+%% (applications/ecallmgr/doc/ringback.md).
+-define(DEFAULT_TRANSFER_RINGBACK, <<"%(2000,4000,440,480)">>).
 
 -define(TRANSFEROR_CALL_EVENTS, [<<"CHANNEL_BRIDGE">>, <<"CHANNEL_UNBRIDGE">>
                                 ,<<"DTMF">>
@@ -140,7 +148,7 @@ handle(Data, Call) ->
                                     ,transferee = Transferee
                                     ,call = kapps_call:set_controller_queue(konami_event_listener:queue_name(), Call)
                                     ,takeback_dtmf = kz_json:get_value(<<"takeback_dtmf">>, Data, ?DEFAULT_TAKEBACK_DTMF)
-                                    ,ringback = to_tonestream(kz_json:get_value(<<"ringback">>, Data, ?DEFAULT_RINGBACK))
+                                    ,ringback = to_tonestream(kz_json:get_value(<<"ringback">>, Data, default_ringback()))
                                     ,moh = find_moh(Data, Call)
                                     ,extension = Extension
                                     }
@@ -1423,6 +1431,17 @@ hangup_target(Call) ->
 to_tonestream('undefined') -> 'undefined';
 to_tonestream(<<"tone_stream://", _/binary>> = TS) -> <<TS/binary, ";loops=-1">>;
 to_tonestream(Ringback) -> <<"tone_stream://", Ringback/binary, ";loops=-1">>.
+
+-spec default_ringback() -> kz_term:ne_binary().
+default_ringback() ->
+    case kapps_config:get_ne_binary(<<"ecallmgr">>, <<"default_transfer_ringback">>) of
+        'undefined' ->
+            case kapps_config:get_ne_binary(<<"ecallmgr">>, <<"default_ringback">>) of
+                'undefined' -> ?DEFAULT_TRANSFER_RINGBACK;
+                Ringback -> Ringback
+            end;
+        Ringback -> Ringback
+    end.
 
 -spec maybe_start_transferor_ringback(kapps_call:call(), kz_term:ne_binary(), kz_term:api_binary()) -> 'ok'.
 maybe_start_transferor_ringback(_Call, _Transferor, 'undefined') -> 'ok';

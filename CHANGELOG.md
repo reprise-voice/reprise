@@ -15,7 +15,9 @@ All notable changes to Reprise are recorded here. The format follows
   the caller the callee's codec and a G722 caller reaching a G.711 phone or
   carrier was transcoded. A caller already answered still hears a ringback,
   now from the new `default_transfer_ringback` (default: `default_ringback`
-  when set, otherwise `%(2000,4000,440,480)`). A cluster that has stored
+  when set, otherwise `%(2000,4000,440,480)`), as does a konami
+  transferor, which no longer stores `default_ringback` the first time it
+  reads it. A cluster that has stored
   `default_ringback`, which Kazoo and Reprise 5.4.0 did the first time it
   was read, keeps the old behaviour; see
   [applications/ecallmgr/doc/ringback.md](applications/ecallmgr/doc/ringback.md).
