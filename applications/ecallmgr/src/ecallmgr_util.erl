@@ -34,6 +34,7 @@
         ]).
 
 -export([eventstr_to_proplist/1, varstr_to_proplist/1, get_setting/1, get_setting/2]).
+-export([default_ringback/0, default_transfer_ringback/0]).
 -export([is_node_up/1, is_node_up/2]).
 -export([build_bridge_string/1, build_bridge_string/2]).
 -export([build_channel/1]).
@@ -432,12 +433,49 @@ varstr_to_proplist(VarStr) ->
     [to_kv(X, "=") || X <- string:tokens(kz_term:to_list(VarStr), ",")].
 
 -spec get_setting(kz_json:get_key()) -> {'ok', any()}.
-get_setting(<<"default_ringback">>=Key) ->
-    {'ok', kapps_config:get(?APP_NAME, Key, <<"%(2000,4000,440,480)">>)};
 get_setting(Setting) -> {'ok', kapps_config:get(?APP_NAME, Setting)}.
 
 -spec get_setting(kz_json:path(), Default) -> {'ok', Default | any()}.
 get_setting(Setting, Default) -> {'ok', kapps_config:get(?APP_NAME, Setting, Default)}.
+
+%%------------------------------------------------------------------------------
+%% @doc The ringback FreeSWITCH plays to a caller who has not been answered
+%% yet, when the call has no ringback of its own.
+%%
+%% Playing it pre-answers the caller's leg, which settles that leg's codec
+%% before the callee has answered: late negotiation can then no longer give
+%% the caller the callee's codec (`inherit_codec'), and a caller and callee
+%% that settle on different codecs are transcoded. Unset, the caller is left
+%% with the 180 it has already had and plays its own ringback. It is read
+%% without a default so that nothing is stored: a cluster that has a value
+%% (every Kazoo cluster, which stored the old default the first time it was
+%% read) keeps playing it. See doc/ringback.md.
+%% @end
+%%------------------------------------------------------------------------------
+-spec default_ringback() -> kz_term:api_ne_binary().
+default_ringback() ->
+    kapps_config:get_ne_binary(?APP_NAME, <<"default_ringback">>).
+
+%%------------------------------------------------------------------------------
+%% @doc The ringback FreeSWITCH plays to a caller who is already answered
+%% (after a menu, on a transfer), when the call has no ringback of its own.
+%%
+%% The caller's codec was settled when it was answered, so this costs nothing,
+%% and without it that caller hears silence while the next phone rings. Unset,
+%% it is `default_ringback' when that is set, which was the only setting for
+%% both before they were split, and otherwise the US ring tone.
+%% @end
+%%------------------------------------------------------------------------------
+-spec default_transfer_ringback() -> kz_term:ne_binary().
+default_transfer_ringback() ->
+    case kapps_config:get_ne_binary(?APP_NAME, <<"default_transfer_ringback">>) of
+        'undefined' -> transfer_ringback_fallback(default_ringback());
+        Ringback -> Ringback
+    end.
+
+-spec transfer_ringback_fallback(kz_term:api_ne_binary()) -> kz_term:ne_binary().
+transfer_ringback_fallback('undefined') -> ?DEFAULT_TRANSFER_RINGBACK;
+transfer_ringback_fallback(Ringback) -> Ringback.
 
 -spec is_node_up(atom()) -> boolean().
 is_node_up(Node) -> ecallmgr_fs_nodes:is_node_up(Node).
@@ -650,6 +688,8 @@ get_fs_key_and_value(<<"ringback">>=Key, Value, _UUID) ->
     [{<<"ringback">>, maybe_sanitize_fs_value(Key, Value)}
     ,{<<"transfer_ringback">>, maybe_sanitize_fs_value(<<"transfer_ringback">>, Value)}
     ];
+get_fs_key_and_value(<<"transfer_ringback">>=Key, Value, _UUID) ->
+    {Key, maybe_sanitize_fs_value(Key, Value)};
 get_fs_key_and_value(<<"Timeout">>, Value, _UUID) ->
     [{<<"call_timeout">>, maybe_sanitize_fs_value(<<"call_timeout">>, Value)}
     ,{<<"originate_timeout">>, maybe_sanitize_fs_value(<<"originate_timeout">>, Value)}

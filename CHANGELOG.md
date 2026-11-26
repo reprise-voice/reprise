@@ -8,6 +8,18 @@ All notable changes to Reprise are recorded here. The format follows
 
 ### Changed
 
+- ecallmgr plays no ringback to a caller who has not been answered yet,
+  unless the call asks for one or `system_config/ecallmgr`
+  `default_ringback` is set. Playing it pre-answered the caller and settled
+  its codec before the callee answered, so late negotiation could not give
+  the caller the callee's codec and a G722 caller reaching a G.711 phone or
+  carrier was transcoded. A caller already answered still hears a ringback,
+  now from the new `default_transfer_ringback` (default: `default_ringback`
+  when set, otherwise `%(2000,4000,440,480)`). A cluster that has stored
+  `default_ringback`, which Kazoo and Reprise 5.4.0 did the first time it
+  was read, keeps the old behaviour; see
+  [applications/ecallmgr/doc/ringback.md](applications/ecallmgr/doc/ringback.md).
+
 - The FreeSWITCH image builds FreeSWITCH v1.11.4 (from v1.11.3) against
   sofia-sip v1.13.19 (from v1.13.18), which fixes an out-of-bounds read
   when parsing multipart MIME bodies. FreeSWITCH 1.11.4 also brings upstream

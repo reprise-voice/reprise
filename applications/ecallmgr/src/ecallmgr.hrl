@@ -35,6 +35,10 @@
 
 -define(LOCAL_MEDIA_PATH, "/tmp/").
 
+%% The US ring tone: what a caller already answered hears while a phone rings,
+%% unless default_transfer_ringback or default_ringback says otherwise.
+-define(DEFAULT_TRANSFER_RINGBACK, <<"%(2000,4000,440,480)">>).
+
 -define(DEFAULT_SAMPLE_RATE, kapps_config:get_integer(?APP_NAME, <<"record_sample_rate">>, 8000)).
 -define(DEFAULT_STEREO_SAMPLE_RATE, kapps_config:get_integer(?APP_NAME, <<"record_stereo_sample_rate">>, 16000)).
 
