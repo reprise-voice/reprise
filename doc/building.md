@@ -106,7 +106,7 @@ they also need the matching FreeSWITCH source tree (`FS_SRCDIR`, default
 ```bash
 docker/build.sh                                   # reprise freeswitch kamailio monster-ui
 docker/build.sh reprise                           # one image
-REGISTRY=ghcr.io/example TAG=5.4.0 docker/build.sh
+REGISTRY=ghcr.io/example TAG=5.4.1 docker/build.sh
 bash docker/test-security.sh                      # checks the built images
 ```
 
@@ -121,7 +121,7 @@ replacing sources:
 
 | Image | Arguments |
 |---|---|
-| `reprise` | `REPRISE_GIT_BASE`, `KZ_VERSION` (default 5.4.0), `GLEAM_VERSION`, `SOUNDS_REPO`, `SOUNDS_REF` |
+| `reprise` | `REPRISE_GIT_BASE`, `KZ_VERSION` (default 5.4.1), `GLEAM_VERSION`, `SOUNDS_REPO`, `SOUNDS_REF` |
 | `reprise-freeswitch` | `REPRISE_GIT_BASE`, `FS_REPO`, `FS_REF` (v1.11.4), `SOFIA_REPO`, `SOFIA_REF`, `SPANDSP_REPO`, `SPANDSP_REF`, `SOUNDS_REPO`, `SOUNDS_REF` |
 | `reprise-kamailio` | `REPRISE_GIT_BASE`, `KAMAILIO_REPO`, `KAMAILIO_REF` |
 | `reprise-monster-ui` | `REPRISE_GIT_BASE`, `MONSTER_REF`, `MONSTER_APPS` |

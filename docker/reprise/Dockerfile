@@ -78,7 +78,7 @@ RUN make prerequisites deps
 # After the dependency layer on purpose: KZ_VERSION only reaches the
 # applications' .app vsn, and declaring it above would refetch every
 # dependency on a version bump.
-ARG KZ_VERSION=5.4.0
+ARG KZ_VERSION=5.4.1
 ENV KZ_VERSION=${KZ_VERSION}
 
 # deps/, erlang.mk and the .deps.mk.* stamps are all in .dockerignore, so this

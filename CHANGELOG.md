@@ -6,42 +6,41 @@ All notable changes to Reprise are recorded here. The format follows
 
 ## [Unreleased]
 
+## [5.4.1] - 2026-11-26
+
 ### Changed
 
-- ecallmgr plays no ringback to a caller who has not been answered yet,
-  unless the call asks for one or `system_config/ecallmgr`
-  `default_ringback` is set. Playing it pre-answered the caller and settled
-  its codec before the callee answered, so late negotiation could not give
-  the caller the callee's codec and a G722 caller reaching a G.711 phone or
-  carrier was transcoded. A caller already answered still hears a ringback,
-  now from the new `default_transfer_ringback` (default: `default_ringback`
-  when set, otherwise `%(2000,4000,440,480)`), as does a konami
-  transferor, which no longer stores `default_ringback` the first time it
-  reads it. A cluster that has stored
-  `default_ringback`, which Kazoo and Reprise 5.4.0 did the first time it
-  was read, keeps the old behaviour; see
+- Wideband audio by default: FreeSWITCH offers G722 first, and nothing
+  settles a caller's codec before the callee answers, so late negotiation
+  gives the caller the callee's codec. ecallmgr no longer plays a ringback
+  to a caller not yet answered (new `default_transfer_ringback` for answered
+  callers), and recordings with no `record_on_answer`/`record_on_bridge`
+  start on answer. Clusters that stored Kazoo's `default_ringback` keep the
+  old behaviour; see
   [applications/ecallmgr/doc/ringback.md](applications/ecallmgr/doc/ringback.md).
+- FreeSWITCH 1.11.4 with sofia-sip 1.13.19 (security fixes), and
+  Kamailio 6.1.6.
+- Kamailio no longer reloads the dispatcher when a media server joins or
+  leaves, which briefly answered every call "480 All servers busy".
+- The call center runs each queued call as its own actor: it survives node
+  and shard failures, rings all of an agent's devices at once, and uses a
+  few AMQP channels per node rather than one per call.
+- Better defaults: `konami` and the recordings API are on, the call center
+  may hang up an agent's leg, and the FreeSWITCH image advertises
+  `EXT_RTP_IP` to phones behind Kamailio (`LOCAL_NETWORK_ACL`). The compose
+  deployment keeps call recordings and no longer runs out of CouchDB file
+  handles.
 
-- The FreeSWITCH image builds FreeSWITCH v1.11.4 (from v1.11.3) against
-  sofia-sip v1.13.19 (from v1.13.18), which fixes an out-of-bounds read
-  when parsing multipart MIME bodies. FreeSWITCH 1.11.4 also brings upstream
-  security fixes (MSRP parsing, REFER targets carrying dial-string
-  separators) and requires sofia-sip 1.13.19. The image now builds against
-  Debian's miniupnpc and libnatpmp, which FreeSWITCH no longer carries
-  in-tree. All seven patches in `docker/freeswitch/patches` apply unchanged.
-- FreeSWITCH 1.11.4's `deflect` sends a target that already carries a URI
-  scheme as given and sends no REFER for an empty target, where 1.11.3 sent
-  `sip:@<profile ip>`. ecallmgr's `sip:` redirect contacts are unaffected.
-- Kamailio's dispatcher no longer reloads when a media server joins or
-  leaves. A reload rebuilt every destination from its stored flags
-  (inactive and probing), so for up to a ping interval (10 s) every
-  destination was inactive and the SBC answered every call "480 All
-  servers busy". The table is still kept from ecallmgr's heartbeats; one
-  timer process now applies each change to the dispatcher with
-  `dispatcher.add` or `dispatcher.remove`, which leave every other
-  destination's state as it is. A new server takes calls once its pings
-  answer. A server that leaves takes its secondary address
-  (`dispatcher_add_secondary_ip`) with it, which used to stay listed.
+### Fixed
+
+- `callflow.resume` runs the resumed callflow.
+- AMQP connections recover when the broker drops them or the connection
+  registry restarts.
+
+### Security
+
+- Credentials (database, AMQP, Erlang cookie, storage keys) are no longer
+  written to the logs.
 
 ## [5.4.0] - 2026-11-24
 

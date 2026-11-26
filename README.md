@@ -393,9 +393,9 @@ describes, not in an issue.
 
 ## Status and compatibility
 
-This is the first public release. It is based on Kazoo 5.4 (`VERSION` is
-5.4.0) and keeps its REST API, AMQP APIs, database layout and configuration
-files. Releases are `v*` tags on `main`.
+Reprise is based on Kazoo 5.4 and keeps its REST API, AMQP APIs, database
+layout and configuration files. Releases are `v*` tags on `main`, and
+`VERSION` names the current one.
 
 Reprise is not a drop-in replacement for a 2600Hz commercial deployment.
 The FreeSWITCH module, the FreeSWITCH build and the Kamailio build are
