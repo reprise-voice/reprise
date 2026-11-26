@@ -472,12 +472,17 @@ route_resp_channel_update(_JObj, _Context) ->
     EventApp = kz_app_config:get_ne_binary(?APP, [<<"dialplan">>, <<"apps">>, <<"event">>], <<"kz_deliver_event">>),
     action_el(EventApp, kz_binary:join(Args, <<",">>)).
 
--spec route_resp_ringback(kz_json:object()) -> kz_types:xml_el().
+%% A caller not answered yet hears a ringback only when the route asks for
+%% one or default_ringback is set: playing it pre-answers the caller and
+%% settles its codec before the callee answers (ecallmgr_util:default_ringback/0).
+-spec route_resp_ringback(kz_json:object()) -> kz_types:xml_el() | 'undefined'.
 route_resp_ringback(JObj) ->
     case kz_json:get_value(<<"Ringback-Media">>, JObj) of
         'undefined' ->
-            {'ok', RBSetting} = ecallmgr_util:get_setting(<<"default_ringback">>),
-            action_el(<<"set">>, <<"ringback=", (kz_term:to_binary(RBSetting))/binary>>);
+            case ecallmgr_util:default_ringback() of
+                'undefined' -> 'undefined';
+                Ringback -> action_el(<<"set">>, <<"ringback=", Ringback/binary>>)
+            end;
         Media ->
             MsgId = kz_api:msg_id(JObj),
             Stream = ecallmgr_util:media_path(Media, 'extant', MsgId, JObj),
@@ -521,8 +526,8 @@ route_cavs_list(CAVs) ->
 route_resp_transfer_ringback(JObj) ->
     case kz_json:get_value(<<"Transfer-Media">>, JObj) of
         'undefined' ->
-            {'ok', RBSetting} = ecallmgr_util:get_setting(<<"default_ringback">>),
-            action_el(<<"set">>, <<"transfer_ringback=", (kz_term:to_binary(RBSetting))/binary>>);
+            Ringback = ecallmgr_util:default_transfer_ringback(),
+            action_el(<<"set">>, <<"transfer_ringback=", Ringback/binary>>);
         Media ->
             MsgId = kz_json:get_value(<<"Msg-ID">>, JObj),
             Stream = ecallmgr_util:media_path(Media, 'extant', MsgId, JObj),

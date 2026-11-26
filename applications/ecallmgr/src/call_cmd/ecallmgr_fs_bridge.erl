@@ -17,6 +17,10 @@
         ,try_create_bridge_string/2
         ]).
 
+-ifdef(TEST).
+-export([default_ringback_exports/2]).
+-endif.
+
 -include("ecallmgr.hrl").
 
 -define(BYPASS_MEDIA_AFTER_BRIDGE, kapps_config:get_boolean(?APP_NAME, <<"use_bypass_media_after_bridge">>, 'false')).
@@ -141,16 +145,16 @@ unbridge_leg(JObj) ->
 -spec handle_ringback(kz_term:proplist(), atom(), kz_term:ne_binary(), channel(), kz_json:object()) ->
           kz_term:proplist().
 handle_ringback(DP, _Node, UUID, _Channel, JObj) ->
-    handle_ringback_media(DP, UUID, ringback_media(UUID, JObj)).
-
-handle_ringback_media(DP, UUID, Stream) ->
-    Props = [{<<"ringback">>, Stream}],
-    Exports = ecallmgr_util:process_fs_kv(UUID, Props, 'export'),
-    Args = ecallmgr_util:fs_args_to_binary(Exports),
+    Args = ecallmgr_util:fs_args_to_binary(ringback_exports(UUID, JObj)),
     [{"application", <<"kz_export ", Args/binary>>} | DP].
 
--spec ringback_media(kz_term:ne_binary(), kz_json:object()) -> kz_term:ne_binary().
-ringback_media(UUID, JObj) ->
+%% A bridge's own ringback is played to its caller answered or not
+%% (`ringback' sets `transfer_ringback' too). Without one, a caller already
+%% answered hears default_transfer_ringback, and a caller not answered yet
+%% hears a ringback only when default_ringback is set: playing it pre-answers
+%% the caller and settles its codec before the callee answers.
+-spec ringback_exports(kz_term:ne_binary(), kz_json:object()) -> [binary()].
+ringback_exports(UUID, JObj) ->
     case kz_json:get_first_defined([<<"Ringback">>
                                    ,[<<"Custom-Channel-Vars">>, <<"Ringback">>]
                                    ]
@@ -158,13 +162,22 @@ ringback_media(UUID, JObj) ->
                                   )
     of
         'undefined' ->
-            {'ok', Default} = ecallmgr_util:get_setting(<<"default_ringback">>),
-            Default;
+            default_ringback_exports(ecallmgr_util:default_ringback()
+                                    ,ecallmgr_util:default_transfer_ringback()
+                                    );
         Media ->
             Stream = ecallmgr_util:media_path(Media, 'extant', UUID, JObj),
             lager:debug("bridge has custom ringback: ~s", [Stream]),
-            Stream
+            ecallmgr_util:process_fs_kv(UUID, [{<<"ringback">>, Stream}], 'export')
     end.
+
+-spec default_ringback_exports(kz_term:api_ne_binary(), kz_term:ne_binary()) -> [binary()].
+default_ringback_exports('undefined', Transfer) ->
+    [<<"transfer_ringback=", Transfer/binary>>];
+default_ringback_exports(Ringback, Transfer) ->
+    [<<"ringback=", Ringback/binary>>
+    ,<<"transfer_ringback=", Transfer/binary>>
+    ].
 
 -spec maybe_early_media(kz_term:proplist(), atom(), kz_term:ne_binary(), channel(), kz_json:object()) -> kz_term:proplist().
 maybe_early_media(DP, _Node, _UUID, _Channel, JObj) ->

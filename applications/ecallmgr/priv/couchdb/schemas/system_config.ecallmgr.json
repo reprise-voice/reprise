@@ -155,8 +155,11 @@
             "type": "string"
         },
         "default_ringback": {
-            "default": "%(2000,4000,440,480)",
-            "description": "ecallmgr default ringback",
+            "description": "ringback FreeSWITCH plays to a caller not answered yet, when the call has none of its own; playing it pre-answers the caller and settles its codec before the callee answers, so unset (the default) leaves the caller with its 180 and lets late negotiation give it the callee's codec. Clusters that stored Kazoo's default (%(2000,4000,440,480)) keep it; see applications/ecallmgr/doc/ringback.md",
+            "type": "string"
+        },
+        "default_transfer_ringback": {
+            "description": "ringback FreeSWITCH plays to a caller already answered (after a menu, on a transfer), when the call has none of its own; unset, it is default_ringback when that is set, otherwise %(2000,4000,440,480)",
             "type": "string"
         },
         "event_stream_idle_alert": {

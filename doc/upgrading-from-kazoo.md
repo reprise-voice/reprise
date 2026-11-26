@@ -112,7 +112,23 @@ If your cluster relied on one of the old defaults without storing it, set
 it explicitly before switching. If a carrier or peer filters on the
 User-Agent, tell them or override it.
 
-### Removed
+### Ringback for a caller not answered yet
+
+Kazoo plays its default ringback (`system_config/ecallmgr`
+`default_ringback`) to every caller while the call rings. Playing it
+pre-answers the caller's leg, which settles its codec before the callee has
+answered, so a G722 caller reaching a G.711 phone or carrier is transcoded
+rather than answered on G.711. Reprise splits the setting: `default_ringback`
+is now played only to callers not answered yet and is unset by default, and
+the new `default_transfer_ringback` is played to callers already answered,
+as before.
+
+Kazoo stored `default_ringback` the first time it read it, so an existing
+cluster has a value and keeps Kazoo's behaviour. See
+[ringback.md](../applications/ecallmgr/doc/ringback.md) for what changes,
+which callers may need a ringback played to them, and how to remove the
+stored value.
+
 
 - **Telemetry.** `kazoo_telemetry` and the `system_config.telemetry` and
   `system_config.telemetry.waveguide` schemas are gone. Documents it wrote

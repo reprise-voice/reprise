@@ -26,7 +26,8 @@ Key | Description | Type | Default | Required | Support Level
 `default_fax_extension` | ecallmgr default fax extension | `string()` | `.tiff` | `false` |
 `default_realm` | ecallmgr default realm | `string()` | `nodomain.com` | `false` |
 `default_recording_extension` | ecallmgr default recording extension | `string()` | `.mp3` | `false` |
-`default_ringback` | ecallmgr default ringback | `string()` | `%(2000,4000,440,480)` | `false` |
+`default_ringback` | ringback FreeSWITCH plays to a caller not answered yet, when the call has none of its own; playing it pre-answers the caller and settles its codec before the callee answers, so unset (the default) leaves the caller with its 180 and lets late negotiation give it the callee's codec. Clusters that stored Kazoo's default (%(2000,4000,440,480)) keep it; see applications/ecallmgr/doc/ringback.md | `string()` |   | `false` |
+`default_transfer_ringback` | ringback FreeSWITCH plays to a caller already answered (after a menu, on a transfer), when the call has none of its own; unset, it is default_ringback when that is set, otherwise %(2000,4000,440,480) | `string()` |   | `false` |
 `event_stream_idle_alert` | ecallmgr event stream idle alert | `integer()` | `0` | `false` |
 `expandable_macros` | macros that will be expanded at call-time, for use in custom SIP headers | `object()` | `{"{reseller_id}":"${ecallmgr_Reseller-ID}","{caller_id_number}":"${caller_id_number}","{caller_id_name}":"${caller_id_name}","{billing_id}":"${ecallmgr_Billing-ID}","{account_id}":"${ecallmgr_Account-ID}"}` | `false` |
 `expires_deviation_time` | ecallmgr expires deviation time | `integer()` | `180` | `false` |
