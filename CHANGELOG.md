@@ -18,6 +18,16 @@ All notable changes to Reprise are recorded here. The format follows
 - FreeSWITCH 1.11.4's `deflect` sends a target that already carries a URI
   scheme as given and sends no REFER for an empty target, where 1.11.3 sent
   `sip:@<profile ip>`. ecallmgr's `sip:` redirect contacts are unaffected.
+- Kamailio's dispatcher no longer reloads when a media server joins or
+  leaves. A reload rebuilt every destination from its stored flags
+  (inactive and probing), so for up to a ping interval (10 s) every
+  destination was inactive and the SBC answered every call "480 All
+  servers busy". The table is still kept from ecallmgr's heartbeats; one
+  timer process now applies each change to the dispatcher with
+  `dispatcher.add` or `dispatcher.remove`, which leave every other
+  destination's state as it is. A new server takes calls once its pings
+  answer. A server that leaves takes its secondary address
+  (`dispatcher_add_secondary_ip`) with it, which used to stay listed.
 
 ## [5.4.0] - 2026-11-24
 
